@@ -32,13 +32,21 @@ export async function askCommand(args: string[]): Promise<void> {
       }),
     });
 
-    if (!res.ok) {
-      const err = (await res.json()) as { error: string };
-      console.error(`Error: ${err.error}`);
+    const text = await res.text();
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      console.error(`Error: unexpected response from daemon:\n${text.slice(0, 500)}`);
       process.exit(1);
     }
 
-    const data = (await res.json()) as {
+    if (!res.ok) {
+      console.error(`Error: ${(data as { error?: string }).error ?? text.slice(0, 500)}`);
+      process.exit(1);
+    }
+
+    const typed = data as {
       answer: string;
       sources: Array<{
         repo_name: string;
@@ -51,11 +59,11 @@ export async function askCommand(args: string[]): Promise<void> {
       }>;
     };
 
-    console.log(data.answer);
+    console.log(typed.answer);
 
-    if (showSources && data.sources.length > 0) {
+    if (showSources && typed.sources.length > 0) {
       console.log("\nSources:");
-      for (const r of data.sources) {
+      for (const r of typed.sources) {
         const score = (r.score * 100).toFixed(0);
         const label = r.title || r.source_file;
         console.log(`  [${r.repo_name}] ${r.source_file} - ${label} (${r.match_type} ${score}%)`);

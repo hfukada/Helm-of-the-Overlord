@@ -155,7 +155,13 @@ knowledge.post("/ask", async (c) => {
     });
   }
 
-  const answer = await generateAnswer(body.query, results);
+  let answer: string;
+  try {
+    answer = await generateAnswer(body.query, results);
+  } catch (err) {
+    logger.error("Failed to generate answer", { error: String(err) });
+    return c.json({ error: `Failed to generate answer: ${String(err)}` }, 500);
+  }
   return c.json({ answer, sources: results });
 });
 
