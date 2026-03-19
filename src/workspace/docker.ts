@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { existsSync } from "fs";
+import { existsSync } from "node:fs";
 import { logger } from "../shared/logger";
 
 export async function dockerComposeUp(composePath: string): Promise<{ success: boolean; output: string }> {

@@ -129,7 +129,6 @@ export function DiffView({
 }
 
 function FileSection({
-  idx,
   file,
   filePath,
   viewType,
@@ -168,7 +167,7 @@ function FileSection({
       if (comment.line_number != null) {
         const key = `${comment.side === "left" ? "old" : "new"}-${comment.line_number}`;
         if (!grouped.has(key)) grouped.set(key, []);
-        grouped.get(key)!.push(comment);
+        grouped.get(key)?.push(comment);
       }
     }
 

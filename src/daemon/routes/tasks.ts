@@ -1,11 +1,10 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
-import { runTask } from "../../orchestrator/task-runner";
+import { runTask, cleanupTask } from "../../orchestrator/task-runner";
 import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
-import type { TaskStatus } from "../../shared/types";
 
 const tasks = new Hono();
 
@@ -80,7 +79,7 @@ tasks.get("/:id", async (c) => {
   let diff: string | null = null;
   let diffSummary: Array<{ file: string; insertions: number; deletions: number }> | null = null;
 
-  if (task.status === "review" && task.repo_id) {
+  if ((task.status === "review" || task.status === "accepted") && task.repo_id) {
     const repo = db.query("SELECT name FROM repos WHERE id = ?").get(task.repo_id as number) as { name: string } | null;
     if (repo) {
       try {
@@ -115,7 +114,7 @@ tasks.get("/:id", async (c) => {
   });
 });
 
-tasks.post("/:id/cancel", (c) => {
+tasks.post("/:id/cancel", async (c) => {
   const id = c.req.param("id");
   const db = getDb();
   const now = new Date().toISOString();
@@ -126,6 +125,14 @@ tasks.post("/:id/cancel", (c) => {
   if (result.changes === 0) {
     return c.json({ error: "Task not found or already in terminal state" }, 400);
   }
+
+  logger.info("Task cancelled, running cleanup", { taskId: id });
+
+  // Run cleanup asynchronously so the response returns immediately
+  cleanupTask(id).catch((err) => {
+    logger.error("Cleanup failed after cancel", { taskId: id, error: String(err) });
+  });
+
   return c.json({ id, status: "cancelled" });
 });
 

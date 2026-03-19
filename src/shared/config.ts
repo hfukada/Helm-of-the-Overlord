@@ -1,5 +1,6 @@
-import { homedir } from "os";
-import { join } from "path";
+// Configuration for Hoto daemon
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 export interface Config {
   workspaceDir: string;

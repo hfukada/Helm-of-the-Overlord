@@ -33,13 +33,13 @@ export function AgentProgress({
 
     const interval = setInterval(poll, 1000);
     return () => clearInterval(interval);
-  }, [taskId, runId, isRunning]);
+  }, [taskId, runId, isRunning, events.length]);
 
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [events]);
+  }, []);
 
   if (events.length === 0) {
     return isRunning ? (
@@ -67,13 +67,14 @@ function EventBlock({ event }: { event: StreamEvent }) {
       );
     case "text":
       return <div className="mb-1 text-gray-300">{event.content}</div>;
-    case "tool_use":
+    case "tool_use": {
+      const isToolHeader = event.content.startsWith("Tool: ");
       return (
-        <div className="mb-1 ml-2 border-l-2 border-blue-700 pl-2 text-blue-300">
-          <span className="font-bold">Tool: </span>
-          {event.content}
+        <div className={`mb-1 ml-2 border-l-2 border-blue-700 pl-2 ${isToolHeader ? "text-blue-300 font-bold" : "text-blue-200/70"}`}>
+          {isToolHeader ? event.content : <pre className="whitespace-pre-wrap">{event.content}</pre>}
         </div>
       );
+    }
     case "tool_result":
       return (
         <div className="mb-1 ml-2 border-l-2 border-gray-700 pl-2 text-gray-500 max-h-24 overflow-hidden">

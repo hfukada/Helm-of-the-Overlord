@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { config, daemonUrl } from "../../shared/config";
+import { daemonUrl } from "../../shared/config";
 
 export async function openCommand(args: string[]): Promise<void> {
   const taskId = args[0];

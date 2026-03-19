@@ -1,4 +1,4 @@
-import { logger } from "../shared/logger";
+
 
 const OLLAMA_BASE = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
 const EMBED_MODEL = process.env.HOTO_EMBED_MODEL ?? "nomic-embed-text";

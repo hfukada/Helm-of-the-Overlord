@@ -4,7 +4,6 @@ const PIPELINE_NODES = [
   "plan",
   "implement",
   "lint",
-  "push",
   "ci",
   "review",
   "commit",

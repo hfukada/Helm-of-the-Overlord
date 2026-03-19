@@ -12,7 +12,7 @@ export async function executePlan(
   onEvent?: (type: string, content: string) => void
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
-  const prompt = buildPlanPrompt(task, repo);
+  const prompt = await buildPlanPrompt(task, repo);
   const model = config.defaultModel;
 
   const db = getDb();
@@ -30,6 +30,7 @@ export async function executePlan(
     maxTurns: 5,
     allowedTools: ["Read", "Glob", "Grep"],
     agentRunId,
+    taskId: task.id,
     onEvent,
   });
 

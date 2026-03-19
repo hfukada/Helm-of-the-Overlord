@@ -13,7 +13,7 @@ export async function executeImplement(
   onEvent?: (type: string, content: string) => void
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
-  const prompt = buildImplementPrompt(task, repo, plan);
+  const prompt = await buildImplementPrompt(task, repo, plan);
   const model = config.defaultModel;
 
   const db = getDb();
@@ -31,6 +31,7 @@ export async function executeImplement(
     maxTurns: 20,
     allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
     agentRunId,
+    taskId: task.id,
     onEvent,
   });
 

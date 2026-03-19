@@ -59,7 +59,7 @@ export async function askCommand(args: string[]): Promise<void> {
       console.log(`--- [${r.repo_name}] ${r.title} (${r.chunk_type}, ${r.match_type} ${score}%) ---`);
       console.log(`  File: ${r.source_file}`);
       // Show first 500 chars of content
-      const preview = r.content.length > 500 ? r.content.slice(0, 500) + "..." : r.content;
+      const preview = r.content.length > 500 ? `${r.content.slice(0, 500)}...` : r.content;
       console.log(preview);
       console.log();
     }

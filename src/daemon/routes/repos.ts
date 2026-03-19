@@ -3,7 +3,7 @@ import { getDb } from "../../knowledge/db";
 import { logger } from "../../shared/logger";
 import { parseRepo } from "../../knowledge/repo-parser";
 import { indexRepo } from "../../knowledge/indexer";
-import { resolve } from "path";
+import { resolve } from "node:path";
 import type { Repo } from "../../shared/types";
 
 const repos = new Hono();

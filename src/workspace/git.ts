@@ -1,5 +1,4 @@
 import { $ } from "bun";
-import { join } from "path";
 import { logger } from "../shared/logger";
 import { worktreeDir } from "./manager";
 
@@ -30,27 +29,116 @@ export async function removeWorktree(
   await $`git -C ${repoPath} worktree remove ${wtDir} --force`.quiet();
 }
 
+/**
+ * Find the base ref to diff against -- the commit the branch was created from.
+ * The worktree branch is created off the repo's default branch via
+ * `git worktree add -b <branch>`, so the branch point IS the current HEAD
+ * of the default branch. We find it via merge-base.
+ */
+async function getBaseRef(wtDir: string): Promise<string | null> {
+  // Try merge-base with common default branches
+  for (const base of ["origin/main", "origin/master", "main", "master"]) {
+    try {
+      const ref = await $`git -C ${wtDir} merge-base HEAD ${base}`.text();
+      if (ref.trim()) return ref.trim();
+    } catch {}
+  }
+  // Fall back: the parent of the first unique commit on this branch
+  try {
+    // Get the branch name
+    const branch = (await $`git -C ${wtDir} rev-parse --abbrev-ref HEAD`.text()).trim();
+    // Find commits unique to this branch (not on any other branch)
+    const unique = (await $`git -C ${wtDir} log ${branch} --not --remotes --format=%H`.nothrow().text()).trim();
+    if (unique) {
+      const firstUnique = unique.split("\n").pop();
+      if (firstUnique) {
+        const parent = (await $`git -C ${wtDir} rev-parse ${firstUnique}~1`.text()).trim();
+        if (parent) return parent;
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Get the full diff for a worktree, including:
+ * - Committed changes (on the branch but not on the base)
+ * - Staged but uncommitted changes
+ * - Unstaged changes to tracked files
+ * - Newly created (untracked) files
+ */
 export async function getDiff(wtDir: string): Promise<string> {
-  const result = await $`git -C ${wtDir} diff HEAD`.text();
-  return result;
+  const base = await getBaseRef(wtDir);
+  const parts: string[] = [];
+
+  // 1. Committed changes relative to base branch
+  if (base) {
+    const committed = await $`git -C ${wtDir} diff ${base}..HEAD`.text();
+    if (committed.trim()) parts.push(committed);
+  }
+
+  // 2. Staged changes (index vs HEAD)
+  const staged = await $`git -C ${wtDir} diff --cached`.text();
+  if (staged.trim()) parts.push(staged);
+
+  // 3. Unstaged changes to tracked files (working tree vs index)
+  const unstaged = await $`git -C ${wtDir} diff`.text();
+  if (unstaged.trim()) parts.push(unstaged);
+
+  // 4. Untracked files -- show as new file diffs
+  const untracked = (await $`git -C ${wtDir} ls-files --others --exclude-standard`.text()).trim();
+  if (untracked) {
+    for (const file of untracked.split("\n").filter(Boolean)) {
+      try {
+        const content = await $`git -C ${wtDir} diff --no-index /dev/null ${file}`.nothrow().text();
+        if (content.trim()) parts.push(content);
+      } catch {}
+    }
+  }
+
+  return parts.join("\n");
 }
 
 export async function getDiffSummary(
   wtDir: string
 ): Promise<Array<{ file: string; insertions: number; deletions: number }>> {
-  const raw = await $`git -C ${wtDir} diff HEAD --numstat`.text();
-  return raw
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
+  const base = await getBaseRef(wtDir);
+  const fileMap = new Map<string, { insertions: number; deletions: number }>();
+
+  const addNumstat = (raw: string) => {
+    for (const line of raw.trim().split("\n").filter(Boolean)) {
       const [ins, del, file] = line.split("\t");
-      return {
-        file,
-        insertions: parseInt(ins, 10) || 0,
-        deletions: parseInt(del, 10) || 0,
-      };
-    });
+      if (!file) continue;
+      const existing = fileMap.get(file) ?? { insertions: 0, deletions: 0 };
+      existing.insertions += parseInt(ins, 10) || 0;
+      existing.deletions += parseInt(del, 10) || 0;
+      fileMap.set(file, existing);
+    }
+  };
+
+  // Committed changes
+  if (base) {
+    addNumstat(await $`git -C ${wtDir} diff ${base}..HEAD --numstat`.text());
+  }
+  // Staged changes
+  addNumstat(await $`git -C ${wtDir} diff --cached --numstat`.text());
+  // Unstaged changes
+  addNumstat(await $`git -C ${wtDir} diff --numstat`.text());
+  // Untracked files
+  const untracked = (await $`git -C ${wtDir} ls-files --others --exclude-standard`.text()).trim();
+  if (untracked) {
+    for (const file of untracked.split("\n").filter(Boolean)) {
+      try {
+        const stat = await $`git -C ${wtDir} diff --no-index --numstat /dev/null ${file}`.nothrow().text();
+        addNumstat(stat);
+      } catch {}
+    }
+  }
+
+  return Array.from(fileMap.entries()).map(([file, stats]) => ({
+    file,
+    ...stats,
+  }));
 }
 
 export async function commitAndPush(

@@ -1,6 +1,6 @@
-import { readFile } from "fs/promises";
-import { join } from "path";
-import { existsSync } from "fs";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { logger } from "../shared/logger";
 
 export interface RepoMetadata {

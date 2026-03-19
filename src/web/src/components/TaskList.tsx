@@ -4,7 +4,7 @@ import { fetchTasks, type TaskSummary } from "../api";
 import { StatusBadge } from "./StatusBadge";
 
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr + "Z").getTime();
+  const diff = Date.now() - new Date(`${dateStr}Z`).getTime();
   const seconds = Math.floor(diff / 1000);
   if (seconds < 60) return `${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);

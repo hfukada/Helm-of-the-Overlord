@@ -12,8 +12,8 @@ import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
 import { getDb } from "../knowledge/db";
-import { writeFile, unlink } from "fs/promises";
-import { join } from "path";
+import { writeFile, unlink } from "node:fs/promises";
+import { join } from "node:path";
 
 const app = new Hono();
 

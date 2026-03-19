@@ -1,7 +1,7 @@
 import { config } from "../../shared/config";
-import { readFile, unlink } from "fs/promises";
-import { existsSync } from "fs";
-import { resolve, dirname } from "path";
+import { readFile, unlink } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 
 export async function daemonCommand(args: string[]): Promise<void> {
   const subcommand = args[0] ?? "status";
@@ -46,11 +46,13 @@ async function startDaemon(): Promise<void> {
   await new Promise((r) => setTimeout(r, 1000));
 
   const newPid = await readPid();
+  const url = `http://${config.daemonHost}:${config.daemonPort}`;
   if (newPid) {
     console.log(`Daemon started (PID ${newPid})`);
   } else {
     console.log("Daemon started (PID file not yet written)");
   }
+  console.log(`Server URL: ${url}`);
 }
 
 async function stopDaemon(): Promise<void> {

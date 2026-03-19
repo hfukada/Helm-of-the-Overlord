@@ -7,7 +7,7 @@ import { useState } from "react";
 
 export function App() {
   const [showNewTask, setShowNewTask] = useState(false);
-  const location = useLocation();
+  const _location = useLocation();
 
   return (
     <div className="flex h-screen flex-col">

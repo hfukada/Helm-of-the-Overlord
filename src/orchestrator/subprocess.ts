@@ -1,8 +1,10 @@
-import { Subprocess } from "bun";
+
 import { logger } from "../shared/logger";
-import type { ClaudeStreamEvent, TokenUsage, StreamEventType } from "../shared/types";
+import type { TokenUsage, StreamEventType } from "../shared/types";
 import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
+import { registerSubprocess, unregisterSubprocess } from "./subprocess-registry";
+import { parseStreamLine } from "./stream-parser";
 
 export interface SubprocessOptions {
   prompt: string;
@@ -12,6 +14,7 @@ export interface SubprocessOptions {
   maxTurns?: number;
   allowedTools?: string[];
   agentRunId: string;
+  taskId?: string;
   onEvent?: (eventType: StreamEventType, content: string) => void;
 }
 
@@ -27,7 +30,7 @@ const SONNET_OUTPUT_COST_PER_MILLION = 15.0;
 function estimateCost(
   inputTokens: number,
   outputTokens: number,
-  model: string
+  _model: string
 ): number {
   // Default to sonnet pricing
   const inputCost = (inputTokens / 1_000_000) * SONNET_INPUT_COST_PER_MILLION;
@@ -38,12 +41,18 @@ function estimateCost(
 function storeStreamEvent(
   agentRunId: string,
   eventType: StreamEventType,
-  content: string
+  content: unknown
 ): void {
+  // Defensive: ensure content is always a string for SQLite
+  const safeContent = typeof content === "string"
+    ? content
+    : content == null
+      ? ""
+      : JSON.stringify(content);
   const db = getDb();
   db.run(
     "INSERT INTO agent_stream (agent_run_id, event_type, content) VALUES (?, ?, ?)",
-    [agentRunId, eventType, content]
+    [agentRunId, eventType, safeContent]
   );
 }
 
@@ -86,9 +95,14 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     env: { ...process.env },
   });
 
+  if (opts.taskId) {
+    registerSubprocess(opts.taskId, proc);
+  }
+
   let totalOutput = "";
   let totalInput = 0;
   let totalOutput_tokens = 0;
+  let totalCostUsd: number | null = null;
   let error: string | null = null;
 
   try {
@@ -105,53 +119,33 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
       buffer = lines.pop() ?? "";
 
       for (const line of lines) {
-        if (!line.trim()) continue;
+        const parsed = parseStreamLine(line);
+        if (!parsed) continue;
 
-        let event: ClaudeStreamEvent;
-        try {
-          event = JSON.parse(line);
-        } catch {
-          continue;
+        for (const evt of parsed.events) {
+          storeStreamEvent(opts.agentRunId, evt.eventType, evt.content);
+          opts.onEvent?.(evt.eventType, evt.content);
         }
 
-        if (event.type === "content_block_delta" && event.delta) {
-          if (event.delta.type === "text_delta" && event.delta.text) {
-            totalOutput += event.delta.text;
-            storeStreamEvent(opts.agentRunId, "text", event.delta.text);
-            opts.onEvent?.("text", event.delta.text);
-          } else if (
-            event.delta.type === "thinking_delta" &&
-            event.delta.thinking
-          ) {
-            storeStreamEvent(opts.agentRunId, "thinking", event.delta.thinking);
-            opts.onEvent?.("thinking", event.delta.thinking);
-          } else if (
-            event.delta.type === "input_json_delta" &&
-            event.delta.partial_json
-          ) {
-            storeStreamEvent(
-              opts.agentRunId,
-              "tool_use",
-              event.delta.partial_json
-            );
-            opts.onEvent?.("tool_use", event.delta.partial_json);
+        totalOutput += parsed.textOutput;
+
+        if (parsed.usage) {
+          if (parsed.finalOutput !== null) {
+            // Result line: replace totals
+            totalInput = parsed.usage.input_tokens || totalInput;
+            totalOutput_tokens = parsed.usage.output_tokens || totalOutput_tokens;
+          } else {
+            // Turn-level usage: accumulate
+            totalInput += parsed.usage.input_tokens;
+            totalOutput_tokens += parsed.usage.output_tokens;
           }
-        } else if (
-          event.type === "content_block_start" &&
-          event.content_block
-        ) {
-          if (event.content_block.type === "tool_use" && event.content_block.name) {
-            const info = `Tool: ${event.content_block.name}`;
-            storeStreamEvent(opts.agentRunId, "tool_use", info);
-            opts.onEvent?.("tool_use", info);
-          }
-        } else if (event.type === "message_delta" && event.usage) {
-          totalOutput_tokens += event.usage.output_tokens ?? 0;
-        } else if (event.type === "message_start" && event.usage) {
-          totalInput += event.usage.input_tokens ?? 0;
-        } else if (event.type === "result" && event.result?.usage) {
-          totalInput = event.result.usage.input_tokens;
-          totalOutput_tokens = event.result.usage.output_tokens;
+        }
+
+        if (parsed.finalOutput !== null) {
+          totalOutput = parsed.finalOutput;
+        }
+        if (parsed.totalCostUsd !== null) {
+          totalCostUsd = parsed.totalCostUsd;
         }
       }
     }
@@ -161,14 +155,19 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     opts.onEvent?.("error", error);
   }
 
+  if (opts.taskId) {
+    unregisterSubprocess(opts.taskId, proc);
+  }
+
   const exitCode = await proc.exited;
-  if (exitCode !== 0) {
+  if (exitCode !== 0 && !error) {
     const stderr = await new Response(proc.stderr).text();
     error = `claude exited with code ${exitCode}: ${stderr}`;
     logger.error("claude subprocess failed", { error, exitCode });
   }
 
-  const cost = estimateCost(totalInput, totalOutput_tokens, model);
+  // Use actual cost from Claude CLI if available, otherwise estimate
+  const cost = totalCostUsd ?? estimateCost(totalInput, totalOutput_tokens, model);
 
   logger.info("claude subprocess completed", {
     agentRunId: opts.agentRunId,

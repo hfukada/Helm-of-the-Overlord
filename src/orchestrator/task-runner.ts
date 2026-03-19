@@ -7,9 +7,10 @@ import { executeImplement } from "./nodes/agentic/implement";
 import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
 import { executeLint } from "./nodes/deterministic/lint";
-import { executePush } from "./nodes/deterministic/push";
-import { createWorktree, generateBranchName } from "../workspace/git";
-import { ensureTaskDir } from "../workspace/manager";
+import { createWorktree, generateBranchName, removeWorktree } from "../workspace/git";
+import { ensureTaskDir, worktreeDir } from "../workspace/manager";
+import { killTaskSubprocesses } from "./subprocess-registry";
+import { indexRepo } from "../knowledge/indexer";
 import { $ } from "bun";
 
 const MAX_LINT_ROUNDS = 1;
@@ -40,6 +41,58 @@ function isTaskCancelled(taskId: string): boolean {
   const db = getDb();
   const row = db.query("SELECT status FROM tasks WHERE id = ?").get(taskId) as { status: string } | null;
   return row?.status === "cancelled";
+}
+
+export async function cleanupTask(taskId: string): Promise<void> {
+  // Kill any running subprocesses for this task
+  killTaskSubprocesses(taskId);
+
+  const db = getDb();
+
+  // Mark any still-running agent_runs as failed
+  db.run(
+    "UPDATE agent_runs SET status = 'failed', error = 'task cancelled', finished_at = datetime('now') WHERE task_id = ? AND status = 'running'",
+    [taskId]
+  );
+
+  // Look up task and repo to find the worktree
+  const taskRow = db.query("SELECT branch_name, repo_id FROM tasks WHERE id = ?").get(taskId) as {
+    branch_name: string | null;
+    repo_id: number | null;
+  } | null;
+
+  if (!taskRow || !taskRow.repo_id || !taskRow.branch_name) {
+    logger.info("No worktree to clean up", { taskId });
+    return;
+  }
+
+  const repoRow = db.query("SELECT path, name FROM repos WHERE id = ?").get(taskRow.repo_id) as {
+    path: string;
+    name: string;
+  } | null;
+
+  if (!repoRow) {
+    logger.warn("Repo not found during cleanup", { taskId, repoId: taskRow.repo_id });
+    return;
+  }
+
+  const wtDir = worktreeDir(taskId, repoRow.name);
+
+  // Remove git worktree
+  try {
+    await removeWorktree(repoRow.path, wtDir);
+    logger.info("Removed worktree", { taskId, wtDir });
+  } catch (err) {
+    logger.warn("Failed to remove worktree (may not exist)", { taskId, wtDir, error: String(err) });
+  }
+
+  // Delete the branch
+  try {
+    await $`git -C ${repoRow.path} branch -D ${taskRow.branch_name}`.quiet().nothrow();
+    logger.info("Deleted branch", { taskId, branch: taskRow.branch_name });
+  } catch (err) {
+    logger.warn("Failed to delete branch", { taskId, branch: taskRow.branch_name, error: String(err) });
+  }
 }
 
 function loadTaskAndRepo(taskId: string): { task: Task; repo: Repo } | null {
@@ -108,6 +161,14 @@ export async function runTask(taskId: string): Promise<void> {
     return;
   }
 
+  // Reindex the repo to ensure knowledge base is fresh
+  try {
+    logger.info("Reindexing repo before task", { repo: repo.name, taskId: task.id });
+    await indexRepo(repo);
+  } catch (err) {
+    logger.warn("Repo reindex failed, continuing without", { error: String(err) });
+  }
+
   let state = createInitialState();
   state.history.push({
     node: "plan",
@@ -123,6 +184,7 @@ export async function runTask(taskId: string): Promise<void> {
   const planResult = await executePlan(task, repo, workDir);
 
   if (planResult.error) {
+    if (isTaskCancelled(task.id)) return;
     logger.error("Planning failed", { taskId: task.id, error: planResult.error });
     state = advanceState(state, "error");
     updateTaskStatus(task.id, "review", state);
@@ -139,6 +201,7 @@ export async function runTask(taskId: string): Promise<void> {
   const implResult = await executeImplement(task, repo, workDir, planResult.plan);
 
   if (implResult.error) {
+    if (isTaskCancelled(task.id)) return;
     logger.error("Implementation failed", { taskId: task.id, error: implResult.error });
     state = advanceState(state, "error");
     updateTaskStatus(task.id, "review", state);
@@ -152,7 +215,7 @@ export async function runTask(taskId: string): Promise<void> {
   updateTaskStatus(task.id, "linting", state);
 
   if (repo.lint_cmd) {
-    let lintPassed = false;
+    let _lintPassed = false;
 
     for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
       logger.info("Running lint", { taskId: task.id, round });
@@ -160,7 +223,7 @@ export async function runTask(taskId: string): Promise<void> {
       const lintResult = await executeLint(repo, workDir);
 
       if (lintResult.success) {
-        lintPassed = true;
+        _lintPassed = true;
         break;
       }
 
@@ -182,6 +245,7 @@ export async function runTask(taskId: string): Promise<void> {
       );
 
       if (fixResult.error) {
+        if (isTaskCancelled(task.id)) return;
         logger.warn("Fix-lint failed", { taskId: task.id, error: fixResult.error });
         break;
       }
@@ -194,21 +258,9 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // === PUSH ===
-  state = advanceState(state, repo.lint_cmd ? "clean" : "clean");
-  logger.info("Pushing changes", { taskId: task.id });
-
-  const pushResult = await executePush(workDir, branchName);
-  if (!pushResult.success) {
-    logger.warn("Push failed, proceeding to review", { taskId: task.id, output: pushResult.output });
-    // Don't block on push failure -- the diff is still available locally
-  }
-
-  if (isTaskCancelled(task.id)) return;
-
   // === CI (test/build with fix loop) ===
   if (repo.test_cmd || repo.build_cmd) {
-    state = advanceState(state, "done");
+    state = advanceState(state, "clean");
     updateTaskStatus(task.id, "ci_running", state);
 
     for (let round = 0; round < MAX_CI_ROUNDS; round++) {
@@ -237,6 +289,7 @@ export async function runTask(taskId: string): Promise<void> {
       const fixResult = await executeFixCi(task, repo, workDir, ciResult.output);
 
       if (fixResult.error) {
+        if (isTaskCancelled(task.id)) return;
         logger.warn("Fix-ci failed", { taskId: task.id, error: fixResult.error });
         state = advanceState(state, "error");
         break;
@@ -245,14 +298,11 @@ export async function runTask(taskId: string): Promise<void> {
       state = advanceState(state, "done");
       state.ci_rounds++;
 
-      // Re-push fixed code
-      await executePush(workDir, branchName);
-
       updateTaskStatus(task.id, "ci_running", state);
     }
   } else {
     // No CI configured, skip to review
-    state = advanceState(state, "done");
+    state = advanceState(state, "clean");
   }
 
   // === REVIEW ===

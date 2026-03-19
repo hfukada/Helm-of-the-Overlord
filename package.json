@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "daemon": "bun run src/index.ts daemon start",
+    "test": "bun test",
+    "lint": "bunx biome lint ./src/",
     "typecheck": "bunx tsc --noEmit",
     "build:web": "cd src/web && bun run build"
   },
@@ -17,6 +19,7 @@
     "ulid": "^2.3.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.8",
     "@types/bun": "latest",
     "typescript": "^5.7.0"
   }

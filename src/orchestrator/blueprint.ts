@@ -14,17 +14,12 @@ const NODES: BlueprintNode[] = [
   {
     name: "lint",
     type: "deterministic",
-    transitions: { clean: "push", errors: "fix_lint" },
+    transitions: { clean: "ci", errors: "fix_lint" },
   },
   {
     name: "fix_lint",
     type: "agentic",
     transitions: { done: "lint", error: "review" },
-  },
-  {
-    name: "push",
-    type: "deterministic",
-    transitions: { done: "ci", error: "review" },
   },
   {
     name: "ci",
@@ -34,7 +29,7 @@ const NODES: BlueprintNode[] = [
   {
     name: "fix_ci",
     type: "agentic",
-    transitions: { done: "push", error: "review" },
+    transitions: { done: "ci", error: "review" },
   },
   {
     name: "review",

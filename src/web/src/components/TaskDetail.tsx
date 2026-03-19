@@ -24,6 +24,7 @@ export function TaskDetail() {
   const [error, setError] = useState<string | null>(null);
   const [showCommit, setShowCommit] = useState(false);
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     if (!id) return;
@@ -47,7 +48,7 @@ export function TaskDetail() {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [id]);
+  }, [id, task]);
 
   if (error) {
     return (
@@ -69,9 +70,15 @@ export function TaskDetail() {
   };
 
   const handleCancel = async () => {
+    if (!confirm("Cancel this task? The worktree and branch will be removed.")) return;
+    setCancelling(true);
     try {
       await cancelTask(task.id);
-    } catch {}
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to cancel task");
+    } finally {
+      setCancelling(false);
+    }
   };
 
   return (
@@ -87,7 +94,7 @@ export function TaskDetail() {
         </div>
         <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
           {task.branch_name && <span>Branch: {task.branch_name}</span>}
-          <span>Created: {new Date(task.created_at + "Z").toLocaleString()}</span>
+          <span>Created: {new Date(`${task.created_at}Z`).toLocaleString()}</span>
           <TaskTokenSummary runs={task.agent_runs} />
         </div>
       </div>
@@ -171,7 +178,7 @@ export function TaskDetail() {
 
       {/* Actions */}
       <div className="flex items-center gap-3">
-        {(task.status === "review" || task.status === "accepted") && (
+        {(task.status === "review" || task.status === "accepted") && task.diff && (
           <button
             onClick={() => setShowCommit(true)}
             className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500"
@@ -179,16 +186,20 @@ export function TaskDetail() {
             Accept & Commit
           </button>
         )}
-        {!TERMINAL_STATUSES.has(task.status) &&
-          task.status !== "review" &&
-          task.status !== "accepted" && (
-            <button
-              onClick={handleCancel}
-              className="rounded bg-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-600"
-            >
-              Cancel Task
-            </button>
-          )}
+        {task.status === "review" && !task.diff && (
+          <span className="text-sm text-yellow-400">
+            No changes detected in worktree
+          </span>
+        )}
+        {!TERMINAL_STATUSES.has(task.status) && (
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="rounded bg-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-600 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {cancelling ? "Cancelling..." : "Cancel Task"}
+          </button>
+        )}
       </div>
 
       {/* Commit Dialog */}

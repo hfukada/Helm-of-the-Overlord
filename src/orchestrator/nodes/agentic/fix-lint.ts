@@ -49,6 +49,7 @@ export async function executeFixLint(
     maxTurns: 10,
     allowedTools: ["Read", "Write", "Edit", "Glob", "Grep"],
     agentRunId,
+    taskId: task.id,
     onEvent,
   });
 

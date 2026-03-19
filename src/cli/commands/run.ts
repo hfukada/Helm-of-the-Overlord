@@ -1,4 +1,4 @@
-import { readFile } from "fs/promises";
+import { readFile } from "node:fs/promises";
 import { daemonUrl } from "../../shared/config";
 
 export async function runCommand(args: string[]): Promise<void> {

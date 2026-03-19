@@ -1,9 +1,9 @@
-import { readFile } from "fs/promises";
-import { join, relative } from "path";
-import { existsSync } from "fs";
+import { readFile } from "node:fs/promises";
+import { join, } from "node:path";
+import { existsSync } from "node:fs";
 import { $ } from "bun";
 import { getDb } from "./db";
-import { embed, embedBatch, isOllamaAvailable } from "./embeddings";
+import { embedBatch, isOllamaAvailable } from "./embeddings";
 import { logger } from "../shared/logger";
 import type { Repo } from "../shared/types";
 
