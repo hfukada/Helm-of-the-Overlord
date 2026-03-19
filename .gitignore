@@ -1,3 +1,3 @@
 .claude
 node_modules
-web/dist/assets/
+src/web/dist/assets/
