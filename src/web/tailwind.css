@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/* Dark theme overrides for react-diff-view */
+.diff-view-wrapper .diff {
+  color: #d1d5db;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.diff-view-wrapper .diff-gutter {
+  background-color: #1f2937;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 0 8px;
+  user-select: none;
+}
+
+.diff-view-wrapper .diff-gutter:hover {
+  background-color: #374151;
+  color: #a5b4fc;
+}
+
+.diff-view-wrapper .diff-code {
+  background-color: #111827;
+  white-space: pre;
+}
+
+.diff-view-wrapper .diff-code-insert {
+  background-color: rgba(34, 197, 94, 0.1);
+}
+
+.diff-view-wrapper .diff-code-delete {
+  background-color: rgba(239, 68, 68, 0.1);
+}
+
+.diff-view-wrapper .diff-gutter-insert {
+  background-color: rgba(34, 197, 94, 0.15);
+}
+
+.diff-view-wrapper .diff-gutter-delete {
+  background-color: rgba(239, 68, 68, 0.15);
+}
+
+.diff-view-wrapper .diff-code-edit .diff-code-edit-text {
+  background-color: rgba(250, 204, 21, 0.15);
+}
+
+.diff-view-wrapper .diff-widget {
+  background-color: transparent;
+}
+
+.diff-view-wrapper table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.diff-view-wrapper td {
+  border: none;
+}
