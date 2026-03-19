@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { $ } from "bun";
 import { getDb } from "../../knowledge/db";
 import { search } from "../../knowledge/search";
+import type { SearchResult } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
 import { logger } from "../../shared/logger";
+import { config } from "../../shared/config";
 import type { Repo } from "../../shared/types";
 
 const knowledge = new Hono();
@@ -117,5 +119,85 @@ knowledge.get("/repos/:name/chunks", (c) => {
 
   return c.json({ chunks, embedding_count: embeddingCount.count });
 });
+
+knowledge.post("/ask", async (c) => {
+  const body = await c.req.json<{
+    query: string;
+    repo_name?: string;
+    limit?: number;
+  }>();
+
+  if (!body.query?.trim()) {
+    return c.json({ error: "query is required" }, 400);
+  }
+
+  const db = getDb();
+  let repoId: number | undefined;
+
+  if (body.repo_name) {
+    const repo = db.query("SELECT id FROM repos WHERE name = ?").get(body.repo_name) as { id: number } | null;
+    if (!repo) {
+      return c.json({ error: `Repo '${body.repo_name}' not found` }, 404);
+    }
+    repoId = repo.id;
+  }
+
+  const results = await search({
+    query: body.query,
+    repo_id: repoId,
+    limit: body.limit ?? 8,
+  });
+
+  if (results.length === 0) {
+    return c.json({
+      answer: "No relevant knowledge found. Try indexing repos first with: hoto repos reindex",
+      sources: [],
+    });
+  }
+
+  const answer = await generateAnswer(body.query, results);
+  return c.json({ answer, sources: results });
+});
+
+async function generateAnswer(query: string, results: SearchResult[]): Promise<string> {
+  const MAX_CONTENT_CHARS = 1200;
+
+  const contextParts = results.map((r, i) => {
+    const content = r.content.length > MAX_CONTENT_CHARS
+      ? `${r.content.slice(0, MAX_CONTENT_CHARS)}...`
+      : r.content;
+    return `[${i + 1}] ${r.repo_name}: ${r.source_file} (${r.chunk_type})\n${content}`;
+  });
+
+  const context = contextParts.join("\n\n---\n\n");
+
+  const systemPrompt =
+    "You are a helpful assistant with access to a codebase knowledge base. " +
+    "Answer the user's question based on the provided context. " +
+    "Be concise and precise. Reference specific files or code when relevant. " +
+    "If the context does not contain enough information to answer, say so clearly.";
+
+  const userPrompt =
+    `Question: ${query}\n\nContext from knowledge base:\n\n${context}\n\nAnswer the question based on the context above.`;
+
+  const model = config.defaultModel;
+  const proc = Bun.spawn(
+    ["claude", "--print", "--model", model, "--system-prompt", systemPrompt, "--", userPrompt],
+    { stdout: "pipe", stderr: "pipe", env: { ...process.env } }
+  );
+
+  const [output, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    proc.exited,
+  ]);
+
+  if (exitCode !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    logger.error("claude subprocess failed during ask", { exitCode, stderr });
+    throw new Error(`claude exited with code ${exitCode}: ${stderr}`);
+  }
+
+  return output.trim();
+}
 
 export { knowledge };
