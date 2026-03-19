@@ -3,29 +3,32 @@ import { daemonUrl } from "../../shared/config";
 export async function askCommand(args: string[]): Promise<void> {
   let query: string | null = null;
   let repoName: string | null = null;
+  let showSources = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "-r" || arg === "--repo") {
       repoName = args[++i];
+    } else if (arg === "-s" || arg === "--sources") {
+      showSources = true;
     } else if (!query && !arg.startsWith("-")) {
       query = arg;
     }
   }
 
   if (!query) {
-    console.log("Usage: hoto ask \"question\" [-r repo]");
+    console.log("Usage: hoto ask \"question\" [-r repo] [-s|--sources]");
     process.exit(1);
   }
 
   try {
-    const res = await fetch(daemonUrl("/knowledge/search"), {
+    const res = await fetch(daemonUrl("/knowledge/ask"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query,
         repo_name: repoName ?? undefined,
-        limit: 5,
+        limit: 8,
       }),
     });
 
@@ -36,7 +39,8 @@ export async function askCommand(args: string[]): Promise<void> {
     }
 
     const data = (await res.json()) as {
-      results: Array<{
+      answer: string;
+      sources: Array<{
         repo_name: string;
         source_file: string;
         chunk_type: string;
@@ -45,23 +49,17 @@ export async function askCommand(args: string[]): Promise<void> {
         score: number;
         match_type: string;
       }>;
-      count: number;
     };
 
-    if (data.count === 0) {
-      console.log("No results found. Try indexing repos first: hoto repos reindex");
-      return;
-    }
+    console.log(data.answer);
 
-    console.log(`Found ${data.count} result(s):\n`);
-    for (const r of data.results) {
-      const score = (r.score * 100).toFixed(0);
-      console.log(`--- [${r.repo_name}] ${r.title} (${r.chunk_type}, ${r.match_type} ${score}%) ---`);
-      console.log(`  File: ${r.source_file}`);
-      // Show first 500 chars of content
-      const preview = r.content.length > 500 ? `${r.content.slice(0, 500)}...` : r.content;
-      console.log(preview);
-      console.log();
+    if (showSources && data.sources.length > 0) {
+      console.log("\nSources:");
+      for (const r of data.sources) {
+        const score = (r.score * 100).toFixed(0);
+        const label = r.title || r.source_file;
+        console.log(`  [${r.repo_name}] ${r.source_file} - ${label} (${r.match_type} ${score}%)`);
+      }
     }
   } catch (err) {
     if ((err as Error).message?.includes("ECONNREFUSED")) {
