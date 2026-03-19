@@ -104,6 +104,10 @@ const MIGRATIONS = [
 
 const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
+  "ALTER TABLE tasks ADD COLUMN lint_output TEXT",
+  "ALTER TABLE tasks ADD COLUMN lint_passed INTEGER",
+  "ALTER TABLE tasks ADD COLUMN ci_output TEXT",
+  "ALTER TABLE tasks ADD COLUMN ci_passed INTEGER",
 ];
 
 export function runMigrations(db: Database): void {

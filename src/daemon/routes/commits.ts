@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { advanceState } from "../../orchestrator/blueprint";
 import { getDb } from "../../knowledge/db";
 import { commitAndPush } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
@@ -73,10 +74,39 @@ commits.post("/:id/commit", async (c) => {
     await commitAndPush(wtDir, body.message, branchName);
 
     const now = new Date().toISOString();
-    db.run(
-      "UPDATE tasks SET status = 'committed', updated_at = ? WHERE id = ?",
-      [now, id]
-    );
+
+    // Advance blueprint state from review -> commit, then close the commit node
+    let updatedBlueprintState: string | null = null;
+    if (task.blueprint_state) {
+      try {
+        let bpState = JSON.parse(task.blueprint_state as string);
+        bpState = advanceState(bpState, "accept");
+        // Close the commit node immediately since this is a synchronous operation
+        bpState = {
+          ...bpState,
+          history: bpState.history.map((h: { node: string; exited_at: string | null; result: string | null }) =>
+            h.node === "commit" && !h.exited_at
+              ? { ...h, exited_at: now, result: "done" }
+              : h
+          ),
+        };
+        updatedBlueprintState = JSON.stringify(bpState);
+      } catch {
+        // blueprint state update is best-effort
+      }
+    }
+
+    if (updatedBlueprintState) {
+      db.run(
+        "UPDATE tasks SET status = 'committed', blueprint_state = ?, updated_at = ? WHERE id = ?",
+        [updatedBlueprintState, now, id]
+      );
+    } else {
+      db.run(
+        "UPDATE tasks SET status = 'committed', updated_at = ? WHERE id = ?",
+        [now, id]
+      );
+    }
 
     logger.info("Task committed and pushed", {
       taskId: id,

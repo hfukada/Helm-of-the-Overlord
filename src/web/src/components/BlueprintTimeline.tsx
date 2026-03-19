@@ -46,7 +46,7 @@ export function BlueprintTimeline({
   return (
     <div className="flex items-center gap-1 overflow-x-auto py-2">
       {PIPELINE_NODES.map((node, i) => {
-        const isCurrent = node === currentNode;
+        const isCurrent = node === currentNode && !completedNodes.has(node);
         const isCompleted = completedNodes.has(node) && !isCurrent;
         const isFailed = failedNodes.has(node);
 

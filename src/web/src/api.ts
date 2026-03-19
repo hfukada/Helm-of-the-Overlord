@@ -67,6 +67,10 @@ export interface TaskDetail extends TaskSummary {
   diff: string | null;
   diff_summary: DiffSummaryItem[] | null;
   agent_runs: AgentRun[];
+  lint_output: string | null;
+  lint_passed: number | null;
+  ci_output: string | null;
+  ci_passed: number | null;
 }
 
 export interface StreamEvent {

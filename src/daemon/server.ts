@@ -12,8 +12,9 @@ import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
 import { getDb } from "../knowledge/db";
-import { writeFile, unlink } from "node:fs/promises";
+import { writeFile, unlink, access } from "node:fs/promises";
 import { join } from "node:path";
+import { $ } from "bun";
 
 const app = new Hono();
 
@@ -58,9 +59,29 @@ app.get("/app/*", async (c) => {
   );
 });
 
+async function ensureWebBuild(): Promise<void> {
+  const indexPath = join(webDistDir, "index.html");
+  try {
+    await access(indexPath);
+  } catch {
+    logger.info("Web UI not built, building...");
+    const webDir = join(import.meta.dir, "..", "web");
+    await $`bun install --frozen-lockfile`.cwd(webDir).quiet().nothrow();
+    const result = await $`bun run build`.cwd(webDir).quiet().nothrow();
+    if (result.exitCode !== 0) {
+      logger.warn("Web UI build failed, UI will be unavailable", {
+        stderr: result.stderr.toString().slice(0, 500),
+      });
+    } else {
+      logger.info("Web UI built successfully");
+    }
+  }
+}
+
 export async function startDaemon(): Promise<void> {
   await ensureWorkspace();
   getDb(); // Initialize DB + run migrations
+  await ensureWebBuild();
 
   const server = Bun.serve({
     port: config.daemonPort,

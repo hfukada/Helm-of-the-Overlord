@@ -40,6 +40,26 @@ function updateTaskBranch(taskId: string, branchName: string) {
   db.run("UPDATE tasks SET branch_name = ? WHERE id = ?", [branchName, taskId]);
 }
 
+function saveNodeOutput(
+  taskId: string,
+  node: "lint" | "ci",
+  output: string,
+  passed: boolean
+) {
+  const db = getDb();
+  if (node === "lint") {
+    db.run(
+      "UPDATE tasks SET lint_output = ?, lint_passed = ? WHERE id = ?",
+      [output, passed ? 1 : 0, taskId]
+    );
+  } else {
+    db.run(
+      "UPDATE tasks SET ci_output = ?, ci_passed = ? WHERE id = ?",
+      [output, passed ? 1 : 0, taskId]
+    );
+  }
+}
+
 function isTaskCancelled(taskId: string): boolean {
   const db = getDb();
   const row = db.query("SELECT status FROM tasks WHERE id = ?").get(taskId) as { status: string } | null;
@@ -265,6 +285,7 @@ export async function runTask(taskId: string): Promise<void> {
       logger.info("Running lint", { taskId: task.id, round });
 
       const lintResult = await executeLint(repo, workDir, containerName ?? undefined);
+      saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
 
       if (lintResult.success) {
         _lintPassed = true;
@@ -311,6 +332,7 @@ export async function runTask(taskId: string): Promise<void> {
       logger.info("Running CI", { taskId: task.id, round });
 
       const ciResult = await runCi(repo, workDir, containerName ?? undefined);
+      saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
 
       if (ciResult.success) {
         state = advanceState(state, "pass");
