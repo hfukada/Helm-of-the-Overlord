@@ -7,10 +7,13 @@ import { executeImplement } from "./nodes/agentic/implement";
 import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
 import { executeLint } from "./nodes/deterministic/lint";
+import { rm } from "node:fs/promises";
 import { createWorktree, generateBranchName, removeWorktree } from "../workspace/git";
-import { ensureTaskDir, worktreeDir } from "../workspace/manager";
+import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
+import { generateMcpConfig } from "./subprocess";
+import { setupTaskContainer, teardownTaskContainer } from "../workspace/docker-exec";
 import { $ } from "bun";
 
 const MAX_LINT_ROUNDS = 1;
@@ -46,6 +49,13 @@ function isTaskCancelled(taskId: string): boolean {
 export async function cleanupTask(taskId: string): Promise<void> {
   // Kill any running subprocesses for this task
   killTaskSubprocesses(taskId);
+
+  // Tear down Docker container if one exists
+  try {
+    await teardownTaskContainer(taskId);
+  } catch (err) {
+    logger.warn("Docker teardown failed", { taskId, error: String(err) });
+  }
 
   const db = getDb();
 
@@ -92,6 +102,15 @@ export async function cleanupTask(taskId: string): Promise<void> {
     logger.info("Deleted branch", { taskId, branch: taskRow.branch_name });
   } catch (err) {
     logger.warn("Failed to delete branch", { taskId, branch: taskRow.branch_name, error: String(err) });
+  }
+
+  // Remove the task directory (MCP config, logs, etc.)
+  try {
+    const tDir = taskDir(taskId);
+    await rm(tDir, { recursive: true, force: true });
+    logger.info("Removed task directory", { taskId, dir: tDir });
+  } catch (err) {
+    logger.warn("Failed to remove task directory", { taskId, error: String(err) });
   }
 }
 
@@ -161,27 +180,52 @@ export async function runTask(taskId: string): Promise<void> {
     return;
   }
 
-  // Reindex the repo to ensure knowledge base is fresh
+  // Generate MCP config for agent nodes
+  let mcpConfigPath: string | undefined;
   try {
-    logger.info("Reindexing repo before task", { repo: repo.name, taskId: task.id });
-    await indexRepo(repo);
+    mcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
   } catch (err) {
-    logger.warn("Repo reindex failed, continuing without", { error: String(err) });
+    logger.warn("Failed to generate MCP config, agents will use direct tools", { error: String(err) });
+  }
+
+  // Set up Docker container if applicable
+  let containerName: string | null = null;
+  try {
+    containerName = await setupTaskContainer(repo, workDir, task.id);
+    if (containerName) {
+      logger.info("Docker container ready", { taskId: task.id, containerName });
+    }
+  } catch (err) {
+    logger.warn("Docker setup failed, running locally", { error: String(err) });
   }
 
   let state = createInitialState();
   state.history.push({
-    node: "plan",
+    node: "index",
     entered_at: new Date().toISOString(),
     exited_at: null,
     result: null,
   });
 
+  // === INDEX ===
+  updateTaskStatus(task.id, "indexing", state);
+  logger.info("Starting index phase", { taskId: task.id });
+
+  try {
+    await indexRepo(repo);
+    state = advanceState(state, "done");
+  } catch (err) {
+    logger.warn("Repo reindex failed, continuing", { error: String(err) });
+    state = advanceState(state, "error");
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
   // === PLAN ===
   updateTaskStatus(task.id, "planning", state);
   logger.info("Starting plan phase", { taskId: task.id });
 
-  const planResult = await executePlan(task, repo, workDir);
+  const planResult = await executePlan(task, repo, workDir, mcpConfigPath);
 
   if (planResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -198,7 +242,7 @@ export async function runTask(taskId: string): Promise<void> {
   updateTaskStatus(task.id, "implementing", state);
   logger.info("Starting implement phase", { taskId: task.id });
 
-  const implResult = await executeImplement(task, repo, workDir, planResult.plan);
+  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath);
 
   if (implResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -220,7 +264,7 @@ export async function runTask(taskId: string): Promise<void> {
     for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
       logger.info("Running lint", { taskId: task.id, round });
 
-      const lintResult = await executeLint(repo, workDir);
+      const lintResult = await executeLint(repo, workDir, containerName ?? undefined);
 
       if (lintResult.success) {
         _lintPassed = true;
@@ -241,7 +285,7 @@ export async function runTask(taskId: string): Promise<void> {
 
       const fixResult = await executeFixLint(
         task, repo, workDir,
-        lintResult.output, lintResult.command
+        lintResult.output, lintResult.command, mcpConfigPath
       );
 
       if (fixResult.error) {
@@ -266,7 +310,7 @@ export async function runTask(taskId: string): Promise<void> {
     for (let round = 0; round < MAX_CI_ROUNDS; round++) {
       logger.info("Running CI", { taskId: task.id, round });
 
-      const ciResult = await runCi(repo, workDir);
+      const ciResult = await runCi(repo, workDir, containerName ?? undefined);
 
       if (ciResult.success) {
         state = advanceState(state, "pass");
@@ -286,7 +330,7 @@ export async function runTask(taskId: string): Promise<void> {
       updateTaskStatus(task.id, "ci_fixing", state);
       logger.info("Running fix-ci agent", { taskId: task.id, round });
 
-      const fixResult = await executeFixCi(task, repo, workDir, ciResult.output);
+      const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, mcpConfigPath);
 
       if (fixResult.error) {
         if (isTaskCancelled(task.id)) return;
@@ -305,6 +349,16 @@ export async function runTask(taskId: string): Promise<void> {
     state = advanceState(state, "clean");
   }
 
+  // Tear down Docker container before review (no longer needed)
+  if (containerName) {
+    try {
+      await teardownTaskContainer(task.id);
+      logger.info("Docker container torn down after CI", { taskId: task.id });
+    } catch (err) {
+      logger.warn("Docker teardown failed", { taskId: task.id, error: String(err) });
+    }
+  }
+
   // === REVIEW ===
   updateTaskStatus(task.id, "review", state);
   logger.info("Task ready for review", { taskId: task.id });
@@ -312,7 +366,8 @@ export async function runTask(taskId: string): Promise<void> {
 
 async function runCi(
   repo: Repo,
-  workDir: string
+  workDir: string,
+  containerName?: string
 ): Promise<{ success: boolean; output: string }> {
   const commands: string[] = [];
   if (repo.build_cmd) commands.push(repo.build_cmd);
@@ -320,9 +375,11 @@ async function runCi(
 
   let allOutput = "";
   for (const cmd of commands) {
-    logger.info("Running CI command", { cmd });
+    logger.info("Running CI command", { cmd, containerName });
     try {
-      const result = await $`sh -c ${cmd}`.cwd(workDir).quiet().nothrow();
+      const result = containerName
+        ? await $`docker exec -w /workspace ${containerName} sh -c ${cmd}`.quiet().nothrow()
+        : await $`sh -c ${cmd}`.cwd(workDir).quiet().nothrow();
       const output = result.stdout.toString() + result.stderr.toString();
       allOutput += `\n$ ${cmd}\n${output}`;
 

@@ -1,5 +1,6 @@
 export type TaskStatus =
   | "pending"
+  | "indexing"
   | "planning"
   | "implementing"
   | "linting"
@@ -39,6 +40,7 @@ export interface Repo {
   framework: string | null;
   docker_compose_path: string | null;
   metadata: Record<string, unknown> | null;
+  index_commit_hash?: string | null;
 }
 
 export type AgentRunStatus = "running" | "completed" | "failed";
@@ -75,7 +77,7 @@ export interface AgentStreamEvent {
   timestamp: string;
 }
 
-export type BlueprintNodeType = "plan" | "implement" | "lint" | "push" | "ci" | "fix_lint" | "fix_ci" | "review" | "revise" | "commit";
+export type BlueprintNodeType = "index" | "plan" | "implement" | "lint" | "push" | "ci" | "fix_lint" | "fix_ci" | "review" | "revise" | "commit";
 
 export interface BlueprintNode {
   name: BlueprintNodeType;

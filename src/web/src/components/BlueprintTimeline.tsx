@@ -1,6 +1,7 @@
 import type { BlueprintState } from "../api";
 
 const PIPELINE_NODES = [
+  "index",
   "plan",
   "implement",
   "lint",
@@ -10,6 +11,7 @@ const PIPELINE_NODES = [
 ];
 
 const NODE_LABELS: Record<string, string> = {
+  index: "Index",
   plan: "Plan",
   implement: "Implement",
   lint: "Lint",

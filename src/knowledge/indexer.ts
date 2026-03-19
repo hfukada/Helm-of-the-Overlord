@@ -42,19 +42,82 @@ const CODE_EXTENSIONS = new Set([
 const MAX_CHUNK_SIZE = 2000; // characters per chunk
 const MAX_FILE_SIZE = 100_000; // skip files larger than 100KB
 
+async function getHeadCommit(repoPath: string): Promise<string | null> {
+  try {
+    const hash = await $`git -C ${repoPath} rev-parse HEAD`.text();
+    return hash.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function isCommitValid(repoPath: string, hash: string): Promise<boolean> {
+  try {
+    const result = await $`git -C ${repoPath} cat-file -t ${hash}`.quiet().nothrow();
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function getChangedFiles(repoPath: string, fromHash: string, toHash: string): Promise<string[]> {
+  try {
+    const output = await $`git -C ${repoPath} diff --name-only ${fromHash}..${toHash}`.text();
+    return output.trim().split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 export async function indexRepo(repo: Repo): Promise<{ chunks: number; embeddings: number }> {
   const db = getDb();
   const repoPath = repo.path;
 
   logger.info("Indexing repo", { name: repo.name, path: repoPath });
 
-  // Clear existing chunks for this repo
-  db.run("DELETE FROM knowledge_chunks WHERE repo_id = ?", [repo.id]);
+  const currentHash = await getHeadCommit(repoPath);
+  const storedHash = (db.query("SELECT index_commit_hash FROM repos WHERE id = ?").get(repo.id) as { index_commit_hash: string | null } | null)?.index_commit_hash;
+
+  let changedFileSet: Set<string> | null = null; // null = full reindex
+
+  if (storedHash && currentHash && storedHash !== currentHash) {
+    const valid = await isCommitValid(repoPath, storedHash);
+    if (valid) {
+      const changed = await getChangedFiles(repoPath, storedHash, currentHash);
+      if (changed.length === 0) {
+        logger.info("No files changed since last index", { repo: repo.name, hash: storedHash });
+        // Update hash even if no changes (in case it was a merge with no diff)
+        db.run("UPDATE repos SET index_commit_hash = ? WHERE id = ?", [currentHash, repo.id]);
+        return { chunks: 0, embeddings: 0 };
+      }
+      changedFileSet = new Set(changed);
+      logger.info("Incremental reindex", { repo: repo.name, changedFiles: changed.length });
+      // Delete chunks only for changed files
+      const deleteStmt = db.prepare("DELETE FROM knowledge_chunks WHERE repo_id = ? AND source_file = ?");
+      const deleteTx = db.transaction((files: string[]) => {
+        for (const file of files) {
+          deleteStmt.run(repo.id, file);
+        }
+      });
+      deleteTx(changed);
+    } else {
+      logger.info("Stored commit hash invalid, full reindex", { repo: repo.name, storedHash });
+      db.run("DELETE FROM knowledge_chunks WHERE repo_id = ?", [repo.id]);
+    }
+  } else if (storedHash && storedHash === currentHash) {
+    logger.info("Repo already indexed at current commit", { repo: repo.name, hash: storedHash });
+    return { chunks: 0, embeddings: 0 };
+  } else {
+    // No stored hash: full reindex
+    db.run("DELETE FROM knowledge_chunks WHERE repo_id = ?", [repo.id]);
+  }
 
   const chunks: Chunk[] = [];
 
   // Index known documentation files
   for (const entry of INDEXABLE_FILES) {
+    if (changedFileSet && !changedFileSet.has(entry.pattern)) continue;
+
     const filePath = join(repoPath, entry.pattern);
     if (!existsSync(filePath)) continue;
 
@@ -69,6 +132,8 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
 
   // Index package.json / pyproject.toml / Cargo.toml as config
   for (const configFile of ["package.json", "pyproject.toml", "Cargo.toml", "go.mod"]) {
+    if (changedFileSet && !changedFileSet.has(configFile)) continue;
+
     const filePath = join(repoPath, configFile);
     if (!existsSync(filePath)) continue;
 
@@ -103,6 +168,8 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
     ];
 
     for (const file of files) {
+      if (changedFileSet && !changedFileSet.has(file)) continue;
+
       const ext = file.slice(file.lastIndexOf("."));
       if (!CODE_EXTENSIONS.has(ext)) continue;
 
@@ -152,6 +219,11 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
     embeddingCount = await generateEmbeddings(repo.id);
   } else {
     logger.warn("Ollama not available, skipping embeddings", { repo: repo.name });
+  }
+
+  // Update stored commit hash
+  if (currentHash) {
+    db.run("UPDATE repos SET index_commit_hash = ? WHERE id = ?", [currentHash, repo.id]);
   }
 
   return { chunks: chunks.length, embeddings: embeddingCount };

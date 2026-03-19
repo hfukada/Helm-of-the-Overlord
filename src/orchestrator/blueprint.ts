@@ -2,6 +2,11 @@ import type { BlueprintNode, BlueprintNodeType, BlueprintState } from "../shared
 
 const NODES: BlueprintNode[] = [
   {
+    name: "index",
+    type: "deterministic",
+    transitions: { done: "plan", error: "plan" },
+  },
+  {
     name: "plan",
     type: "agentic",
     transitions: { done: "implement", error: "review" },
@@ -62,7 +67,7 @@ export function getNextNode(
 
 export function createInitialState(): BlueprintState {
   return {
-    current_node: "plan",
+    current_node: "index",
     history: [],
     ci_rounds: 0,
     lint_rounds: 0,

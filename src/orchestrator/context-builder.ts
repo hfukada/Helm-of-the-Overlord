@@ -111,10 +111,21 @@ export async function buildImplementPrompt(
   return parts.join("\n");
 }
 
-export function buildSystemPrompt(repo: Repo): string {
-  return [
-    `You are working on the "${repo.name}" repository.`,
-    "You have access to Read, Write, Edit, Glob, Grep, and Bash tools.",
-    "Do not run destructive commands. Do not push to git.",
-  ].join("\n");
+export function buildSystemPrompt(repo: Repo, opts?: { hasMcp?: boolean; hasDocker?: boolean }): string {
+  const lines = [`You are working on the "${repo.name}" repository.`];
+
+  if (opts?.hasMcp) {
+    lines.push("Use search_knowledge to find relevant code and documentation in the knowledge base.");
+    lines.push("Use list_files to discover files in the repository.");
+    lines.push("Use read_file to read specific files.");
+  } else {
+    lines.push("You have access to Read, Write, Edit, Glob, Grep, and Bash tools.");
+  }
+
+  if (opts?.hasDocker) {
+    lines.push("Build, test, and lint commands run inside a Docker container. Focus on writing code -- the orchestrator handles running commands.");
+  }
+
+  lines.push("Do not run destructive commands. Do not push to git.");
+  return lines.join("\n");
 }

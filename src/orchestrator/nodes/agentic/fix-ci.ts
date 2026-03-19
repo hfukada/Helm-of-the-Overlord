@@ -10,6 +10,7 @@ export async function executeFixCi(
   repo: Repo,
   workDir: string,
   ciOutput: string,
+  mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
@@ -42,14 +43,20 @@ export async function executeFixCi(
     [agentRunId, task.id, prompt, model]
   );
 
+  const mcpReadTools = mcpConfigPath
+    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file"]
+    : ["Read", "Glob", "Grep"];
+
   const result = await runClaude({
     prompt,
-    systemPrompt: buildSystemPrompt(repo),
+    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
     maxTurns: 15,
-    allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    allowedTools: [...mcpReadTools, "Write", "Edit", "Bash"],
+    mcpConfigPath,
     agentRunId,
+    taskId: task.id,
     onEvent,
   });
 

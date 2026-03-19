@@ -11,6 +11,7 @@ export async function executeFixLint(
   workDir: string,
   lintOutput: string,
   lintCommand: string,
+  mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
@@ -41,13 +42,18 @@ export async function executeFixLint(
     [agentRunId, task.id, prompt, model]
   );
 
+  const mcpReadTools = mcpConfigPath
+    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file"]
+    : ["Read", "Glob", "Grep"];
+
   const result = await runClaude({
     prompt,
-    systemPrompt: buildSystemPrompt(repo),
+    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
     maxTurns: 10,
-    allowedTools: ["Read", "Write", "Edit", "Glob", "Grep"],
+    allowedTools: [...mcpReadTools, "Write", "Edit"],
+    mcpConfigPath,
     agentRunId,
     taskId: task.id,
     onEvent,

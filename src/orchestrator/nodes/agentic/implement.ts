@@ -10,6 +10,7 @@ export async function executeImplement(
   repo: Repo,
   workDir: string,
   plan: string,
+  mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
@@ -23,13 +24,18 @@ export async function executeImplement(
     [agentRunId, task.id, prompt, model]
   );
 
+  const allowedTools = mcpConfigPath
+    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Write", "Edit", "Bash"]
+    : ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
+
   const result = await runClaude({
     prompt,
-    systemPrompt: buildSystemPrompt(repo),
+    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
     maxTurns: 20,
-    allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    allowedTools,
+    mcpConfigPath,
     agentRunId,
     taskId: task.id,
     onEvent,

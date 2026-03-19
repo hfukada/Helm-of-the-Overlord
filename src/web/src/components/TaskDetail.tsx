@@ -33,22 +33,30 @@ export function TaskDetail() {
     setError(null);
     setExpandedRuns(new Set());
 
+    let stopped = false;
+
     const load = () =>
       fetchTask(id)
-        .then(setTask)
-        .catch((err) =>
-          setError(err instanceof Error ? err.message : "Failed to load")
-        );
+        .then((t) => {
+          if (stopped) return;
+          setTask(t);
+          if (TERMINAL_STATUSES.has(t.status)) {
+            clearInterval(interval);
+          }
+        })
+        .catch((err) => {
+          if (stopped) return;
+          setError(err instanceof Error ? err.message : "Failed to load");
+        });
 
     load();
-    const interval = setInterval(() => {
-      // Stop polling for terminal statuses
-      if (task && TERMINAL_STATUSES.has(task.status)) return;
-      load();
-    }, 2000);
+    const interval = setInterval(load, 2000);
 
-    return () => clearInterval(interval);
-  }, [id, task]);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [id]);
 
   if (error) {
     return (

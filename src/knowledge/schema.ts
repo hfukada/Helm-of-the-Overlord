@@ -99,6 +99,11 @@ const MIGRATIONS = [
 
   `CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_repo ON knowledge_chunks(repo_id)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_type ON knowledge_chunks(chunk_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(repo_id, source_file)`,
+];
+
+const ALTER_MIGRATIONS = [
+  "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
 ];
 
 export function runMigrations(db: Database): void {
@@ -107,5 +112,13 @@ export function runMigrations(db: Database): void {
 
   for (const sql of MIGRATIONS) {
     db.exec(sql);
+  }
+
+  for (const sql of ALTER_MIGRATIONS) {
+    try {
+      db.exec(sql);
+    } catch {
+      // Column already exists, ignore
+    }
   }
 }

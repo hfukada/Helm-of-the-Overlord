@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { $ } from "bun";
 import { getDb } from "../../knowledge/db";
 import { search } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
@@ -34,6 +35,30 @@ knowledge.post("/search", async (c) => {
   });
 
   return c.json({ results, count: results.length });
+});
+
+knowledge.post("/files", async (c) => {
+  const body = await c.req.json<{ repo_name: string; pattern?: string }>();
+  const db = getDb();
+
+  const repo = db.query("SELECT id, path FROM repos WHERE name = ?").get(body.repo_name) as { id: number; path: string } | null;
+  if (!repo) {
+    return c.json({ error: `Repo '${body.repo_name}' not found` }, 404);
+  }
+
+  try {
+    let output: string;
+    if (body.pattern) {
+      output = await $`git -C ${repo.path} ls-files -- ${body.pattern}`.text();
+    } else {
+      output = await $`git -C ${repo.path} ls-files`.text();
+    }
+    const files = output.trim().split("\n").filter(Boolean);
+    return c.json({ files });
+  } catch (err) {
+    logger.warn("Failed to list files", { error: String(err) });
+    return c.json({ files: [] });
+  }
 });
 
 knowledge.post("/repos/:name/reindex", async (c) => {

@@ -1,10 +1,12 @@
 
+import { join, resolve } from "node:path";
 import { logger } from "../shared/logger";
 import type { TokenUsage, StreamEventType } from "../shared/types";
 import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
 import { registerSubprocess, unregisterSubprocess } from "./subprocess-registry";
 import { parseStreamLine } from "./stream-parser";
+import { taskDir } from "../workspace/manager";
 
 export interface SubprocessOptions {
   prompt: string;
@@ -13,6 +15,7 @@ export interface SubprocessOptions {
   model?: string;
   maxTurns?: number;
   allowedTools?: string[];
+  mcpConfigPath?: string;
   agentRunId: string;
   taskId?: string;
   onEvent?: (eventType: StreamEventType, content: string) => void;
@@ -78,6 +81,10 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
 
   if (opts.systemPrompt) {
     args.push("--system-prompt", opts.systemPrompt);
+  }
+
+  if (opts.mcpConfigPath) {
+    args.push("--mcp-config", opts.mcpConfigPath);
   }
 
   args.push("--", opts.prompt);
@@ -185,4 +192,31 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     },
     error,
   };
+}
+
+export async function generateMcpConfig(
+  taskId: string,
+  workDir: string,
+  repoName: string
+): Promise<string> {
+  const serverScript = resolve(join(import.meta.dir, "../mcp/server.ts"));
+  const configPath = join(taskDir(taskId), "mcp-config.json");
+
+  const mcpConfig = {
+    mcpServers: {
+      hoto: {
+        command: "bun",
+        args: ["run", serverScript],
+        env: {
+          HOTO_WORK_DIR: workDir,
+          HOTO_REPO_NAME: repoName,
+          HOTO_DAEMON_URL: `http://127.0.0.1:${config.daemonPort}`,
+        },
+      },
+    },
+  };
+
+  await Bun.write(configPath, JSON.stringify(mcpConfig, null, 2));
+  logger.info("Generated MCP config", { taskId, configPath });
+  return configPath;
 }

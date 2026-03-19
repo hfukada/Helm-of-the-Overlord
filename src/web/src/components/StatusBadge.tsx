@@ -1,5 +1,6 @@
 const STATUS_COLORS: Record<string, string> = {
   pending: "bg-gray-600 text-gray-200",
+  indexing: "bg-blue-600 text-blue-100",
   planning: "bg-blue-600 text-blue-100",
   implementing: "bg-blue-600 text-blue-100",
   linting: "bg-yellow-600 text-yellow-100",
@@ -14,6 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
+  indexing: "Indexing",
   planning: "Planning",
   implementing: "Implementing",
   linting: "Linting",
