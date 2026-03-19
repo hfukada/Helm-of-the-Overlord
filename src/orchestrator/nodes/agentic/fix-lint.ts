@@ -43,7 +43,7 @@ export async function executeFixLint(
   );
 
   const mcpReadTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file"]
+    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({

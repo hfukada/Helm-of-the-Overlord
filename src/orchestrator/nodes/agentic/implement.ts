@@ -25,7 +25,7 @@ export async function executeImplement(
   );
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Write", "Edit", "Bash"]
+    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep", "Write", "Edit", "Bash"]
     : ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
 
   const result = await runClaude({

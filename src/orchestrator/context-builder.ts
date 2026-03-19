@@ -115,9 +115,8 @@ export function buildSystemPrompt(repo: Repo, opts?: { hasMcp?: boolean; hasDock
   const lines = [`You are working on the "${repo.name}" repository.`];
 
   if (opts?.hasMcp) {
-    lines.push("Use search_knowledge to find relevant code and documentation in the knowledge base.");
-    lines.push("Use list_files to discover files in the repository.");
-    lines.push("Use read_file to read specific files.");
+    lines.push("Prefer using the knowledge base MCP tools for discovery: search_knowledge to find relevant code and documentation, list_files to discover files, read_file to read indexed content.");
+    lines.push("You also have Read, Glob, and Grep available for direct file access when you need to read files not covered by the knowledge base.");
   } else {
     lines.push("You have access to Read, Write, Edit, Glob, Grep, and Bash tools.");
   }
