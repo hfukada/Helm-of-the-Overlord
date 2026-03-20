@@ -6,9 +6,8 @@ import {
 } from "../src/orchestrator/blueprint";
 import type { BlueprintState } from "../src/shared/types";
 
-// Import the timeline builder from the web component
-// We test the logic function directly, not the React component
-import { buildTimelineNodes } from "../src/web/src/components/BlueprintTimeline";
+// Import the timeline builder from the pure logic module (not the React component)
+import { buildTimelineNodes } from "../src/web/src/components/blueprint-timeline-logic";
 
 // ---------------------------------------------------------------------------
 // Blueprint state machine: normal flow

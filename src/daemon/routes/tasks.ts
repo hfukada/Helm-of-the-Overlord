@@ -172,4 +172,38 @@ tasks.post("/:id/cancel", async (c) => {
   return c.json({ id, status: "cancelled" });
 });
 
+tasks.delete("/:id", async (c) => {
+  const id = c.req.param("id");
+  const db = getDb();
+
+  const task = db.query("SELECT id, status FROM tasks WHERE id = ?").get(id) as { id: string; status: string } | null;
+  if (!task) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  const terminalStatuses = ["committed", "cancelled", "failed"];
+  if (!terminalStatuses.includes(task.status)) {
+    // Stop any active work and clean up the worktree before deleting
+    await cleanupTask(id).catch((err) => {
+      logger.warn("Cleanup failed before delete", { taskId: id, error: String(err) });
+    });
+  }
+
+  // Delete related rows in dependency order to satisfy foreign-key constraints
+  const agentRunIds = db
+    .query("SELECT id FROM agent_runs WHERE task_id = ?")
+    .all(id) as Array<{ id: string }>;
+
+  for (const run of agentRunIds) {
+    db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
+  }
+  db.run("DELETE FROM agent_runs WHERE task_id = ?", [id]);
+  db.run("DELETE FROM diff_comments WHERE task_id = ?", [id]);
+  db.run("DELETE FROM tasks WHERE id = ?", [id]);
+
+  logger.info("Task deleted", { taskId: id });
+
+  return c.json({ id, deleted: true });
+});
+
 export { tasks };

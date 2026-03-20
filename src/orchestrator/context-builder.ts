@@ -125,6 +125,7 @@ export async function buildImplementPrompt(
   parts.push("- Use the repository knowledge above to understand existing patterns and conventions.");
   parts.push("- Write clean, idiomatic code that matches the existing style.");
   parts.push("- Do a final check to see if you can generalize things or hook into existing patterns");
+  parts.push("- Do NOT run lint or test commands yourself -- the orchestrator handles that automatically after you finish.");
   parts.push("- Do NOT commit changes -- just write the files.");
 
   return parts.join("\n");
