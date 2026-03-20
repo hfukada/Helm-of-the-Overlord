@@ -108,6 +108,7 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN lint_passed INTEGER",
   "ALTER TABLE tasks ADD COLUMN ci_output TEXT",
   "ALTER TABLE tasks ADD COLUMN ci_passed INTEGER",
+  "ALTER TABLE tasks ADD COLUMN use_full_copy INTEGER NOT NULL DEFAULT 0",
 ];
 
 export function runMigrations(db: Database): void {
