@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { logger } from "../shared/logger";
 import type { Repo, ContainerSecret } from "../shared/types";
 import { getRepoSecrets } from "../daemon/routes/secrets";
@@ -36,7 +36,7 @@ function buildSecretFlags(secrets: ContainerSecret[]): string[] {
       } else if (s.value_source === "host_file" && s.host_path) {
         // Read value from host file
         try {
-          const val = require("fs").readFileSync(s.host_path, "utf-8").trim();
+          const val = readFileSync(s.host_path, "utf-8").trim();
           flags.push("-e", `${s.key}=${val}`);
         } catch {
           logger.warn("Could not read secret file, skipping", { key: s.key, path: s.host_path });
@@ -88,7 +88,7 @@ export async function setupTaskContainer(
           env[s.key] = process.env[s.key]!;
         } else if (s.value_source === "host_file" && s.host_path) {
           try {
-            env[s.key] = require("fs").readFileSync(s.host_path, "utf-8").trim();
+            env[s.key] = readFileSync(s.host_path, "utf-8").trim();
           } catch {}
         }
       }

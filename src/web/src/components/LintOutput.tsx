@@ -54,7 +54,7 @@ export function LintOutput({
 
   // Auto-scroll
   useEffect(() => {
-    if (isRunning && containerRef.current) {
+    if (isRunning && output && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [output, isRunning]);

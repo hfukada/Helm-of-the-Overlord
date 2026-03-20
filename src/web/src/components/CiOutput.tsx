@@ -55,7 +55,7 @@ export function CiOutput({
 
   // Auto-scroll to bottom when following is enabled and output changes
   useEffect(() => {
-    if (following && containerRef.current) {
+    if (following && output && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
   }, [output, following]);

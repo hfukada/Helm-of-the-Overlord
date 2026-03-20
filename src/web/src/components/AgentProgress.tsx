@@ -36,10 +36,10 @@ export function AgentProgress({
   }, [taskId, runId, isRunning, events.length]);
 
   useEffect(() => {
-    if (containerRef.current) {
+    if (events.length > 0 && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [events.length]);
+  }, [events]);
 
   if (events.length === 0) {
     return isRunning ? (

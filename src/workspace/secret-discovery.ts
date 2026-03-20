@@ -72,7 +72,7 @@ const PATTERNS: SecretPattern[] = [
   },
   // File not found for common auth paths
   {
-    pattern: /(?:no such file|not found|ENOENT|FileNotFoundError).*?(\/(?:root|home\/\w+)\/\.(?:claude|aws|ssh|docker|npmrc|pypirc|gitconfig|kube|gcloud)[\/\w.]*)/i,
+    pattern: /(?:no such file|not found|ENOENT|FileNotFoundError).*?(\/(?:root|home\/\w+)\/\.(?:claude|aws|ssh|docker|npmrc|pypirc|gitconfig|kube|gcloud)[/\w.]*)/i,
     extract: (m) => ({
       secret_type: "auth_file",
       key: m[1].split("/").pop() ?? m[1],
@@ -84,7 +84,7 @@ const PATTERNS: SecretPattern[] = [
   },
   // Permission denied on credential files
   {
-    pattern: /(?:permission denied|EACCES).*?(\/(?:root|home\/\w+)\/\.(?:claude|aws|ssh|docker|npmrc|pypirc|kube|gcloud)[\/\w.]*)/i,
+    pattern: /(?:permission denied|EACCES).*?(\/(?:root|home\/\w+)\/\.(?:claude|aws|ssh|docker|npmrc|pypirc|kube|gcloud)[/\w.]*)/i,
     extract: (m) => ({
       secret_type: "auth_file",
       key: m[1].split("/").pop() ?? m[1],

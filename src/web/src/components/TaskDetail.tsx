@@ -30,26 +30,25 @@ export function TaskDetail() {
   const [rejectComment, setRejectComment] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
-  const [manualToggles, setManualToggles] = useState<Set<string>>(new Set());
   const [cancelling, setCancelling] = useState(false);
 
   // Auto-expand running agent runs, collapse completed ones (unless manually toggled)
+  const agentRuns = task?.agent_runs;
   useEffect(() => {
-    if (!task) return;
+    if (!agentRuns) return;
     setExpandedRuns((prev) => {
       const next = new Set<string>();
-      for (const run of task.agent_runs) {
+      for (const run of agentRuns) {
         if (run.status === "running") {
           next.add(run.id);
-        } else if (manualToggles.has(run.id)) {
-          // Preserve manual toggle state
-          if (prev.has(run.id)) next.add(run.id);
+        } else if (prev.has(run.id)) {
+          // Preserve manually expanded state
+          next.add(run.id);
         }
-        // Completed/failed runs not manually toggled: stay collapsed
       }
       return next;
     });
-  }, [task?.agent_runs]);
+  }, [agentRuns]);
 
   useEffect(() => {
     if (!id) return;
@@ -57,7 +56,6 @@ export function TaskDetail() {
     setTask(null);
     setError(null);
     setExpandedRuns(new Set());
-    setManualToggles(new Set());
 
     let stopped = false;
 
@@ -95,7 +93,6 @@ export function TaskDetail() {
   }
 
   const toggleRun = (runId: string) => {
-    setManualToggles((prev) => new Set(prev).add(runId));
     setExpandedRuns((prev) => {
       const next = new Set(prev);
       if (next.has(runId)) next.delete(runId);
@@ -304,7 +301,7 @@ export function TaskDetail() {
               placeholder="What needs to be changed..."
               rows={5}
               className="w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-red-500 focus:outline-none"
-              autoFocus
+              ref={(el) => el?.focus()}
               onKeyDown={(e) => {
                 if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleReject();
               }}
