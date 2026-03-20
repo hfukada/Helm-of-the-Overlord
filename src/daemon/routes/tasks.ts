@@ -114,6 +114,24 @@ tasks.get("/:id", async (c) => {
   });
 });
 
+tasks.get("/:id/ci-output", (c) => {
+  const id = c.req.param("id");
+  const db = getDb();
+  const row = db
+    .query("SELECT ci_output, ci_passed, status FROM tasks WHERE id = ?")
+    .get(id) as { ci_output: string | null; ci_passed: number | null; status: string } | null;
+
+  if (!row) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  return c.json({
+    ci_output: row.ci_output,
+    ci_passed: row.ci_passed,
+    status: row.status,
+  });
+});
+
 tasks.post("/:id/cancel", async (c) => {
   const id = c.req.param("id");
   const db = getDb();

@@ -150,6 +150,16 @@ export function fetchAgentStream(
   return request(`/tasks/${taskId}/agents/${runId}/stream?after=${after}`);
 }
 
+export interface CiOutputResponse {
+  ci_output: string | null;
+  ci_passed: number | null;
+  status: string;
+}
+
+export function fetchCiOutput(taskId: string): Promise<CiOutputResponse> {
+  return request(`/tasks/${taskId}/ci-output`);
+}
+
 // Comments
 export function fetchComments(taskId: string): Promise<DiffComment[]> {
   return request(`/tasks/${taskId}/comments`);
