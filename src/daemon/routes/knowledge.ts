@@ -6,7 +6,7 @@ import type { SearchResult } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
 import { logger } from "../../shared/logger";
 import type { Repo } from "../../shared/types";
-import { claudeText, claudeBatch } from "../../shared/claude-cli";
+import { claudeText, claudeStream } from "../../shared/claude-cli";
 
 const knowledge = new Hono();
 
@@ -163,10 +163,17 @@ knowledge.post("/ask", async (c) => {
 
   if (body.stream) {
     const enc = new TextEncoder();
+    let closed = false;
     const stream = new ReadableStream({
       async start(controller) {
-        const push = (obj: unknown) =>
-          controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+        const push = (obj: unknown) => {
+          if (closed) return;
+          try {
+            controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+          } catch {
+            closed = true;
+          }
+        };
         try {
           const answer = await generateAnswerStream(
             body.query,
@@ -178,8 +185,13 @@ knowledge.post("/ask", async (c) => {
           logger.error("Streaming ask failed", { error: String(err) });
           push({ type: "error", message: String(err) });
         } finally {
-          controller.close();
+          if (!closed) {
+            try { controller.close(); } catch { /* already closed */ }
+          }
         }
+      },
+      cancel() {
+        closed = true;
       },
     });
 
@@ -228,9 +240,9 @@ async function generateAnswerStream(
 ): Promise<string> {
   const { systemPrompt, prompt } = buildAskPrompt(query, results);
 
-  const result = await claudeBatch(
-    { prompt, systemPrompt, maxTurns: 1 },
-    (evt) => { onEvent(evt.type, evt.content); },
+  const result = await claudeStream(
+    { prompt, systemPrompt },
+    async (evt) => { await onEvent(evt.type, evt.content); },
   );
 
   if (result.error) {
@@ -242,7 +254,7 @@ async function generateAnswerStream(
 
 async function generateAnswer(query: string, results: SearchResult[]): Promise<string> {
   const { systemPrompt, prompt } = buildAskPrompt(query, results);
-  return claudeText({ prompt, systemPrompt, maxTurns: 1 });
+  return claudeText({ prompt, systemPrompt });
 }
 
 export { knowledge };
