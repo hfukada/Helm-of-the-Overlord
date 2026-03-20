@@ -90,39 +90,58 @@ export async function askCommand(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    const reader = res.body!.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
+    const contentType = res.headers.get("content-type") ?? "";
     let sources: SourceEntry[] = [];
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
+    if (contentType.includes("ndjson")) {
+      // Streaming NDJSON response
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
 
-      for (const rawLine of lines) {
-        if (!rawLine.trim()) continue;
-        let line: NdjsonLine;
-        try {
-          line = JSON.parse(rawLine) as NdjsonLine;
-        } catch {
-          continue;
-        }
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
 
-        if (line.type === "event") {
-          renderEvent(line.event_type, line.content, showThinking);
-        } else if (line.type === "done") {
-          sources = line.sources ?? [];
-          // answer was already printed via streaming text events; print a
-          // newline to terminate the final text chunk if needed
-          process.stdout.write("\n");
-        } else if (line.type === "error") {
-          console.error(`\nError: ${line.message}`);
-          process.exit(1);
+        for (const rawLine of lines) {
+          if (!rawLine.trim()) continue;
+          let line: NdjsonLine;
+          try {
+            line = JSON.parse(rawLine) as NdjsonLine;
+          } catch {
+            continue;
+          }
+
+          if (line.type === "event") {
+            renderEvent(line.event_type, line.content, showThinking);
+          } else if (line.type === "done") {
+            sources = line.sources ?? [];
+            process.stdout.write("\n");
+          } else if (line.type === "error") {
+            console.error(`\nError: ${line.message}`);
+            process.exit(1);
+          }
         }
       }
+    } else {
+      // Plain JSON fallback (daemon may not support streaming yet)
+      const text = await res.text();
+      let data: { answer?: string; sources?: SourceEntry[]; error?: string };
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.error(`Error: unexpected response from daemon:\n${text.slice(0, 500)}`);
+        process.exit(1);
+      }
+      if (data.error) {
+        console.error(`Error: ${data.error}`);
+        process.exit(1);
+      }
+      console.log(data.answer ?? "");
+      sources = data.sources ?? [];
     }
 
     if (showSources && sources.length > 0) {

@@ -97,37 +97,6 @@ export interface BlueprintState {
   lint_rounds: number;
 }
 
-export interface ClaudeStreamEvent {
-  type: string;
-  subtype?: string;
-  content_block?: {
-    type: string;
-    text?: string;
-    thinking?: string;
-    name?: string;
-    id?: string;
-    input?: unknown;
-  };
-  delta?: {
-    type: string;
-    text?: string;
-    thinking?: string;
-    partial_json?: string;
-  };
-  index?: number;
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_creation_input_tokens?: number;
-    cache_read_input_tokens?: number;
-  };
-  result?: {
-    usage?: {
-      input_tokens: number;
-      output_tokens: number;
-    };
-  };
-}
 
 export interface TokenUsage {
   input_tokens: number;

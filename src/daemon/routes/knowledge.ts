@@ -5,8 +5,8 @@ import { search } from "../../knowledge/search";
 import type { SearchResult } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
 import { logger } from "../../shared/logger";
-import { config } from "../../shared/config";
 import type { Repo } from "../../shared/types";
+import { claudeText, claudeBatch } from "../../shared/claude-cli";
 
 const knowledge = new Hono();
 
@@ -162,29 +162,28 @@ knowledge.post("/ask", async (c) => {
   }
 
   if (body.stream) {
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = writable.getWriter();
     const enc = new TextEncoder();
-    const write = (obj: unknown) =>
-      writer.write(enc.encode(JSON.stringify(obj) + "\n"));
+    const stream = new ReadableStream({
+      async start(controller) {
+        const push = (obj: unknown) =>
+          controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
+        try {
+          const answer = await generateAnswerStream(
+            body.query,
+            results,
+            async (eventType, content) => { push({ type: "event", event_type: eventType, content }); },
+          );
+          push({ type: "done", answer, sources: results });
+        } catch (err) {
+          logger.error("Streaming ask failed", { error: String(err) });
+          push({ type: "error", message: String(err) });
+        } finally {
+          controller.close();
+        }
+      },
+    });
 
-    (async () => {
-      try {
-        const answer = await generateAnswerStream(
-          body.query,
-          results,
-          (eventType, content) => write({ type: "event", event_type: eventType, content }),
-        );
-        write({ type: "done", answer, sources: results });
-      } catch (err) {
-        logger.error("Streaming ask failed", { error: String(err) });
-        write({ type: "error", message: String(err) });
-      } finally {
-        writer.close();
-      }
-    })();
-
-    return new Response(readable, {
+    return new Response(stream, {
       headers: { "Content-Type": "application/x-ndjson" },
     });
   }
@@ -199,153 +198,51 @@ knowledge.post("/ask", async (c) => {
   return c.json({ answer, sources: results });
 });
 
-function parseAskStreamLine(line: string): { type: string; content: string } | null {
-  try {
-    const data = JSON.parse(line);
-    // Thinking delta
-    if (
-      data.type === "content_block_delta" &&
-      data.delta?.type === "thinking_delta"
-    ) {
-      return { type: "thinking", content: data.delta.thinking ?? "" };
-    }
-    // Text delta
-    if (
-      data.type === "content_block_delta" &&
-      data.delta?.type === "text_delta"
-    ) {
-      return { type: "text", content: data.delta.text ?? "" };
-    }
-    // Tool use start (emit tool name)
-    if (
-      data.type === "content_block_start" &&
-      data.content_block?.type === "tool_use"
-    ) {
-      return { type: "tool_use", content: data.content_block.name ?? "tool" };
-    }
-    // Tool result
-    if (data.type === "tool_result") {
-      const content =
-        typeof data.content === "string"
-          ? data.content
-          : JSON.stringify(data.content ?? "");
-      return { type: "tool_result", content };
-    }
-  } catch {
-    // non-JSON lines (e.g. blank, metadata) are silently ignored
-  }
-  return null;
+function buildAskPrompt(query: string, results: SearchResult[]) {
+  const MAX_CONTENT_CHARS = 1200;
+
+  const contextParts = results.map((r, i) => {
+    const content = r.content.length > MAX_CONTENT_CHARS
+      ? `${r.content.slice(0, MAX_CONTENT_CHARS)}...`
+      : r.content;
+    return `[${i + 1}] ${r.repo_name}: ${r.source_file} (${r.chunk_type})\n${content}`;
+  });
+
+  const context = contextParts.join("\n\n---\n\n");
+
+  return {
+    systemPrompt:
+      "You are a helpful assistant with access to a codebase knowledge base. " +
+      "Answer the user's question based on the provided context. " +
+      "Be concise and precise. Reference specific files or code when relevant. " +
+      "If the context does not contain enough information to answer, say so clearly.",
+    prompt:
+      `Question: ${query}\n\nContext from knowledge base:\n\n${context}\n\nAnswer the question based on the context above.`,
+  };
 }
 
 async function generateAnswerStream(
   query: string,
   results: SearchResult[],
-  onEvent: (eventType: string, content: string) => void,
+  onEvent: (eventType: string, content: string) => Promise<void>,
 ): Promise<string> {
-  const MAX_CONTENT_CHARS = 1200;
+  const { systemPrompt, prompt } = buildAskPrompt(query, results);
 
-  const contextParts = results.map((r, i) => {
-    const content = r.content.length > MAX_CONTENT_CHARS
-      ? `${r.content.slice(0, MAX_CONTENT_CHARS)}...`
-      : r.content;
-    return `[${i + 1}] ${r.repo_name}: ${r.source_file} (${r.chunk_type})\n${content}`;
-  });
-
-  const context = contextParts.join("\n\n---\n\n");
-
-  const systemPrompt =
-    "You are a helpful assistant with access to a codebase knowledge base. " +
-    "Answer the user's question based on the provided context. " +
-    "Be concise and precise. Reference specific files or code when relevant. " +
-    "If the context does not contain enough information to answer, say so clearly.";
-
-  const userPrompt =
-    `Question: ${query}\n\nContext from knowledge base:\n\n${context}\n\nAnswer the question based on the context above.`;
-
-  const proc = Bun.spawn(
-    [
-      "claude", "--print", "--verbose",
-      "--output-format", "stream-json",
-      "--model", config.defaultModel,
-      "--system-prompt", systemPrompt,
-      "--", userPrompt,
-    ],
-    { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+  const result = await claudeBatch(
+    { prompt, systemPrompt, maxTurns: 1 },
+    (evt) => { onEvent(evt.type, evt.content); },
   );
 
-  let outputText = "";
-  const reader = proc.stdout.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      const lines = buf.split("\n");
-      buf = lines.pop() ?? "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const ev = parseAskStreamLine(line);
-        if (!ev) continue;
-        if (ev.type === "text") outputText += ev.content;
-        onEvent(ev.type, ev.content);
-      }
-    }
-  } finally {
-    reader.releaseLock();
+  if (result.error) {
+    throw new Error(result.error);
   }
 
-  const exitCode = await proc.exited;
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    logger.error("claude subprocess failed during ask stream", { exitCode, stderr });
-    throw new Error(`claude exited with code ${exitCode}: ${stderr}`);
-  }
-
-  return outputText.trim();
+  return result.text;
 }
 
 async function generateAnswer(query: string, results: SearchResult[]): Promise<string> {
-  const MAX_CONTENT_CHARS = 1200;
-
-  const contextParts = results.map((r, i) => {
-    const content = r.content.length > MAX_CONTENT_CHARS
-      ? `${r.content.slice(0, MAX_CONTENT_CHARS)}...`
-      : r.content;
-    return `[${i + 1}] ${r.repo_name}: ${r.source_file} (${r.chunk_type})\n${content}`;
-  });
-
-  const context = contextParts.join("\n\n---\n\n");
-
-  const systemPrompt =
-    "You are a helpful assistant with access to a codebase knowledge base. " +
-    "Answer the user's question based on the provided context. " +
-    "Be concise and precise. Reference specific files or code when relevant. " +
-    "If the context does not contain enough information to answer, say so clearly.";
-
-  const userPrompt =
-    `Question: ${query}\n\nContext from knowledge base:\n\n${context}\n\nAnswer the question based on the context above.`;
-
-  const model = config.defaultModel;
-  const proc = Bun.spawn(
-    ["claude", "--print", "--model", model, "--system-prompt", systemPrompt, "--", userPrompt],
-    { stdout: "pipe", stderr: "pipe", env: { ...process.env } }
-  );
-
-  const [output, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    proc.exited,
-  ]);
-
-  if (exitCode !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    logger.error("claude subprocess failed during ask", { exitCode, stderr });
-    throw new Error(`claude exited with code ${exitCode}: ${stderr}`);
-  }
-
-  return output.trim();
+  const { systemPrompt, prompt } = buildAskPrompt(query, results);
+  return claudeText({ prompt, systemPrompt, maxTurns: 1 });
 }
 
 export { knowledge };
