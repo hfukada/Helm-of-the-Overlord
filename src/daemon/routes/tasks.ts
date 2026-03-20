@@ -132,6 +132,24 @@ tasks.get("/:id/ci-output", (c) => {
   });
 });
 
+tasks.get("/:id/lint-output", (c) => {
+  const id = c.req.param("id");
+  const db = getDb();
+  const row = db
+    .query("SELECT lint_output, lint_passed, status FROM tasks WHERE id = ?")
+    .get(id) as { lint_output: string | null; lint_passed: number | null; status: string } | null;
+
+  if (!row) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  return c.json({
+    lint_output: row.lint_output,
+    lint_passed: row.lint_passed,
+    status: row.status,
+  });
+});
+
 tasks.post("/:id/cancel", async (c) => {
   const id = c.req.param("id");
   const db = getDb();

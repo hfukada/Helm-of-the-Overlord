@@ -121,6 +121,23 @@ const MIGRATIONS = [
   )`,
 ];
 
+const MIGRATIONS_V2 = [
+  `CREATE TABLE IF NOT EXISTS container_secrets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    secret_type TEXT NOT NULL CHECK (secret_type IN ('env_var', 'auth_file')),
+    key TEXT NOT NULL,
+    value_source TEXT NOT NULL CHECK (value_source IN ('host_env', 'host_file')),
+    host_path TEXT,
+    container_path TEXT,
+    description TEXT,
+    discovered_by TEXT NOT NULL DEFAULT 'manual' CHECK (discovered_by IN ('manual', 'auto')),
+    verified INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(repo_id, secret_type, key)
+  )`,
+];
+
 const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
   "ALTER TABLE tasks ADD COLUMN lint_output TEXT",
@@ -135,6 +152,10 @@ export function runMigrations(db: Database): void {
   db.exec("PRAGMA foreign_keys = ON");
 
   for (const sql of MIGRATIONS) {
+    db.exec(sql);
+  }
+
+  for (const sql of MIGRATIONS_V2) {
     db.exec(sql);
   }
 

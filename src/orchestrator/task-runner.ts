@@ -14,6 +14,7 @@ import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
 import { setupTaskContainer, teardownTaskContainer } from "../workspace/docker-exec";
+import { discoverSecrets } from "../workspace/secret-discovery";
 import { $ } from "bun";
 
 const MAX_LINT_ROUNDS = 1;
@@ -154,6 +155,7 @@ function loadTaskAndRepo(taskId: string): { task: Task; repo: Repo } | null {
     blueprint_state: null,
     branch_name: taskRow.branch_name as string | null,
     source: taskRow.source as "cli" | "web",
+    use_full_copy: !!(taskRow.use_full_copy as number),
     created_at: taskRow.created_at as string,
     updated_at: taskRow.updated_at as string,
   };
@@ -284,12 +286,19 @@ export async function runTask(taskId: string): Promise<void> {
     for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
       logger.info("Running lint", { taskId: task.id, round });
 
-      const lintResult = await executeLint(repo, workDir, containerName ?? undefined);
+      const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+        saveNodeOutput(task.id, "lint", accumulated, false);
+      });
       saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
 
       if (lintResult.success) {
         _lintPassed = true;
         break;
+      }
+
+      // Scan lint failure output for missing secrets
+      if (containerName) {
+        discoverSecrets(repo.id, lintResult.output);
       }
 
       if (round >= MAX_LINT_ROUNDS) {
@@ -340,6 +349,11 @@ export async function runTask(taskId: string): Promise<void> {
       if (ciResult.success) {
         state = advanceState(state, "pass");
         break;
+      }
+
+      // Scan CI failure output for missing secrets
+      if (containerName) {
+        discoverSecrets(repo.id, ciResult.output);
       }
 
       if (round >= MAX_CI_ROUNDS - 1) {
@@ -466,10 +480,17 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   if (repo.lint_cmd) {
     for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-      const lintResult = await executeLint(repo, workDir, containerName ?? undefined);
+      const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+        saveNodeOutput(task.id, "lint", accumulated, false);
+      });
       saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
 
       if (lintResult.success) break;
+
+      if (containerName) {
+        discoverSecrets(repo.id, lintResult.output);
+      }
+
       if (round >= MAX_LINT_ROUNDS) break;
       if (isTaskCancelled(task.id)) return;
 
@@ -508,6 +529,10 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       if (ciResult.success) {
         state = advanceState(state, "pass");
         break;
+      }
+
+      if (containerName) {
+        discoverSecrets(repo.id, ciResult.output);
       }
 
       if (round >= MAX_CI_ROUNDS - 1) {

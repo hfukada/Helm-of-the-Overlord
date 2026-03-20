@@ -80,7 +80,7 @@ comments.patch("/comments/:commentId", async (c) => {
   }
 
   const sets: string[] = [];
-  const params: unknown[] = [];
+  const params: (string | number | null)[] = [];
 
   if (body.body !== undefined) {
     sets.push("body = ?");

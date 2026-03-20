@@ -1,4 +1,3 @@
-import { $ } from "bun";
 import type { Repo } from "../../../shared/types";
 import { logger } from "../../../shared/logger";
 
@@ -11,7 +10,8 @@ export interface LintResult {
 export async function executeLint(
   repo: Repo,
   workDir: string,
-  containerName?: string
+  containerName?: string,
+  onChunk?: (accumulated: string) => void
 ): Promise<LintResult> {
   const cmd = repo.lint_cmd;
   if (!cmd) {
@@ -22,17 +22,38 @@ export async function executeLint(
   logger.info("Running lint", { repo: repo.name, cmd, workDir, containerName });
 
   try {
-    const result = containerName
-      ? await $`docker exec -w /workspace ${containerName} sh -c ${cmd}`.quiet().nothrow()
-      : await $`sh -c ${cmd}`.cwd(workDir).quiet().nothrow();
-    const output = result.stdout.toString() + result.stderr.toString();
+    const argv = containerName
+      ? ["docker", "exec", "-w", "/workspace", containerName, "sh", "-c", cmd]
+      : ["sh", "-c", cmd];
 
-    if (result.exitCode === 0) {
+    const proc = Bun.spawn(argv, {
+      cwd: containerName ? undefined : workDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    let output = "";
+    const decoder = new TextDecoder();
+
+    const readStream = async (stream: ReadableStream<Uint8Array>) => {
+      const reader = stream.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        output += decoder.decode(value, { stream: true });
+        onChunk?.(output);
+      }
+    };
+
+    await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
+    await proc.exited;
+
+    if (proc.exitCode === 0) {
       logger.info("Lint passed", { repo: repo.name });
       return { success: true, output, command: cmd };
     }
 
-    logger.warn("Lint failed", { repo: repo.name, exitCode: result.exitCode });
+    logger.warn("Lint failed", { repo: repo.name, exitCode: proc.exitCode });
     return { success: false, output, command: cmd };
   } catch (err) {
     const error = String(err);

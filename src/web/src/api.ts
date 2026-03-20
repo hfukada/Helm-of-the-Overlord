@@ -150,6 +150,16 @@ export function fetchAgentStream(
   return request(`/tasks/${taskId}/agents/${runId}/stream?after=${after}`);
 }
 
+export interface LintOutputResponse {
+  lint_output: string | null;
+  lint_passed: number | null;
+  status: string;
+}
+
+export function fetchLintOutput(taskId: string): Promise<LintOutputResponse> {
+  return request(`/tasks/${taskId}/lint-output`);
+}
+
 export interface CiOutputResponse {
   ci_output: string | null;
   ci_passed: number | null;

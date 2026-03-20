@@ -105,3 +105,17 @@ export interface TokenUsage {
   output_tokens: number;
   cost_usd: number;
 }
+
+export interface ContainerSecret {
+  id: number;
+  repo_id: number;
+  secret_type: "env_var" | "auth_file";
+  key: string;
+  value_source: "host_env" | "host_file";
+  host_path: string | null;
+  container_path: string | null;
+  description: string | null;
+  discovered_by: "manual" | "auto";
+  verified: boolean;
+  created_at: string;
+}

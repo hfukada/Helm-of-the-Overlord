@@ -13,6 +13,7 @@ import { AgentProgress } from "./AgentProgress";
 import { DiffView } from "./DiffView";
 import { CommitDialog } from "./CommitDialog";
 import { CiOutput } from "./CiOutput";
+import { LintOutput } from "./LintOutput";
 
 const TERMINAL_STATUSES = new Set([
   "committed",
@@ -29,7 +30,26 @@ export function TaskDetail() {
   const [rejectComment, setRejectComment] = useState("");
   const [rejecting, setRejecting] = useState(false);
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
+  const [manualToggles, setManualToggles] = useState<Set<string>>(new Set());
   const [cancelling, setCancelling] = useState(false);
+
+  // Auto-expand running agent runs, collapse completed ones (unless manually toggled)
+  useEffect(() => {
+    if (!task) return;
+    setExpandedRuns((prev) => {
+      const next = new Set<string>();
+      for (const run of task.agent_runs) {
+        if (run.status === "running") {
+          next.add(run.id);
+        } else if (manualToggles.has(run.id)) {
+          // Preserve manual toggle state
+          if (prev.has(run.id)) next.add(run.id);
+        }
+        // Completed/failed runs not manually toggled: stay collapsed
+      }
+      return next;
+    });
+  }, [task?.agent_runs]);
 
   useEffect(() => {
     if (!id) return;
@@ -37,6 +57,7 @@ export function TaskDetail() {
     setTask(null);
     setError(null);
     setExpandedRuns(new Set());
+    setManualToggles(new Set());
 
     let stopped = false;
 
@@ -74,6 +95,7 @@ export function TaskDetail() {
   }
 
   const toggleRun = (runId: string) => {
+    setManualToggles((prev) => new Set(prev).add(runId));
     setExpandedRuns((prev) => {
       const next = new Set(prev);
       if (next.has(runId)) next.delete(runId);
@@ -130,31 +152,18 @@ export function TaskDetail() {
       <BlueprintTimeline state={task.blueprint_state} />
 
       {/* Lint / CI Output */}
-      {(task.lint_output || task.ci_output || task.status === "ci_running") && (
+      {(task.lint_output || task.ci_output ||
+        ["linting", "fix_linting", "ci_running", "ci_fixing"].includes(task.status)) && (
         <div className="space-y-2">
-          {task.lint_output && (
-            <details open={!task.lint_passed} className="rounded border border-gray-700 bg-gray-900/50">
-              <summary className="flex cursor-pointer items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-gray-800/50">
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    task.lint_passed ? "bg-green-400" : "bg-yellow-400"
-                  }`}
-                />
-                Lint
-                <span className="ml-auto text-xs text-gray-500">
-                  {task.lint_passed ? "passed" : "failed"}
-                </span>
-              </summary>
-              <div className="border-t border-gray-700 px-4 py-3">
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs text-gray-300">
-                  {task.lint_output}
-                </pre>
-              </div>
-            </details>
-          )}
+          <LintOutput
+            taskId={task.id}
+            isRunning={task.status === "linting" || task.status === "fix_linting"}
+            initialOutput={task.lint_output}
+            initialPassed={task.lint_passed}
+          />
           <CiOutput
             taskId={task.id}
-            isRunning={task.status === "ci_running"}
+            isRunning={task.status === "ci_running" || task.status === "ci_fixing"}
             initialOutput={task.ci_output}
             initialPassed={task.ci_passed}
           />

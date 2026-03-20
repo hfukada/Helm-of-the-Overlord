@@ -2,10 +2,57 @@ import { $ } from "bun";
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 import { logger } from "../shared/logger";
-import type { Repo } from "../shared/types";
+import type { Repo, ContainerSecret } from "../shared/types";
+import { getRepoSecrets } from "../daemon/routes/secrets";
+import { discoverSecrets } from "./secret-discovery";
 
 function containerName(taskId: string): string {
   return `hoto-${taskId.slice(-8)}`;
+}
+
+/**
+ * Build docker run flags for container secrets.
+ *
+ * env_var secrets:
+ *   - host_env: -e KEY (inherits from host environment)
+ *   - host_file: -e KEY="$(cat host_path)" (reads value from file)
+ *
+ * auth_file secrets:
+ *   - host_file: -v host_path:container_path:ro (bind mount)
+ */
+function buildSecretFlags(secrets: ContainerSecret[]): string[] {
+  const flags: string[] = [];
+
+  for (const s of secrets) {
+    if (s.secret_type === "env_var") {
+      if (s.value_source === "host_env") {
+        // Pass through from host environment
+        const val = process.env[s.key];
+        if (val) {
+          flags.push("-e", `${s.key}=${val}`);
+        } else {
+          logger.warn("Host env var not set, skipping", { key: s.key });
+        }
+      } else if (s.value_source === "host_file" && s.host_path) {
+        // Read value from host file
+        try {
+          const val = require("fs").readFileSync(s.host_path, "utf-8").trim();
+          flags.push("-e", `${s.key}=${val}`);
+        } catch {
+          logger.warn("Could not read secret file, skipping", { key: s.key, path: s.host_path });
+        }
+      }
+    } else if (s.secret_type === "auth_file" && s.host_path) {
+      const target = s.container_path ?? s.host_path;
+      if (existsSync(s.host_path)) {
+        flags.push("-v", `${s.host_path}:${target}:ro`);
+      } else {
+        logger.warn("Auth file not found on host, skipping", { key: s.key, path: s.host_path });
+      }
+    }
+  }
+
+  return flags;
 }
 
 export async function setupTaskContainer(
@@ -15,6 +62,16 @@ export async function setupTaskContainer(
 ): Promise<string | null> {
   const name = containerName(taskId);
 
+  // Look up verified secrets for this repo
+  const secrets = getRepoSecrets(repo.id);
+  if (secrets.length > 0) {
+    logger.info("Mounting container secrets", {
+      taskId,
+      count: secrets.length,
+      keys: secrets.map((s) => s.key),
+    });
+  }
+
   // Option 1: docker-compose
   if (repo.docker_compose_path) {
     const composePath = join(repo.path, repo.docker_compose_path);
@@ -23,8 +80,22 @@ export async function setupTaskContainer(
       return null;
     }
 
+    // For compose, pass secrets as environment variables
+    const env: Record<string, string> = { ...process.env } as Record<string, string>;
+    for (const s of secrets) {
+      if (s.secret_type === "env_var") {
+        if (s.value_source === "host_env" && process.env[s.key]) {
+          env[s.key] = process.env[s.key]!;
+        } else if (s.value_source === "host_file" && s.host_path) {
+          try {
+            env[s.key] = require("fs").readFileSync(s.host_path, "utf-8").trim();
+          } catch {}
+        }
+      }
+    }
+
     logger.info("Starting docker-compose for task", { taskId, composePath });
-    const result = await $`docker compose -f ${composePath} up -d`.quiet().nothrow();
+    const result = await $`docker compose -f ${composePath} up -d`.env(env).quiet().nothrow();
     if (result.exitCode !== 0) {
       logger.warn("Docker compose up failed", {
         taskId,
@@ -62,19 +133,29 @@ export async function setupTaskContainer(
 
   const buildResult = await $`docker build -t ${imageName} ${workDir}`.quiet().nothrow();
   if (buildResult.exitCode !== 0) {
-    logger.warn("Docker build failed", {
-      taskId,
-      output: buildResult.stderr.toString(),
-    });
+    const buildOutput = buildResult.stderr.toString();
+    logger.warn("Docker build failed", { taskId, output: buildOutput });
+    discoverSecrets(repo.id, buildOutput);
     return null;
   }
 
+  const secretFlags = buildSecretFlags(secrets);
+
   logger.info("Starting Docker container for task", { taskId, name });
-  const runResult = await $`docker run -d --name ${name} -v ${workDir}:/workspace -w /workspace ${imageName} sleep infinity`.quiet().nothrow();
+  const args = [
+    "docker", "run", "-d",
+    "--name", name,
+    "-v", `${workDir}:/workspace`,
+    "-w", "/workspace",
+    ...secretFlags,
+    imageName,
+    "sleep", "infinity",
+  ];
+  const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
   if (runResult.exitCode !== 0) {
     logger.warn("Docker run failed", {
       taskId,
-      output: runResult.stderr.toString(),
+      output: new TextDecoder().decode(runResult.stderr),
     });
     return null;
   }

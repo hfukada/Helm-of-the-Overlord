@@ -8,6 +8,7 @@ import { tokens } from "./routes/tokens";
 import { knowledge } from "./routes/knowledge";
 import { comments } from "./routes/comments";
 import { commits } from "./routes/commits";
+import { secrets } from "./routes/secrets";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
@@ -29,6 +30,7 @@ app.route("/tasks", commits); // /tasks/:id/accept, /tasks/:id/commit
 // Top-level comment routes (PATCH/DELETE use /comments/:id)
 app.route("/", comments);
 app.route("/repos", repos);
+app.route("/repos", secrets); // /repos/:name/secrets
 app.route("/tokens", tokens);
 app.route("/knowledge", knowledge);
 

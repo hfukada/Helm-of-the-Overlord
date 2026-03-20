@@ -39,7 +39,7 @@ export function AgentProgress({
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, []);
+  }, [events.length]);
 
   if (events.length === 0) {
     return isRunning ? (
