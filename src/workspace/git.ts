@@ -151,6 +151,49 @@ export async function commitAndPush(
   await $`git -C ${wtDir} push origin ${branchName}`.quiet();
 }
 
+/**
+ * Clone the repository's remote origin (or local path as fallback) into the
+ * task work directory and create the task branch in the clone.
+ *
+ * Returns the path to the cloned directory (same layout as worktreeDir so the
+ * rest of the pipeline is transparent to which mode was used).
+ */
+export async function cloneRepoCopy(
+  repoPath: string,
+  taskId: string,
+  repoName: string,
+  branchName: string
+): Promise<string> {
+  const destDir = worktreeDir(taskId, repoName);
+
+  // Try to get the remote URL so we clone from the actual remote
+  let cloneSource = repoPath;
+  try {
+    const remoteUrl = (
+      await $`git -C ${repoPath} remote get-url origin`.text()
+    ).trim();
+    if (remoteUrl) cloneSource = remoteUrl;
+  } catch {
+    // No remote configured -- fall back to cloning the local path
+  }
+
+  const defaultBranch = await getDefaultBranch(repoPath);
+
+  logger.info("Cloning repository for full-copy task", {
+    source: cloneSource,
+    dest: destDir,
+    branch: defaultBranch,
+  });
+
+  await $`git clone --branch ${defaultBranch} ${cloneSource} ${destDir}`.quiet();
+
+  // Create the task branch in the clone
+  await $`git -C ${destDir} checkout -b ${branchName}`.quiet();
+
+  logger.info("Full-copy clone ready", { destDir, taskBranch: branchName });
+  return destDir;
+}
+
 export async function getDefaultBranch(repoPath: string): Promise<string> {
   try {
     const result =

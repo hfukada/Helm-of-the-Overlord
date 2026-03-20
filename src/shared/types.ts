@@ -23,6 +23,7 @@ export interface Task {
   blueprint_state: BlueprintState | null;
   branch_name: string | null;
   source: TaskSource;
+  use_full_copy: boolean;
   created_at: string;
   updated_at: string;
 }
