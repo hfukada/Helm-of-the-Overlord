@@ -331,7 +331,9 @@ export async function runTask(taskId: string): Promise<void> {
     for (let round = 0; round < MAX_CI_ROUNDS; round++) {
       logger.info("Running CI", { taskId: task.id, round });
 
-      const ciResult = await runCi(repo, workDir, containerName ?? undefined);
+      const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+        saveNodeOutput(task.id, "ci", accumulated, false);
+      });
       saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
 
       if (ciResult.success) {
@@ -495,7 +497,9 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     updateTaskStatus(task.id, "ci_running", state);
 
     for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-      const ciResult = await runCi(repo, workDir, containerName ?? undefined);
+      const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+        saveNodeOutput(task.id, "ci", accumulated, false);
+      });
       saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
 
       if (ciResult.success) {
@@ -546,27 +550,54 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 async function runCi(
   repo: Repo,
   workDir: string,
-  containerName?: string
+  containerName?: string,
+  onChunk?: (accumulated: string) => void
 ): Promise<{ success: boolean; output: string }> {
   const commands: string[] = [];
   if (repo.build_cmd) commands.push(repo.build_cmd);
   if (repo.test_cmd) commands.push(repo.test_cmd);
 
   let allOutput = "";
+
+  const emit = (text: string) => {
+    allOutput += text;
+    onChunk?.(allOutput);
+  };
+
+  const decoder = new TextDecoder();
+
   for (const cmd of commands) {
     logger.info("Running CI command", { cmd, containerName });
-    try {
-      const result = containerName
-        ? await $`docker exec -w /workspace ${containerName} sh -c ${cmd}`.quiet().nothrow()
-        : await $`sh -c ${cmd}`.cwd(workDir).quiet().nothrow();
-      const output = result.stdout.toString() + result.stderr.toString();
-      allOutput += `\n$ ${cmd}\n${output}`;
+    emit(`\n$ ${cmd}\n`);
 
-      if (result.exitCode !== 0) {
+    try {
+      const argv = containerName
+        ? ["docker", "exec", "-w", "/workspace", containerName, "sh", "-c", cmd]
+        : ["sh", "-c", cmd];
+
+      const proc = Bun.spawn(argv, {
+        cwd: containerName ? undefined : workDir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const readStream = async (stream: ReadableStream<Uint8Array>) => {
+        const reader = stream.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          emit(decoder.decode(value, { stream: true }));
+        }
+      };
+
+      await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
+      await proc.exited;
+
+      if (proc.exitCode !== 0) {
         return { success: false, output: allOutput };
       }
     } catch (err) {
-      allOutput += `\n$ ${cmd}\nError: ${err}`;
+      emit(`Error: ${err}`);
       return { success: false, output: allOutput };
     }
   }

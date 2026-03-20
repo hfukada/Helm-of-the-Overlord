@@ -12,6 +12,7 @@ import { TaskTokenSummary } from "./TokenSummary";
 import { AgentProgress } from "./AgentProgress";
 import { DiffView } from "./DiffView";
 import { CommitDialog } from "./CommitDialog";
+import { CiOutput } from "./CiOutput";
 
 const TERMINAL_STATUSES = new Set([
   "committed",
@@ -129,7 +130,7 @@ export function TaskDetail() {
       <BlueprintTimeline state={task.blueprint_state} />
 
       {/* Lint / CI Output */}
-      {(task.lint_output || task.ci_output) && (
+      {(task.lint_output || task.ci_output || task.status === "ci_running") && (
         <div className="space-y-2">
           {task.lint_output && (
             <details className="rounded border border-gray-800 bg-gray-900/50">
@@ -151,26 +152,12 @@ export function TaskDetail() {
               </div>
             </details>
           )}
-          {task.ci_output && (
-            <details className="rounded border border-gray-800 bg-gray-900/50">
-              <summary className="flex cursor-pointer items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-gray-800/50">
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    task.ci_passed ? "bg-green-400" : "bg-red-400"
-                  }`}
-                />
-                CI
-                <span className="ml-auto text-xs text-gray-500">
-                  {task.ci_passed ? "passed" : "failed"}
-                </span>
-              </summary>
-              <div className="border-t border-gray-800 px-4 py-3">
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs text-gray-300">
-                  {task.ci_output}
-                </pre>
-              </div>
-            </details>
-          )}
+          <CiOutput
+            taskId={task.id}
+            isRunning={task.status === "ci_running"}
+            initialOutput={task.ci_output}
+            initialPassed={task.ci_passed}
+          />
         </div>
       )}
 
