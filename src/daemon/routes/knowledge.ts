@@ -5,6 +5,7 @@ import { getDb } from "../../knowledge/db";
 import { search } from "../../knowledge/search";
 import type { SearchResult } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
+import { parseRepo } from "../../knowledge/repo-parser";
 import { logger } from "../../shared/logger";
 import type { Repo } from "../../shared/types";
 import { claudeStream } from "../../shared/claude-cli";
@@ -88,6 +89,24 @@ knowledge.post("/repos/:name/reindex", async (c) => {
     metadata: null,
   };
 
+  // Re-parse repo metadata (commands, language, framework)
+  const parsed = await parseRepo(repo.path);
+  const updates: Record<string, string | null> = {};
+  for (const field of ["build_cmd", "test_cmd", "run_cmd", "lint_cmd", "language", "framework", "docker_compose_path"] as const) {
+    if (parsed[field] && parsed[field] !== repoRow[field]) {
+      updates[field] = parsed[field];
+    }
+  }
+  if (Object.keys(updates).length > 0) {
+    const sets = Object.keys(updates).map((k) => `${k} = ?`).join(", ");
+    db.run(
+      `UPDATE repos SET ${sets} WHERE id = ?`,
+      [...Object.values(updates), repo.id]
+    );
+    Object.assign(repo, updates);
+    logger.info("Updated repo metadata during reindex", { name, updates: Object.keys(updates) });
+  }
+
   logger.info("Reindexing repo", { name });
   const result = await indexRepo(repo);
 
@@ -95,6 +114,7 @@ knowledge.post("/repos/:name/reindex", async (c) => {
     repo: name,
     chunks_indexed: result.chunks,
     embeddings_generated: result.embeddings,
+    updated_fields: Object.keys(updates),
   });
 });
 
