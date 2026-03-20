@@ -236,9 +236,22 @@ export async function claudeBatch(
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
     let buf = "";
+    let earlyExit = false;
+
+    // Detect early process death so we don't hang on reader.read() forever
+    const exitPromise = proc.exited.then((code) => {
+      earlyExit = true;
+      return code;
+    });
 
     while (true) {
-      const { done, value } = await reader.read();
+      const readResult = await (earlyExit
+        ? reader.read()
+        : Promise.race([
+            reader.read(),
+            exitPromise.then(() => reader.read()),
+          ]));
+      const { done, value } = readResult;
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split("\n");
@@ -319,9 +332,21 @@ export async function claudeStream(
     const reader = proc.stdout.getReader();
     const decoder = new TextDecoder();
     let buf = "";
+    let earlyExit = false;
+
+    const exitPromise = proc.exited.then((code) => {
+      earlyExit = true;
+      return code;
+    });
 
     while (true) {
-      const { done, value } = await reader.read();
+      const readResult = await (earlyExit
+        ? reader.read()
+        : Promise.race([
+            reader.read(),
+            exitPromise.then(() => reader.read()),
+          ]));
+      const { done, value } = readResult;
       if (done) break;
       buf += decoder.decode(value, { stream: true });
       const lines = buf.split("\n");

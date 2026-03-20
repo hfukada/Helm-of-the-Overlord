@@ -18,8 +18,11 @@ RUN cd src/web && bun run build
 # Stage 3: Runtime
 FROM oven/bun:1-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI (requires ANTHROPIC_API_KEY at runtime)
+RUN bun install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 
