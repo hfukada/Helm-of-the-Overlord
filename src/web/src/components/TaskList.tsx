@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
-import { fetchTasks, type TaskSummary } from "../api";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { deleteTask, fetchTasks, type TaskSummary } from "../api";
 import { StatusBadge } from "./StatusBadge";
 
 function timeAgo(dateStr: string): string {
@@ -17,8 +17,10 @@ function timeAgo(dateStr: string): string {
 
 export function TaskList() {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const params = useParams();
   const activeId = params.id;
+  const navigate = useNavigate();
 
   useEffect(() => {
     const load = () => fetchTasks().then(setTasks).catch(() => {});
@@ -26,6 +28,15 @@ export function TaskList() {
     const interval = setInterval(load, 2000);
     return () => clearInterval(interval);
   }, []);
+
+  async function handleDeleteConfirm(id: string) {
+    setDeletingId(null);
+    await deleteTask(id).catch(() => {});
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+    if (activeId === id) {
+      navigate("/");
+    }
+  }
 
   return (
     <div className="py-2">
@@ -35,23 +46,67 @@ export function TaskList() {
         </div>
       )}
       {tasks.map((task) => (
-        <Link
-          key={task.id}
-          to={`/tasks/${task.id}`}
-          className={`block border-b border-gray-700/50 px-4 py-3 hover:bg-gray-800/50 ${
-            task.id === activeId ? "bg-gray-800" : ""
-          }`}
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{task.title}</div>
-              <div className="mt-1 text-xs text-gray-400">
-                {timeAgo(task.created_at)}
+        <div key={task.id} className="relative">
+          <Link
+            to={`/tasks/${task.id}`}
+            className={`block border-b border-gray-700/50 px-4 py-3 hover:bg-gray-800/50 ${
+              task.id === activeId ? "bg-gray-800" : ""
+            }`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-medium">{task.title}</div>
+                <div className="mt-1 text-xs text-gray-400">
+                  {timeAgo(task.created_at)}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <StatusBadge status={task.status} />
+                {deletingId === task.id ? (
+                  <span
+                    className="flex items-center gap-1"
+                    onClick={(e) => e.preventDefault()}
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDeleteConfirm(task.id);
+                      }}
+                      className="rounded bg-red-600 px-1.5 py-0.5 text-xs text-white hover:bg-red-500"
+                    >
+                      Yes
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setDeletingId(null);
+                      }}
+                      className="rounded bg-gray-600 px-1.5 py-0.5 text-xs text-white hover:bg-gray-500"
+                    >
+                      No
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDeletingId(task.id);
+                    }}
+                    className="rounded px-1.5 py-0.5 text-xs text-gray-500 hover:bg-red-900/40 hover:text-red-400"
+                  >
+                    delete
+                  </button>
+                )}
               </div>
             </div>
-            <StatusBadge status={task.status} />
-          </div>
-        </Link>
+          </Link>
+        </div>
       ))}
     </div>
   );

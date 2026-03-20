@@ -142,6 +142,10 @@ export function cancelTask(
   return request(`/tasks/${id}/cancel`, { method: "POST" });
 }
 
+export function deleteTask(id: string): Promise<{ id: string; deleted: boolean }> {
+  return request(`/tasks/${id}`, { method: "DELETE" });
+}
+
 export function fetchAgentStream(
   taskId: string,
   runId: string,
