@@ -116,7 +116,7 @@ describe("daemon /knowledge/ask (JSON mode)", () => {
     expect(res.status).toBe(404);
   });
 
-  test("returns JSON answer with sources", async () => {
+  test("returns id and status for query with results", async () => {
     if (!(await isDaemonUp())) return;
     const res = await fetch(`${DAEMON}/knowledge/ask`, {
       method: "POST",
@@ -124,181 +124,58 @@ describe("daemon /knowledge/ask (JSON mode)", () => {
       body: JSON.stringify({ query: "what is the project name", limit: 3 }),
     });
     expect(res.status).toBe(200);
-    const data = await res.json() as { answer: string; sources: unknown[] };
-    expect(typeof data.answer).toBe("string");
-    expect(data.answer.length).toBeGreaterThan(0);
-    expect(Array.isArray(data.sources)).toBe(true);
-  }, 60_000);
-});
-
-describe("daemon /knowledge/ask (NDJSON streaming mode)", () => {
-  test("returns ndjson content-type", async () => {
-    if (!(await isDaemonUp())) return;
-    const res = await fetch(`${DAEMON}/knowledge/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "what is this project", stream: true, limit: 3 }),
-    });
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toContain("ndjson");
-    // consume body
-    await res.text();
+    const data = await res.json() as { id: string | null; status?: string; answer?: string };
+    if (data.id === null) {
+      // No knowledge indexed -- immediate response
+      expect(typeof data.answer).toBe("string");
+    } else {
+      expect(data.status).toBe("running");
+    }
   }, 60_000);
 
-  test("streams event lines followed by done line", async () => {
+  test("returns null id with answer for no results", async () => {
     if (!(await isDaemonUp())) return;
-    const res = await fetch(`${DAEMON}/knowledge/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "what is the project name", stream: true, limit: 3 }),
-    });
-
-    const text = await res.text();
-    const lines = text.trim().split("\n").filter(Boolean);
-    expect(lines.length).toBeGreaterThan(0);
-
-    // Parse each line as JSON
-    const parsed = lines.map((l) => JSON.parse(l) as { type: string });
-
-    // Last line should be "done"
-    const last = parsed[parsed.length - 1] as { type: string; answer?: string; sources?: unknown[] };
-    expect(last.type).toBe("done");
-    expect(typeof last.answer).toBe("string");
-    expect(last.answer!.length).toBeGreaterThan(0);
-    expect(Array.isArray(last.sources)).toBe(true);
-
-    // Earlier lines should be "event" type
-    const eventLines = parsed.filter((p) => p.type === "event") as Array<{
-      type: string;
-      event_type: string;
-      content: string;
-    }>;
-    // Should have at least one text event
-    expect(eventLines.some((e) => e.event_type === "text")).toBe(true);
-  }, 60_000);
-
-  test("streaming with no results returns immediate done", async () => {
-    if (!(await isDaemonUp())) return;
-    const res = await fetch(`${DAEMON}/knowledge/ask`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: "xyzzy_nonexistent_gibberish_query_12345",
-        stream: true,
-        repo_name: "nonexistent-repo-xyz",
-      }),
-    });
-    // Should return 404 for unknown repo even in stream mode
-    expect(res.status).toBe(404);
-    await res.text();
-  });
-
-  test("streaming with empty search results returns done with message", async () => {
-    if (!(await isDaemonUp())) return;
-    // Use a query unlikely to match any indexed content
-    // This depends on there being no matching chunks -- so we use the streaming
-    // path with a very specific unlikely query
     const res = await fetch(`${DAEMON}/knowledge/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         query: "xyzzy_nonexistent_gibberish_zzz_99999",
-        stream: true,
         limit: 1,
       }),
     });
-
     if (res.status !== 200) {
-      // If no repos exist, might get a different response
       await res.text();
       return;
     }
-
-    const text = await res.text();
-    const lines = text.trim().split("\n").filter(Boolean);
-    const parsed = lines.map((l) => JSON.parse(l));
-
-    // When no results found, should get a single "done" line with a message
-    const done = parsed.find((p: { type: string }) => p.type === "done");
-    expect(done).toBeDefined();
+    const data = await res.json() as { id: string | null; answer?: string };
+    if (data.id === null) {
+      expect(data.answer).toBeDefined();
+    }
   }, 10_000);
 });
 
 // ---------------------------------------------------------------------------
-// 3. Streaming resilience -- early disconnect
+// 3. Poll-based resilience -- daemon keeps running even if client stops polling
 // ---------------------------------------------------------------------------
 
-describe("daemon streaming resilience", () => {
-  test("daemon survives client disconnect during streaming", async () => {
+describe("daemon poll resilience", () => {
+  test("daemon keeps running when client never polls", async () => {
     if (!(await isDaemonUp())) return;
 
-    // Create an AbortController to simulate early disconnect
-    const controller = new AbortController();
-
-    try {
-      const fetchPromise = fetch(`${DAEMON}/knowledge/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: "what is this project", stream: true, limit: 3 }),
-        signal: controller.signal,
-      });
-
-      // Abort after a short delay (before response completes)
-      setTimeout(() => controller.abort(), 100);
-
-      await fetchPromise;
-    } catch {
-      // Expected -- AbortError
-    }
-
-    // Wait for the server to finish processing
-    await new Promise((r) => setTimeout(r, 5000));
-
-    // Daemon should still be alive
-    const health = await fetch(`${DAEMON}/health`);
-    expect(health.ok).toBe(true);
-  }, 30_000);
-
-  test("daemon handles multiple rapid disconnects", async () => {
-    if (!(await isDaemonUp())) return;
-
-    for (let i = 0; i < 3; i++) {
-      const ac = new AbortController();
-      try {
-        const p = fetch(`${DAEMON}/knowledge/ask`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: "test query", stream: true, limit: 2 }),
-          signal: ac.signal,
-        });
-        setTimeout(() => ac.abort(), 50);
-        await p;
-      } catch {
-        // expected
-      }
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-
-    // Wait for any lingering claude processes to finish
-    await new Promise((r) => setTimeout(r, 5000));
-
-    const health = await fetch(`${DAEMON}/health`);
-    expect(health.ok).toBe(true);
-  }, 60_000);
-
-  test("normal ask works after disconnects", async () => {
-    if (!(await isDaemonUp())) return;
-
+    // Submit a query but never poll for results
     const res = await fetch(`${DAEMON}/knowledge/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: "what is the project name", limit: 2 }),
+      body: JSON.stringify({ query: "what is this project", limit: 3 }),
     });
     expect(res.status).toBe(200);
-    const data = await res.json() as { answer: string };
-    expect(typeof data.answer).toBe("string");
-    expect(data.answer.length).toBeGreaterThan(0);
-  }, 60_000);
+
+    // Just wait and check daemon is still alive
+    await new Promise((r) => setTimeout(r, 5000));
+
+    const health = await fetch(`${DAEMON}/health`);
+    expect(health.ok).toBe(true);
+  }, 30_000);
 });
 
 // ---------------------------------------------------------------------------

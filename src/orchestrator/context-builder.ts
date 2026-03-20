@@ -79,7 +79,7 @@ export async function buildPlanPrompt(task: Task, repo: Repo): Promise<string> {
   parts.push("### Execution Plan");
   parts.push("A numbered checklist of concrete implementation steps. Each step should be a single, actionable unit of work (e.g. 'Add field X to interface Y in file Z', not 'update the types'). Steps should be ordered so each builds on the previous.");
   parts.push("");
-  parts.push("The final steps MUST be:");
+  parts.push("After code changes routinely:");
   parts.push("- [ ] Run lint and verify no errors");
   parts.push("- [ ] Run tests and verify they pass");
   parts.push("");

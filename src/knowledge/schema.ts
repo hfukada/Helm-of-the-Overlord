@@ -100,6 +100,25 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_repo ON knowledge_chunks(repo_id)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_type ON knowledge_chunks(chunk_type)`,
   `CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_source ON knowledge_chunks(repo_id, source_file)`,
+
+  `CREATE TABLE IF NOT EXISTS ask_queries (
+    id TEXT PRIMARY KEY,
+    query TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running',
+    answer TEXT,
+    sources TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS ask_stream (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ask_query_id TEXT NOT NULL REFERENCES ask_queries(id),
+    event_type TEXT NOT NULL,
+    content TEXT NOT NULL,
+    timestamp TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
 ];
 
 const ALTER_MIGRATIONS = [

@@ -45,10 +45,7 @@ export class StreamFormatter {
     // tool_result is always complete -- flush and print immediately
     if (eventType === "tool_result") {
       this.flush();
-      const truncated = content.length > 120
-        ? `${content.slice(0, 120)}...`
-        : content;
-      this.onOutput({ type: "result", content: truncated });
+      this.onOutput({ type: "result", content: truncateToolResult(content) });
       return;
     }
 
@@ -126,6 +123,13 @@ export function formatToolUse(raw: string): string {
   }
 
   return raw.slice(0, 200);
+}
+
+/** Truncate tool_result content to first line + char count */
+export function truncateToolResult(content: string): string {
+  if (content.length <= 150) return content;
+  const firstLine = content.split("\n")[0].slice(0, 150);
+  return `${firstLine}... (${content.length} chars)`;
 }
 
 /** Format tool arguments as a concise key=value string */

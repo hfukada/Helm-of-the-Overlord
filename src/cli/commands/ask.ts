@@ -11,10 +11,13 @@ type SourceEntry = {
   match_type: string;
 };
 
-type NdjsonLine =
-  | { type: "event"; event_type: string; content: string }
-  | { type: "done"; answer: string; sources: SourceEntry[] }
-  | { type: "error"; message: string };
+type PollResponse = {
+  status: string;
+  events: { id: number; event_type: string; content: string }[];
+  answer?: string;
+  sources?: SourceEntry[];
+  error?: string;
+};
 
 export async function askCommand(args: string[]): Promise<void> {
   let query: string | null = null;
@@ -48,7 +51,6 @@ export async function askCommand(args: string[]): Promise<void> {
         query,
         repo_name: repoName ?? undefined,
         limit: 8,
-        stream: true,
       }),
     });
 
@@ -65,76 +67,72 @@ export async function askCommand(args: string[]): Promise<void> {
       process.exit(1);
     }
 
-    const contentType = res.headers.get("content-type") ?? "";
+    const data = await res.json() as {
+      id: string | null;
+      answer?: string;
+      sources?: SourceEntry[];
+      status?: string;
+    };
+
+    // No knowledge found -- immediate answer
+    if (data.id === null) {
+      console.log(data.answer ?? "");
+      return;
+    }
+
+    // Poll for streaming events
+    const askId = data.id;
+    let lastSeenId = 0;
     let sources: SourceEntry[] = [];
 
-    if (contentType.includes("ndjson")) {
-      // Streaming NDJSON response
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      const fmt = new StreamFormatter(showThinking, (output) => {
-        switch (output.type) {
-          case "thinking":
-            process.stdout.write(`[thinking] ${output.content}\n`);
-            break;
-          case "tool":
-            process.stdout.write(`[tool] ${output.content}\n`);
-            break;
-          case "result":
-            process.stdout.write(`[result: ${output.content}]\n`);
-            break;
-          case "text":
-            process.stdout.write(output.content);
-            break;
-        }
-      });
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const lines = buf.split("\n");
-        buf = lines.pop() ?? "";
-
-        for (const rawLine of lines) {
-          if (!rawLine.trim()) continue;
-          let line: NdjsonLine;
-          try {
-            line = JSON.parse(rawLine) as NdjsonLine;
-          } catch {
-            continue;
-          }
-
-          if (line.type === "event") {
-            fmt.push(line.event_type, line.content);
-          } else if (line.type === "done") {
-            fmt.flush();
-            sources = line.sources ?? [];
-            process.stdout.write("\n");
-          } else if (line.type === "error") {
-            fmt.flush();
-            console.error(`\nError: ${line.message}`);
-            process.exit(1);
-          }
-        }
+    const fmt = new StreamFormatter(showThinking, (output) => {
+      switch (output.type) {
+        case "thinking":
+          process.stdout.write(`[thinking] ${output.content}\n`);
+          break;
+        case "tool":
+          process.stdout.write(`[tool] ${output.content}\n`);
+          break;
+        case "result":
+          process.stdout.write(`[result: ${output.content}]\n`);
+          break;
+        case "text":
+          process.stdout.write(output.content);
+          break;
       }
-    } else {
-      // Plain JSON fallback (daemon may not support streaming yet)
-      const text = await res.text();
-      let data: { answer?: string; sources?: SourceEntry[]; error?: string };
-      try {
-        data = JSON.parse(text);
-      } catch {
-        console.error(`Error: unexpected response from daemon:\n${text.slice(0, 500)}`);
+    });
+
+    while (true) {
+      const pollRes = await fetch(
+        daemonUrl(`/knowledge/ask/${askId}/stream?after=${lastSeenId}`)
+      );
+
+      if (!pollRes.ok) {
+        console.error(`\nError polling: ${pollRes.status}`);
         process.exit(1);
       }
-      if (data.error) {
-        console.error(`Error: ${data.error}`);
+
+      const poll = await pollRes.json() as PollResponse;
+
+      for (const event of poll.events) {
+        fmt.push(event.event_type, event.content);
+        lastSeenId = event.id;
+      }
+
+      if (poll.status === "completed") {
+        fmt.flush();
+        sources = poll.sources ?? [];
+        process.stdout.write("\n");
+        break;
+      }
+
+      if (poll.status === "failed") {
+        fmt.flush();
+        console.error(`\nError: ${poll.error ?? "unknown error"}`);
         process.exit(1);
       }
-      console.log(data.answer ?? "");
-      sources = data.sources ?? [];
+
+      await Bun.sleep(150);
     }
 
     if (showSources && sources.length > 0) {

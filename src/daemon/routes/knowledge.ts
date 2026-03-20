@@ -1,12 +1,13 @@
 import { Hono } from "hono";
 import { $ } from "bun";
+import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
 import { search } from "../../knowledge/search";
 import type { SearchResult } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
 import { logger } from "../../shared/logger";
 import type { Repo } from "../../shared/types";
-import { claudeText, claudeStream } from "../../shared/claude-cli";
+import { claudeStream } from "../../shared/claude-cli";
 
 const knowledge = new Hono();
 
@@ -125,7 +126,6 @@ knowledge.post("/ask", async (c) => {
     query: string;
     repo_name?: string;
     limit?: number;
-    stream?: boolean;
   }>();
 
   if (!body.query?.trim()) {
@@ -151,63 +151,49 @@ knowledge.post("/ask", async (c) => {
 
   if (results.length === 0) {
     const msg = "No relevant knowledge found. Try indexing repos first with: hoto repos reindex";
-    if (body.stream) {
-      const enc = new TextEncoder();
-      const bodyText = JSON.stringify({ type: "done", answer: msg, sources: [] }) + "\n";
-      return new Response(enc.encode(bodyText), {
-        headers: { "Content-Type": "application/x-ndjson" },
-      });
-    }
-    return c.json({ answer: msg, sources: [] });
+    return c.json({ id: null, answer: msg, sources: [] });
   }
 
-  if (body.stream) {
-    const enc = new TextEncoder();
-    let closed = false;
-    const stream = new ReadableStream({
-      async start(controller) {
-        const push = (obj: unknown) => {
-          if (closed) return;
-          try {
-            controller.enqueue(enc.encode(JSON.stringify(obj) + "\n"));
-          } catch {
-            closed = true;
-          }
-        };
-        try {
-          const answer = await generateAnswerStream(
-            body.query,
-            results,
-            async (eventType, content) => { push({ type: "event", event_type: eventType, content }); },
-          );
-          push({ type: "done", answer, sources: results });
-        } catch (err) {
-          logger.error("Streaming ask failed", { error: String(err) });
-          push({ type: "error", message: String(err) });
-        } finally {
-          if (!closed) {
-            try { controller.close(); } catch { /* already closed */ }
-          }
-        }
-      },
-      cancel() {
-        closed = true;
-      },
-    });
+  const askId = ulid();
+  db.query(
+    "INSERT INTO ask_queries (id, query, status) VALUES (?, ?, 'running')"
+  ).run(askId, body.query);
 
-    return new Response(stream, {
-      headers: { "Content-Type": "application/x-ndjson" },
-    });
+  runAskInBackground(askId, body.query, results);
+
+  return c.json({ id: askId, status: "running" });
+});
+
+knowledge.get("/ask/:id/stream", (c) => {
+  const askId = c.req.param("id");
+  const after = parseInt(c.req.query("after") ?? "0", 10) || 0;
+
+  const db = getDb();
+
+  const query = db.query(
+    "SELECT status, answer, sources, error FROM ask_queries WHERE id = ?"
+  ).get(askId) as { status: string; answer: string | null; sources: string | null; error: string | null } | null;
+
+  if (!query) {
+    return c.json({ error: "Ask query not found" }, 404);
   }
 
-  let answer: string;
-  try {
-    answer = await generateAnswer(body.query, results);
-  } catch (err) {
-    logger.error("Failed to generate answer", { error: String(err) });
-    return c.json({ error: `Failed to generate answer: ${String(err)}` }, 500);
+  const events = db.query(
+    "SELECT id, event_type, content FROM ask_stream WHERE ask_query_id = ? AND id > ? ORDER BY id LIMIT 200"
+  ).all(askId, after) as { id: number; event_type: string; content: string }[];
+
+  let sources: unknown[] = [];
+  if (query.sources) {
+    try { sources = JSON.parse(query.sources); } catch { /* ignore */ }
   }
-  return c.json({ answer, sources: results });
+
+  return c.json({
+    status: query.status,
+    events,
+    answer: query.answer ?? undefined,
+    sources: sources.length > 0 ? sources : undefined,
+    error: query.error ?? undefined,
+  });
 });
 
 function buildAskPrompt(query: string, results: SearchResult[]) {
@@ -233,28 +219,35 @@ function buildAskPrompt(query: string, results: SearchResult[]) {
   };
 }
 
-async function generateAnswerStream(
-  query: string,
-  results: SearchResult[],
-  onEvent: (eventType: string, content: string) => Promise<void>,
-): Promise<string> {
+function runAskInBackground(askId: string, query: string, results: SearchResult[]): void {
+  const db = getDb();
   const { systemPrompt, prompt } = buildAskPrompt(query, results);
 
-  const result = await claudeStream(
-    { prompt, systemPrompt },
-    async (evt) => { await onEvent(evt.type, evt.content); },
+  const insertEvent = db.query(
+    "INSERT INTO ask_stream (ask_query_id, event_type, content) VALUES (?, ?, ?)"
   );
 
-  if (result.error) {
-    throw new Error(result.error);
-  }
-
-  return result.text;
-}
-
-async function generateAnswer(query: string, results: SearchResult[]): Promise<string> {
-  const { systemPrompt, prompt } = buildAskPrompt(query, results);
-  return claudeText({ prompt, systemPrompt });
+  claudeStream(
+    { prompt, systemPrompt },
+    async (evt) => {
+      insertEvent.run(askId, evt.type, evt.content);
+    },
+  ).then((result) => {
+    if (result.error) {
+      db.query(
+        "UPDATE ask_queries SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?"
+      ).run(result.error, askId);
+    } else {
+      db.query(
+        "UPDATE ask_queries SET status = 'completed', answer = ?, sources = ?, finished_at = datetime('now') WHERE id = ?"
+      ).run(result.text, JSON.stringify(results), askId);
+    }
+  }).catch((err) => {
+    logger.error("Background ask failed", { askId, error: String(err) });
+    db.query(
+      "UPDATE ask_queries SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?"
+    ).run(String(err), askId);
+  });
 }
 
 export { knowledge };

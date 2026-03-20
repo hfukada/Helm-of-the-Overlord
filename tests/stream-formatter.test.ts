@@ -181,12 +181,12 @@ describe("StreamFormatter: tool_result", () => {
     ]);
   });
 
-  test("truncates long tool_result", () => {
-    const longResult = "x".repeat(200);
+  test("truncates long tool_result to first line + char count", () => {
+    const longResult = "first line of output\nsecond line\nthird line\n" + "x".repeat(200);
     const output = collect([["tool_result", longResult]]);
     expect(output.length).toBe(1);
-    expect(output[0].content.length).toBeLessThanOrEqual(123); // 120 + "..."
-    expect(output[0].content.endsWith("...")).toBe(true);
+    expect(output[0].content).toContain("first line of output");
+    expect(output[0].content).toContain("chars)");
   });
 
   test("flushes pending buffer before tool_result", () => {
