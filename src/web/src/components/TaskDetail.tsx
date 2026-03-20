@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import {
   fetchTask,
   cancelTask,
+  rejectTask,
   type TaskDetail as TaskDetailType,
 } from "../api";
 import { StatusBadge } from "./StatusBadge";
@@ -23,6 +24,9 @@ export function TaskDetail() {
   const [task, setTask] = useState<TaskDetailType | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showCommit, setShowCommit] = useState(false);
+  const [showReject, setShowReject] = useState(false);
+  const [rejectComment, setRejectComment] = useState("");
+  const [rejecting, setRejecting] = useState(false);
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
   const [cancelling, setCancelling] = useState(false);
 
@@ -75,6 +79,20 @@ export function TaskDetail() {
       else next.add(runId);
       return next;
     });
+  };
+
+  const handleReject = async () => {
+    if (!rejectComment.trim()) return;
+    setRejecting(true);
+    try {
+      await rejectTask(task.id, rejectComment.trim());
+      setShowReject(false);
+      setRejectComment("");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to reject task");
+    } finally {
+      setRejecting(false);
+    }
   };
 
   const handleCancel = async () => {
@@ -233,12 +251,20 @@ export function TaskDetail() {
       {/* Actions */}
       <div className="flex items-center gap-3">
         {(task.status === "review" || task.status === "accepted") && task.diff && (
-          <button
-            onClick={() => setShowCommit(true)}
-            className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500"
-          >
-            Accept & Commit
-          </button>
+          <>
+            <button
+              onClick={() => setShowCommit(true)}
+              className="rounded bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500"
+            >
+              Accept & Commit
+            </button>
+            <button
+              onClick={() => setShowReject(true)}
+              className="rounded bg-red-700 px-4 py-2 text-sm font-medium text-white hover:bg-red-600"
+            >
+              Reject
+            </button>
+          </>
         )}
         {task.status === "review" && !task.diff && (
           <span className="text-sm text-yellow-400">
@@ -266,6 +292,44 @@ export function TaskDetail() {
             // Refresh will happen via polling
           }}
         />
+      )}
+
+      {/* Reject Dialog */}
+      {showReject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6">
+            <h3 className="mb-4 text-lg font-semibold">Reject & Request Revision</h3>
+            <p className="mb-3 text-sm text-gray-400">
+              Describe what needs to change. The agent will revise the implementation based on your feedback.
+            </p>
+            <textarea
+              value={rejectComment}
+              onChange={(e) => setRejectComment(e.target.value)}
+              placeholder="What needs to be changed..."
+              rows={5}
+              className="w-full rounded border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-gray-200 placeholder-gray-500 focus:border-red-500 focus:outline-none"
+              autoFocus
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleReject();
+              }}
+            />
+            <div className="mt-4 flex justify-end gap-3">
+              <button
+                onClick={() => { setShowReject(false); setRejectComment(""); }}
+                className="rounded bg-gray-700 px-4 py-2 text-sm text-gray-300 hover:bg-gray-600"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReject}
+                disabled={rejecting || !rejectComment.trim()}
+                className="rounded bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {rejecting ? "Rejecting..." : "Reject & Revise"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

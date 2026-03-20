@@ -90,7 +90,7 @@ export async function getDiff(wtDir: string): Promise<string> {
   if (untracked) {
     for (const file of untracked.split("\n").filter(Boolean)) {
       try {
-        const content = await $`git -C ${wtDir} diff --no-index /dev/null ${file}`.nothrow().text();
+        const content = await $`git diff --no-index /dev/null ${file}`.cwd(wtDir).nothrow().text();
         if (content.trim()) parts.push(content);
       } catch {}
     }
@@ -129,7 +129,7 @@ export async function getDiffSummary(
   if (untracked) {
     for (const file of untracked.split("\n").filter(Boolean)) {
       try {
-        const stat = await $`git -C ${wtDir} diff --no-index --numstat /dev/null ${file}`.nothrow().text();
+        const stat = await $`git diff --no-index --numstat /dev/null ${file}`.cwd(wtDir).nothrow().text();
         addNumstat(stat);
       } catch {}
     }

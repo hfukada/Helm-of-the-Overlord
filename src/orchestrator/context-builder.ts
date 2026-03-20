@@ -121,8 +121,10 @@ export function buildSystemPrompt(repo: Repo, opts?: { hasMcp?: boolean; hasDock
     lines.push("You have access to Read, Write, Edit, Glob, Grep, and Bash tools.");
   }
 
-  if (opts?.hasDocker) {
-    lines.push("Build, test, and lint commands run inside a Docker container. Focus on writing code -- the orchestrator handles running commands.");
+  // Detect Docker from repo config or explicit flag
+  const hasDocker = opts?.hasDocker || !!repo.docker_compose_path;
+  if (hasDocker) {
+    lines.push("IMPORTANT: Do NOT run build, test, lint, or typecheck commands (e.g. tsc, npm test, bun run build). The orchestrator runs these inside a Docker container after you finish. Focus only on writing code.");
   }
 
   lines.push("Do not run destructive commands. Do not push to git.");

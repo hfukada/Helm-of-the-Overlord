@@ -87,8 +87,6 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     args.push("--mcp-config", opts.mcpConfigPath);
   }
 
-  args.push("--directory", opts.workDir);
-
   args.push("--", opts.prompt);
 
   logger.info("Spawning claude subprocess", {

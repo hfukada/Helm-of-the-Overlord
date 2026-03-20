@@ -4,6 +4,7 @@ import { getDb } from "../../knowledge/db";
 import { commitAndPush } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
+import { reviseTask } from "../../orchestrator/task-runner";
 
 const commits = new Hono();
 
@@ -118,6 +119,41 @@ commits.post("/:id/commit", async (c) => {
     logger.error("Commit failed", { taskId: id, error: String(err) });
     return c.json({ error: `Commit failed: ${String(err)}` }, 500);
   }
+});
+
+// Reject and request revision
+commits.post("/:id/reject", async (c) => {
+  const id = c.req.param("id");
+  const body = await c.req.json<{ comment?: string }>();
+
+  const db = getDb();
+  const task = db
+    .query("SELECT * FROM tasks WHERE id = ?")
+    .get(id) as Record<string, unknown> | null;
+
+  if (!task) {
+    return c.json({ error: "Task not found" }, 404);
+  }
+
+  if (task.status !== "review" && task.status !== "accepted") {
+    return c.json(
+      { error: "Task must be in review or accepted status to reject" },
+      400
+    );
+  }
+
+  const feedback = body.comment?.trim() || "Please revise the implementation.";
+
+  logger.info("Task rejected, starting revision", { taskId: id });
+
+  // Fire and forget -- the revision runs in the background
+  reviseTask(id, feedback).catch((err) => {
+    logger.error("Revision failed", { taskId: id, error: String(err) });
+    const now = new Date().toISOString();
+    db.run("UPDATE tasks SET status = 'review', updated_at = ? WHERE id = ?", [now, id]);
+  });
+
+  return c.json({ id, status: "implementing" });
 });
 
 export { commits };

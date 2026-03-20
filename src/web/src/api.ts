@@ -205,6 +205,16 @@ export function commitTask(
   });
 }
 
+export function rejectTask(
+  id: string,
+  comment: string
+): Promise<{ id: string; status: string }> {
+  return request(`/tasks/${id}/reject`, {
+    method: "POST",
+    body: JSON.stringify({ comment }),
+  });
+}
+
 // Repos
 export function fetchRepos(): Promise<Repo[]> {
   return request("/repos");

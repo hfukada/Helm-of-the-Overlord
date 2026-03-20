@@ -386,6 +386,163 @@ export async function runTask(taskId: string): Promise<void> {
   logger.info("Task ready for review", { taskId: task.id });
 }
 
+export async function reviseTask(taskId: string, feedback: string): Promise<void> {
+  const loaded = loadTaskAndRepo(taskId);
+  if (!loaded) {
+    logger.error("Task or repo not found for revision", { taskId });
+    return;
+  }
+
+  const { task, repo } = loaded;
+  const workDir = worktreeDir(taskId, repo.name);
+
+  // Restore MCP config
+  let mcpConfigPath: string | undefined;
+  try {
+    mcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+  } catch (err) {
+    logger.warn("Failed to generate MCP config for revision", { error: String(err) });
+  }
+
+  // Restore Docker container
+  let containerName: string | null = null;
+  try {
+    containerName = await setupTaskContainer(repo, workDir, task.id);
+  } catch (err) {
+    logger.warn("Docker setup failed for revision, running locally", { error: String(err) });
+  }
+
+  // Load current blueprint state
+  const db = getDb();
+  const taskRow = db.query("SELECT blueprint_state FROM tasks WHERE id = ?").get(taskId) as { blueprint_state: string | null } | null;
+  if (!taskRow?.blueprint_state) {
+    logger.error("No blueprint state found for revision", { taskId });
+    updateTaskStatus(taskId, "failed");
+    return;
+  }
+
+  let state: BlueprintState = JSON.parse(taskRow.blueprint_state);
+
+  // Advance from review -> implement via "revise"
+  state = advanceState(state, "revise");
+
+  // === IMPLEMENT (revision) ===
+  updateTaskStatus(task.id, "implementing", state);
+  logger.info("Starting revision implement phase", { taskId: task.id });
+
+  // Build a revision prompt that includes the feedback
+  const revisionPlan = [
+    "## Revision Request",
+    "",
+    "The reviewer has requested changes to your implementation. Address the following feedback:",
+    "",
+    feedback,
+    "",
+    "## Instructions",
+    "- Review the feedback carefully and make the requested changes.",
+    "- Only modify what is needed to address the feedback.",
+    "- Do NOT commit changes -- just write the files.",
+  ].join("\n");
+
+  const implResult = await executeImplement(task, repo, workDir, revisionPlan, mcpConfigPath);
+
+  if (implResult.error) {
+    if (isTaskCancelled(task.id)) return;
+    logger.error("Revision implementation failed", { taskId: task.id, error: implResult.error });
+    state = advanceState(state, "error");
+    updateTaskStatus(task.id, "review", state);
+    return;
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === LINT (with fix loop) ===
+  state = advanceState(state, "done");
+  updateTaskStatus(task.id, "linting", state);
+
+  if (repo.lint_cmd) {
+    for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
+      const lintResult = await executeLint(repo, workDir, containerName ?? undefined);
+      saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
+
+      if (lintResult.success) break;
+      if (round >= MAX_LINT_ROUNDS) break;
+      if (isTaskCancelled(task.id)) return;
+
+      state = advanceState(state, "errors");
+      updateTaskStatus(task.id, "linting", state);
+
+      const fixResult = await executeFixLint(
+        task, repo, workDir,
+        lintResult.output, lintResult.command, mcpConfigPath
+      );
+
+      if (fixResult.error) {
+        if (isTaskCancelled(task.id)) return;
+        break;
+      }
+
+      state = advanceState(state, "done");
+      state.lint_rounds++;
+    }
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === CI ===
+  if (repo.test_cmd || repo.build_cmd) {
+    state = advanceState(state, "clean");
+    updateTaskStatus(task.id, "ci_running", state);
+
+    for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+      const ciResult = await runCi(repo, workDir, containerName ?? undefined);
+      saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+      if (ciResult.success) {
+        state = advanceState(state, "pass");
+        break;
+      }
+
+      if (round >= MAX_CI_ROUNDS - 1) {
+        state = advanceState(state, "pass");
+        break;
+      }
+
+      if (isTaskCancelled(task.id)) return;
+
+      state = advanceState(state, "fail");
+      updateTaskStatus(task.id, "ci_fixing", state);
+
+      const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, mcpConfigPath);
+
+      if (fixResult.error) {
+        if (isTaskCancelled(task.id)) return;
+        state = advanceState(state, "error");
+        break;
+      }
+
+      state = advanceState(state, "done");
+      state.ci_rounds++;
+      updateTaskStatus(task.id, "ci_running", state);
+    }
+  } else {
+    state = advanceState(state, "clean");
+  }
+
+  // Tear down Docker container
+  if (containerName) {
+    try {
+      await teardownTaskContainer(task.id);
+    } catch (err) {
+      logger.warn("Docker teardown failed", { taskId: task.id, error: String(err) });
+    }
+  }
+
+  // === REVIEW ===
+  updateTaskStatus(task.id, "review", state);
+  logger.info("Revision ready for review", { taskId: task.id });
+}
+
 async function runCi(
   repo: Repo,
   workDir: string,
