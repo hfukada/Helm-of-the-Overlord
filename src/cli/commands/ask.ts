@@ -1,4 +1,5 @@
 import { daemonUrl } from "../../shared/config";
+import { StreamFormatter } from "../stream-formatter";
 
 type SourceEntry = {
   repo_name: string;
@@ -14,32 +15,6 @@ type NdjsonLine =
   | { type: "event"; event_type: string; content: string }
   | { type: "done"; answer: string; sources: SourceEntry[] }
   | { type: "error"; message: string };
-
-function renderEvent(eventType: string, content: string, showThinking: boolean): void {
-  switch (eventType) {
-    case "thinking":
-      if (!showThinking) return;
-      if (content.trim()) {
-        process.stdout.write(
-          `[thinking] ${content.slice(0, 200)}${content.length > 200 ? "..." : ""}\n`,
-        );
-      }
-      break;
-    case "tool_use":
-      process.stdout.write(`[tool: ${content}]\n`);
-      break;
-    case "tool_result":
-      process.stdout.write(
-        `[result: ${content.slice(0, 120)}${content.length > 120 ? "..." : ""}]\n`,
-      );
-      break;
-    case "text":
-      process.stdout.write(content);
-      break;
-    default:
-      break;
-  }
-}
 
 export async function askCommand(args: string[]): Promise<void> {
   let query: string | null = null;
@@ -98,6 +73,22 @@ export async function askCommand(args: string[]): Promise<void> {
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      const fmt = new StreamFormatter(showThinking, (output) => {
+        switch (output.type) {
+          case "thinking":
+            process.stdout.write(`[thinking] ${output.content}\n`);
+            break;
+          case "tool":
+            process.stdout.write(`[tool] ${output.content}\n`);
+            break;
+          case "result":
+            process.stdout.write(`[result: ${output.content}]\n`);
+            break;
+          case "text":
+            process.stdout.write(output.content);
+            break;
+        }
+      });
 
       while (true) {
         const { done, value } = await reader.read();
@@ -116,11 +107,13 @@ export async function askCommand(args: string[]): Promise<void> {
           }
 
           if (line.type === "event") {
-            renderEvent(line.event_type, line.content, showThinking);
+            fmt.push(line.event_type, line.content);
           } else if (line.type === "done") {
+            fmt.flush();
             sources = line.sources ?? [];
             process.stdout.write("\n");
           } else if (line.type === "error") {
+            fmt.flush();
             console.error(`\nError: ${line.message}`);
             process.exit(1);
           }

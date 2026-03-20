@@ -331,11 +331,22 @@ export async function claudeStream(
         const parsed = parseStreamLine(line);
         if (!parsed) continue;
 
-        for (const evt of parsed.events) {
-          await onEvent(evt);
+        // Only fire events from stream_event lines (deltas) and
+        // tool_result events from batch fallthrough. Skip text/thinking
+        // from assistant batch lines since those duplicate the deltas.
+        if (parsed.isStreamEvent) {
+          for (const evt of parsed.events) {
+            await onEvent(evt);
+          }
+          text += parsed.text;
+        } else {
+          // Batch fallthrough: fire only tool_result events (not text/thinking)
+          for (const evt of parsed.events) {
+            if (evt.type === "tool_result") {
+              await onEvent(evt);
+            }
+          }
         }
-
-        text += parsed.text;
 
         if (parsed.result !== null) {
           text = parsed.result;
@@ -367,6 +378,8 @@ interface ParsedLine {
   text: string;
   result: string | null;
   usage: ClaudeUsage | null;
+  /** True when this line came from a stream_event (incremental delta) */
+  isStreamEvent?: boolean;
 }
 
 /**
@@ -485,7 +498,7 @@ export function parseStreamLine(line: string): ParsedLine | null {
     // message_start, message_delta, message_stop, content_block_stop -- skip
 
     if (events.length === 0 && text === "") return null;
-    return { events, text, result: null, usage: null };
+    return { events, text, result: null, usage: null, isStreamEvent: true };
   }
 
   // Fall through to batch parser for assistant, user, result lines
