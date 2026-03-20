@@ -62,10 +62,28 @@ export async function buildPlanPrompt(task: Task, repo: Repo): Promise<string> {
   parts.push("1. Use the repository knowledge above to understand the codebase structure, conventions, and patterns.");
   parts.push("2. Only read files if the knowledge base does not cover what you need.");
   parts.push("3. Identify which files need to be created or modified.");
-  parts.push("4. Create a step-by-step implementation plan.");
-  parts.push("5. Output the plan as a structured markdown document.");
+  parts.push("4. Produce a structured execution plan as described below.");
   parts.push("");
   parts.push("Do NOT implement the changes -- only plan them.");
+  parts.push("");
+  parts.push("## Output Format");
+  parts.push("");
+  parts.push("Your output MUST follow this exact structure:");
+  parts.push("");
+  parts.push("### Summary");
+  parts.push("A brief (1-3 sentence) description of the overall approach.");
+  parts.push("");
+  parts.push("### Files to Modify");
+  parts.push("List each file that will be created or modified, with a short note on what changes.");
+  parts.push("");
+  parts.push("### Execution Plan");
+  parts.push("A numbered checklist of concrete implementation steps. Each step should be a single, actionable unit of work (e.g. 'Add field X to interface Y in file Z', not 'update the types'). Steps should be ordered so each builds on the previous.");
+  parts.push("");
+  parts.push("The final steps MUST be:");
+  parts.push("- [ ] Run lint and verify no errors");
+  parts.push("- [ ] Run tests and verify they pass");
+  parts.push("");
+  parts.push("This ensures the implementation agent leaves the codebase in a stable state.");
 
   return parts.join("\n");
 }
@@ -103,9 +121,10 @@ export async function buildImplementPrompt(
   parts.push(plan);
   parts.push("");
   parts.push("## Instructions");
+  parts.push("- Follow the Execution Plan checklist above step by step, in order.");
   parts.push("- Use the repository knowledge above to understand existing patterns and conventions.");
-  parts.push("- Implement all changes described in the plan.");
   parts.push("- Write clean, idiomatic code that matches the existing style.");
+  parts.push("- Do a final check to see if you can generalize things or hook into existing patterns");
   parts.push("- Do NOT commit changes -- just write the files.");
 
   return parts.join("\n");

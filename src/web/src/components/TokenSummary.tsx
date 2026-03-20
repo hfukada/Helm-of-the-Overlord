@@ -27,19 +27,19 @@ export function TokenSummary() {
     <div>
       {/* Totals */}
       <div className="mb-6 grid grid-cols-3 gap-4">
-        <div className="rounded-lg bg-gray-800 p-4">
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
           <div className="text-sm text-gray-400">Total Input</div>
           <div className="text-xl font-bold">
             {formatTokens(data.totals.total_input)}
           </div>
         </div>
-        <div className="rounded-lg bg-gray-800 p-4">
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
           <div className="text-sm text-gray-400">Total Output</div>
           <div className="text-xl font-bold">
             {formatTokens(data.totals.total_output)}
           </div>
         </div>
-        <div className="rounded-lg bg-gray-800 p-4">
+        <div className="rounded-lg border border-gray-700 bg-gray-800/50 p-4">
           <div className="text-sm text-gray-400">Total Cost</div>
           <div className="text-xl font-bold">
             {formatCost(data.totals.total_cost)}
@@ -61,7 +61,7 @@ export function TokenSummary() {
           </thead>
           <tbody>
             {data.daily.map((row, i) => (
-              <tr key={i} className="border-b border-gray-800">
+              <tr key={i} className="border-b border-gray-700">
                 <td className="py-1.5">{row.date}</td>
                 <td className="py-1.5 text-gray-400">{row.model}</td>
                 <td className="py-1.5 text-right">

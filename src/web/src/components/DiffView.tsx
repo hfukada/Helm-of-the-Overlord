@@ -247,12 +247,12 @@ function FileSection({
   );
 
   return (
-    <div className="overflow-hidden rounded border border-gray-800">
+    <div className="overflow-hidden rounded border border-gray-700">
       <button
         onClick={onToggle}
         className="flex w-full items-center gap-2 bg-gray-800/50 px-4 py-2 text-left text-sm font-mono hover:bg-gray-800"
       >
-        <span className="text-gray-500">{isCollapsed ? ">" : "v"}</span>
+        <span className="text-gray-400">{isCollapsed ? ">" : "v"}</span>
         <span className="text-gray-300">{filePath}</span>
       </button>
       {!isCollapsed && (

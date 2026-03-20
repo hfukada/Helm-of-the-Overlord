@@ -38,7 +38,7 @@ export function TaskSubmitForm({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-full max-w-lg rounded-lg bg-gray-900 p-6 shadow-xl">
+      <div className="w-full max-w-lg rounded-lg border border-gray-700 bg-gray-900 p-6 shadow-xl">
         <h2 className="mb-4 text-lg font-bold">New Task</h2>
 
         <form onSubmit={handleSubmit}>

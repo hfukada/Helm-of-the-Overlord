@@ -63,7 +63,7 @@ function EventBlock({ event }: { event: StreamEvent }) {
   switch (event.event_type) {
     case "thinking":
       return (
-        <div className="mb-1 italic text-gray-500">{event.content}</div>
+        <div className="mb-1 italic text-gray-400">{event.content}</div>
       );
     case "text":
       return <div className="mb-1 text-gray-300">{event.content}</div>;
@@ -77,7 +77,7 @@ function EventBlock({ event }: { event: StreamEvent }) {
     }
     case "tool_result":
       return (
-        <div className="mb-1 ml-2 border-l-2 border-gray-700 pl-2 text-gray-500 max-h-24 overflow-hidden">
+        <div className="mb-1 ml-2 border-l-2 border-gray-600 pl-2 text-gray-400 max-h-24 overflow-hidden">
           {event.content.slice(0, 500)}
           {event.content.length > 500 && "..."}
         </div>

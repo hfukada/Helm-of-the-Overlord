@@ -63,7 +63,7 @@ export function CiOutput({
   if (!output && !isRunning) return null;
 
   return (
-    <details ref={detailsRef} className="rounded border border-gray-800 bg-gray-900/50">
+    <details ref={detailsRef} className="rounded border border-gray-700 bg-gray-900/50">
       <summary className="flex cursor-pointer items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-gray-800/50">
         <span
           className={`h-2 w-2 rounded-full ${
@@ -75,11 +75,11 @@ export function CiOutput({
           }`}
         />
         CI
-        <span className="ml-auto text-xs text-gray-500">
+        <span className="ml-auto text-xs text-gray-400">
           {isRunning ? "running..." : passed ? "passed" : "failed"}
         </span>
       </summary>
-      <div className="border-t border-gray-800 px-4 py-3">
+      <div className="border-t border-gray-700 px-4 py-3">
         <div className="mb-2 flex items-center gap-2">
           <label className="flex cursor-pointer select-none items-center gap-1.5 text-xs text-gray-400">
             <input

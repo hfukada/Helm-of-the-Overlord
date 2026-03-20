@@ -119,7 +119,7 @@ export function TaskDetail() {
           </div>
           <StatusBadge status={task.status} />
         </div>
-        <div className="mt-2 flex items-center gap-4 text-xs text-gray-500">
+        <div className="mt-2 flex items-center gap-4 text-xs text-gray-400">
           {task.branch_name && <span>Branch: {task.branch_name}</span>}
           <span>Created: {new Date(`${task.created_at}Z`).toLocaleString()}</span>
           <TaskTokenSummary runs={task.agent_runs} />
@@ -133,7 +133,7 @@ export function TaskDetail() {
       {(task.lint_output || task.ci_output || task.status === "ci_running") && (
         <div className="space-y-2">
           {task.lint_output && (
-            <details className="rounded border border-gray-800 bg-gray-900/50">
+            <details open={!task.lint_passed} className="rounded border border-gray-700 bg-gray-900/50">
               <summary className="flex cursor-pointer items-center gap-2 px-4 py-2.5 text-sm font-medium hover:bg-gray-800/50">
                 <span
                   className={`h-2 w-2 rounded-full ${
@@ -145,7 +145,7 @@ export function TaskDetail() {
                   {task.lint_passed ? "passed" : "failed"}
                 </span>
               </summary>
-              <div className="border-t border-gray-800 px-4 py-3">
+              <div className="border-t border-gray-700 px-4 py-3">
                 <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs text-gray-300">
                   {task.lint_output}
                 </pre>
@@ -171,7 +171,7 @@ export function TaskDetail() {
             {task.agent_runs.map((run) => (
               <div
                 key={run.id}
-                className="rounded border border-gray-800 bg-gray-900/50"
+                className="rounded border border-gray-700 bg-gray-900/50"
               >
                 <button
                   onClick={() => toggleRun(run.id)}
@@ -200,7 +200,7 @@ export function TaskDetail() {
                   </div>
                 </button>
                 {expandedRuns.has(run.id) && (
-                  <div className="border-t border-gray-800 px-4 py-3">
+                  <div className="border-t border-gray-700 px-4 py-3">
                     <AgentProgress
                       taskId={task.id}
                       runId={run.id}

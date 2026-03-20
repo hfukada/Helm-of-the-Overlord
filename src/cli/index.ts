@@ -10,13 +10,13 @@ const HELP = `
 hoto -- multi-repo task manager
 
 Usage:
-  hoto "task description"           Submit a task
-  hoto -f task.txt                  Submit from file
-  hoto -f task.txt -r repo-name    Target specific repo
+  hoto "question"                   Ask the knowledge base (default)
+  hoto ask "question" [-r repo]     Ask with options
+  hoto run "task description"       Submit a task
+  hoto run -f task.txt [-r repo]    Submit from file
   hoto status                       List tasks
   hoto status <id>                  Task detail + diff
   hoto cancel <id>                  Cancel a task
-  hoto ask "question" [-r repo]     Query knowledge base
   hoto repos                        List tracked repos
   hoto repos add /path/to/repo     Add + index repo
   hoto repos remove <name>          Untrack repo
@@ -75,9 +75,13 @@ export async function runCli(args: string[]): Promise<void> {
     case "tokens":
       await tokensCommand();
       break;
+    case "run":
+    case "task":
+      await runCommand(args.slice(1));
+      break;
     default:
-      // Anything else is treated as a task description
-      await runCommand(args);
+      // Anything else is treated as a question for the knowledge base
+      await askCommand(args);
       break;
   }
 }

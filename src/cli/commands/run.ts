@@ -22,7 +22,7 @@ export async function runCommand(args: string[]): Promise<void> {
   }
 
   if (!description) {
-    console.log("Usage: hoto \"task description\" [-r repo] [-f file]");
+    console.log("Usage: hoto run \"task description\" [-r repo] [-f file]");
     process.exit(1);
   }
 

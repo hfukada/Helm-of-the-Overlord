@@ -12,7 +12,7 @@ export function App() {
   return (
     <div className="flex h-screen flex-col">
       {/* Top bar */}
-      <header className="flex items-center justify-between border-b border-gray-800 bg-gray-900 px-4 py-3">
+      <header className="flex items-center justify-between border-b border-gray-700 bg-gray-900 px-4 py-3">
         <Link to="/" className="text-lg font-bold text-white">
           Hoto
         </Link>
@@ -35,7 +35,7 @@ export function App() {
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <aside className="w-80 shrink-0 overflow-y-auto border-r border-gray-800 bg-gray-900/50">
+        <aside className="w-80 shrink-0 overflow-y-auto border-r border-gray-700 bg-gray-900/50">
           <TaskList />
         </aside>
 

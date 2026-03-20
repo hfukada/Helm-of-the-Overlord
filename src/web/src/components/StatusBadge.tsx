@@ -1,16 +1,16 @@
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-gray-600 text-gray-200",
-  indexing: "bg-blue-600 text-blue-100",
-  planning: "bg-blue-600 text-blue-100",
-  implementing: "bg-blue-600 text-blue-100",
-  linting: "bg-yellow-600 text-yellow-100",
-  ci_running: "bg-yellow-600 text-yellow-100",
-  ci_fixing: "bg-yellow-600 text-yellow-100",
-  review: "bg-purple-600 text-purple-100",
-  accepted: "bg-green-600 text-green-100",
-  committed: "bg-green-700 text-green-100",
-  failed: "bg-red-600 text-red-100",
-  cancelled: "bg-gray-700 text-gray-300",
+  pending: "bg-slate-600 text-slate-100",
+  indexing: "bg-sky-600 text-white",
+  planning: "bg-blue-600 text-white",
+  implementing: "bg-indigo-600 text-white",
+  linting: "bg-amber-600 text-white",
+  ci_running: "bg-amber-600 text-white",
+  ci_fixing: "bg-orange-600 text-white",
+  review: "bg-violet-600 text-white",
+  accepted: "bg-emerald-600 text-white",
+  committed: "bg-emerald-700 text-white",
+  failed: "bg-red-600 text-white",
+  cancelled: "bg-slate-700 text-slate-300",
 };
 
 const STATUS_LABELS: Record<string, string> = {
