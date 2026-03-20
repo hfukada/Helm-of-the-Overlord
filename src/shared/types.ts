@@ -4,6 +4,7 @@ export type TaskStatus =
   | "planning"
   | "implementing"
   | "linting"
+  | "fix_linting"
   | "ci_running"
   | "ci_fixing"
   | "review"

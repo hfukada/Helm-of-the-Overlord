@@ -301,7 +301,7 @@ export async function runTask(taskId: string): Promise<void> {
 
       // Fix lint errors
       state = advanceState(state, "errors");
-      updateTaskStatus(task.id, "linting", state);
+      updateTaskStatus(task.id, "fix_linting", state);
       logger.info("Running fix-lint agent", { taskId: task.id, round });
 
       const fixResult = await executeFixLint(
@@ -318,6 +318,7 @@ export async function runTask(taskId: string): Promise<void> {
       // Loop back to lint
       state = advanceState(state, "done");
       state.lint_rounds++;
+      updateTaskStatus(task.id, "linting", state);
     }
   }
 
@@ -370,7 +371,8 @@ export async function runTask(taskId: string): Promise<void> {
     }
   } else {
     // No CI configured, skip to review
-    state = advanceState(state, "clean");
+    state = advanceState(state, "clean"); // lint -> ci
+    state = advanceState(state, "pass");  // ci -> review
   }
 
   // Tear down Docker container before review (no longer needed)
@@ -472,7 +474,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       if (isTaskCancelled(task.id)) return;
 
       state = advanceState(state, "errors");
-      updateTaskStatus(task.id, "linting", state);
+      updateTaskStatus(task.id, "fix_linting", state);
 
       const fixResult = await executeFixLint(
         task, repo, workDir,
@@ -486,6 +488,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
       state = advanceState(state, "done");
       state.lint_rounds++;
+      updateTaskStatus(task.id, "linting", state);
     }
   }
 
@@ -530,7 +533,8 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       updateTaskStatus(task.id, "ci_running", state);
     }
   } else {
-    state = advanceState(state, "clean");
+    state = advanceState(state, "clean"); // lint -> ci
+    state = advanceState(state, "pass");  // ci -> review
   }
 
   // Tear down Docker container
