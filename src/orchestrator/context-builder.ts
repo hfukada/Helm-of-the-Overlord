@@ -1,6 +1,7 @@
 import type { Repo, Task } from "../shared/types";
 import { search, } from "../knowledge/search";
 import { logger } from "../shared/logger";
+import { renderTemplate } from "../prompts/loader";
 
 async function getKnowledgeContext(
   query: string,
@@ -28,64 +29,42 @@ async function getKnowledgeContext(
   }
 }
 
+export async function getChatContext(taskId: string): Promise<string> {
+  try {
+    const { getDb } = await import("../knowledge/db");
+    const db = getDb();
+    const messages = db.query(
+      "SELECT source, sender_id, content, created_at FROM task_messages WHERE task_id = ? ORDER BY created_at"
+    ).all(taskId) as Array<{ source: string; sender_id: string | null; content: string; created_at: string }>;
+    if (messages.length === 0) return "";
+    return messages.map((m) => {
+      const sender = m.sender_id ?? m.source;
+      return `[${sender}]: ${m.content}`;
+    }).join("\n");
+  } catch {
+    return "";
+  }
+}
+
 export async function buildPlanPrompt(task: Task, repo: Repo): Promise<string> {
-  const parts = [
-    "You are a planning agent. Your job is to create a detailed implementation plan for the following task.",
-    "",
-    `## Repository: ${repo.name}`,
-    `Path: ${repo.path}`,
-  ];
-
-  if (repo.language) parts.push(`Language: ${repo.language}`);
-  if (repo.framework) parts.push(`Framework: ${repo.framework}`);
-  if (repo.build_cmd) parts.push(`Build command: ${repo.build_cmd}`);
-  if (repo.test_cmd) parts.push(`Test command: ${repo.test_cmd}`);
-  if (repo.lint_cmd) parts.push(`Lint command: ${repo.lint_cmd}`);
-  if (repo.description) parts.push(`Description: ${repo.description}`);
-
-  parts.push("");
-  parts.push("## Task");
-  parts.push(`Title: ${task.title}`);
-  parts.push(`Description: ${task.description}`);
-
-  // Include knowledge context
+  let knowledgeContext = "";
   if (repo.id) {
-    const knowledge = await getKnowledgeContext(task.description, repo.id);
-    if (knowledge) {
-      parts.push("");
-      parts.push(knowledge);
-    }
+    knowledgeContext = await getKnowledgeContext(task.description, repo.id);
   }
 
-  parts.push("");
-  parts.push("## Instructions");
-  parts.push("1. Use the repository knowledge above to understand the codebase structure, conventions, and patterns.");
-  parts.push("2. Only read files if the knowledge base does not cover what you need.");
-  parts.push("3. Identify which files need to be created or modified.");
-  parts.push("4. Produce a structured execution plan as described below.");
-  parts.push("");
-  parts.push("Do NOT implement the changes -- only plan them.");
-  parts.push("");
-  parts.push("## Output Format");
-  parts.push("");
-  parts.push("Your output MUST follow this exact structure:");
-  parts.push("");
-  parts.push("### Summary");
-  parts.push("A brief (1-3 sentence) description of the overall approach.");
-  parts.push("");
-  parts.push("### Files to Modify");
-  parts.push("List each file that will be created or modified, with a short note on what changes.");
-  parts.push("");
-  parts.push("### Execution Plan");
-  parts.push("A numbered checklist of concrete implementation steps. Each step should be a single, actionable unit of work (e.g. 'Add field X to interface Y in file Z', not 'update the types'). Steps should be ordered so each builds on the previous.");
-  parts.push("");
-  parts.push("After code changes routinely:");
-  parts.push("- [ ] Run lint and verify no errors");
-  parts.push("- [ ] Run tests and verify they pass");
-  parts.push("");
-  parts.push("This ensures the implementation agent leaves the codebase in a stable state.");
-
-  return parts.join("\n");
+  return renderTemplate("plan", {
+    repoName: repo.name,
+    repoPath: repo.path,
+    language: repo.language ?? undefined,
+    framework: repo.framework ?? undefined,
+    buildCmd: repo.build_cmd ?? undefined,
+    testCmd: repo.test_cmd ?? undefined,
+    lintCmd: repo.lint_cmd ?? undefined,
+    description: repo.description ?? undefined,
+    taskTitle: task.title,
+    taskDescription: task.description,
+    knowledgeContext: knowledgeContext || undefined,
+  });
 }
 
 export async function buildImplementPrompt(
@@ -93,45 +72,28 @@ export async function buildImplementPrompt(
   repo: Repo,
   plan: string
 ): Promise<string> {
-  const parts = [
-    "You are an implementation agent. Implement the following plan exactly.",
-    "",
-    `## Repository: ${repo.name}`,
-  ];
-
-  if (repo.language) parts.push(`Language: ${repo.language}`);
-  if (repo.framework) parts.push(`Framework: ${repo.framework}`);
-
-  parts.push("");
-  parts.push("## Task");
-  parts.push(`Title: ${task.title}`);
-  parts.push(`Description: ${task.description}`);
-
-  // Include knowledge context
+  let knowledgeContext = "";
   if (repo.id) {
-    const knowledge = await getKnowledgeContext(task.description, repo.id, 5);
-    if (knowledge) {
-      parts.push("");
-      parts.push(knowledge);
-    }
+    knowledgeContext = await getKnowledgeContext(task.description, repo.id, 5);
   }
 
-  parts.push("");
-  parts.push("## Implementation Plan");
-  parts.push(plan);
-  parts.push("");
-  parts.push("## Instructions");
-  parts.push("- Follow the Execution Plan checklist above step by step, in order.");
-  parts.push("- Use the repository knowledge above to understand existing patterns and conventions.");
-  parts.push("- Write clean, idiomatic code that matches the existing style.");
-  parts.push("- Do a final check to see if you can generalize things or hook into existing patterns");
-  parts.push("- Do NOT run lint or test commands yourself -- the orchestrator handles that automatically after you finish.");
-  parts.push("- Do NOT commit changes -- just write the files.");
+  const chatContext = await getChatContext(task.id);
 
-  return parts.join("\n");
+  return renderTemplate("implement", {
+    repoName: repo.name,
+    language: repo.language ?? undefined,
+    framework: repo.framework ?? undefined,
+    taskTitle: task.title,
+    taskDescription: task.description,
+    knowledgeContext: knowledgeContext || undefined,
+    plan,
+    chatContext: chatContext || undefined,
+  });
 }
 
 export function buildSystemPrompt(repo: Repo, opts?: { hasMcp?: boolean; hasDocker?: boolean }): string {
+  // System prompt is synchronous in callers, so we use a sync approach
+  // Template is simple enough to inline the logic here and use renderTemplate for the rest
   const lines = [`You are working on the "${repo.name}" repository.`];
 
   if (opts?.hasMcp) {
@@ -141,7 +103,6 @@ export function buildSystemPrompt(repo: Repo, opts?: { hasMcp?: boolean; hasDock
     lines.push("You have access to Read, Write, Edit, Glob, Grep, and Bash tools.");
   }
 
-  // Detect Docker from repo config or explicit flag
   const hasDocker = opts?.hasDocker || !!repo.docker_compose_path;
   if (hasDocker) {
     lines.push("IMPORTANT: Do NOT run build, test, lint, or typecheck commands (e.g. tsc, npm test, bun run build). The orchestrator runs these inside a Docker container after you finish. Focus only on writing code.");

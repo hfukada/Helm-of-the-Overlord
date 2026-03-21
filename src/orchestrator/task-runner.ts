@@ -15,10 +15,18 @@ import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
 import { setupTaskContainer, teardownTaskContainer } from "../workspace/docker-exec";
 import { discoverSecrets } from "../workspace/secret-discovery";
+import { renderTemplate } from "../prompts/loader";
+import { getMessagingManager } from "../messaging/manager";
+import { indexTaskChatHistory } from "../messaging/indexer";
+import { isGiteaConfigured, createPullRequest, commentOnPullRequest } from "../gitea/client";
+import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
+import { startReviewPoller } from "../gitea/review-poller";
 import { $ } from "bun";
 
 const MAX_LINT_ROUNDS = 1;
 const MAX_CI_ROUNDS = 2;
+const INPUT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const INPUT_POLL_INTERVAL_MS = 2000;
 
 function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
   const db = getDb();
@@ -33,6 +41,28 @@ function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: B
       "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
       [status, now, taskId]
     );
+  }
+
+  // Notify messaging provider
+  const manager = getMessagingManager();
+  if (manager) {
+    const taskRow = db.query("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | null;
+    if (taskRow) {
+      const task = {
+        id: taskRow.id as string,
+        title: taskRow.title as string,
+        description: taskRow.description as string,
+        repo_id: taskRow.repo_id as number | null,
+        status: status,
+        blueprint_state: null,
+        branch_name: taskRow.branch_name as string | null,
+        source: taskRow.source as "cli" | "web",
+        use_full_copy: !!(taskRow.use_full_copy as number),
+        created_at: taskRow.created_at as string,
+        updated_at: now,
+      };
+      manager.notifyTaskStatusChange(task, status).catch(() => {});
+    }
   }
 }
 
@@ -59,6 +89,56 @@ function saveNodeOutput(
       [output, passed ? 1 : 0, taskId]
     );
   }
+}
+
+export async function requestHumanInput(taskId: string, question: string): Promise<string> {
+  const db = getDb();
+  const requestId = (await import("ulid")).ulid();
+
+  db.run(
+    "INSERT INTO task_input_requests (id, task_id, question, status) VALUES (?, ?, ?, 'pending')",
+    [requestId, taskId, question]
+  );
+
+  // Update task status
+  updateTaskStatus(taskId, "waiting_for_input");
+
+  // Notify via messaging if available
+  try {
+    const { getMessagingManager } = await import("../messaging/manager");
+    const manager = getMessagingManager();
+    if (manager) {
+      await manager.notifyInputRequest(taskId, question);
+    }
+  } catch {
+    // Messaging not configured
+  }
+
+  logger.info("Waiting for human input", { taskId, requestId, question });
+
+  // Poll for answer
+  const startTime = Date.now();
+  while (Date.now() - startTime < INPUT_TIMEOUT_MS) {
+    const row = db.query(
+      "SELECT answer, status FROM task_input_requests WHERE id = ?"
+    ).get(requestId) as { answer: string | null; status: string } | null;
+
+    if (row?.status === "answered" && row.answer) {
+      logger.info("Human input received", { taskId, requestId });
+      return row.answer;
+    }
+
+    if (isTaskCancelled(taskId)) {
+      throw new Error("Task cancelled while waiting for input");
+    }
+
+    await new Promise((r) => setTimeout(r, INPUT_POLL_INTERVAL_MS));
+  }
+
+  // Timeout -- mark as timed out and return default
+  db.run("UPDATE task_input_requests SET status = 'timeout' WHERE id = ?", [requestId]);
+  logger.warn("Human input timed out", { taskId, requestId });
+  return "No response received. Proceed with your best judgment.";
 }
 
 function isTaskCancelled(taskId: string): boolean {
@@ -187,6 +267,16 @@ export async function runTask(taskId: string): Promise<void> {
   }
 
   const { task, repo } = loaded;
+
+  // Create messaging channel for this task
+  const manager = getMessagingManager();
+  if (manager) {
+    try {
+      await manager.createTaskChannel(task);
+    } catch (err) {
+      logger.warn("Failed to create messaging channel", { taskId, error: String(err) });
+    }
+  }
 
   // Set up worktree
   const branchName = generateBranchName(task.id, task.title);
@@ -402,6 +492,61 @@ export async function runTask(taskId: string): Promise<void> {
   // === REVIEW ===
   updateTaskStatus(task.id, "review", state);
   logger.info("Task ready for review", { taskId: task.id });
+
+  // Push to Gitea and create PR if configured
+  if (isGiteaConfigured()) {
+    try {
+      await ensureRepoOnGitea(repo.path, repo.name);
+      await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
+
+      const { getDefaultBranch } = await import("../workspace/git");
+      const baseBranch = await getDefaultBranch(repo.path);
+
+      const db = getDb();
+      const lintRow = db.query("SELECT lint_passed FROM tasks WHERE id = ?").get(task.id) as { lint_passed: number | null } | null;
+      const ciRow = db.query("SELECT ci_passed FROM tasks WHERE id = ?").get(task.id) as { ci_passed: number | null } | null;
+
+      const prBody = [
+        `Task ID: \`${task.id}\``,
+        "",
+        task.description,
+        "",
+        "---",
+        `Lint: ${lintRow?.lint_passed ? "passed" : "failed/skipped"}`,
+        `CI: ${ciRow?.ci_passed ? "passed" : "failed/skipped"}`,
+      ].join("\n");
+
+      const pr = await createPullRequest(
+        repo.name,
+        branchName,
+        baseBranch,
+        `hoto: ${task.title}`,
+        prBody
+      );
+
+      db.run(
+        "UPDATE tasks SET gitea_pr_number = ?, gitea_pr_url = ? WHERE id = ?",
+        [pr.number, pr.html_url, task.id]
+      );
+
+      logger.info("Created Gitea PR", { taskId: task.id, prNumber: pr.number, url: pr.html_url });
+
+      // Start polling for review events
+      startReviewPoller(task.id, repo.name, repo.path, branchName, pr.number);
+    } catch (err) {
+      logger.error("Gitea PR creation failed", { taskId: task.id, error: String(err) });
+    }
+  }
+
+  // Notify review ready via messaging
+  if (manager) {
+    manager.notifyReviewReady(task).catch(() => {});
+  }
+
+  // Index chat history into knowledge base
+  indexTaskChatHistory(task.id).catch((err) => {
+    logger.warn("Failed to index chat history", { taskId: task.id, error: String(err) });
+  });
 }
 
 export async function reviseTask(taskId: string, feedback: string): Promise<void> {
@@ -449,18 +594,12 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   logger.info("Starting revision implement phase", { taskId: task.id });
 
   // Build a revision prompt that includes the feedback
-  const revisionPlan = [
-    "## Revision Request",
-    "",
-    "The reviewer has requested changes to your implementation. Address the following feedback:",
-    "",
+  const { getChatContext } = await import("./context-builder");
+  const chatContext = await getChatContext(task.id);
+  const revisionPlan = await renderTemplate("revise", {
     feedback,
-    "",
-    "## Instructions",
-    "- Review the feedback carefully and make the requested changes.",
-    "- Only modify what is needed to address the feedback.",
-    "- Do NOT commit changes -- just write the files.",
-  ].join("\n");
+    chatContext: chatContext || undefined,
+  });
 
   const implResult = await executeImplement(task, repo, workDir, revisionPlan, mcpConfigPath);
 
@@ -574,6 +713,27 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   // === REVIEW ===
   updateTaskStatus(task.id, "review", state);
   logger.info("Revision ready for review", { taskId: task.id });
+
+  // Re-push to Gitea and restart poller if we have a PR
+  if (isGiteaConfigured()) {
+    const db = getDb();
+    const prRow = db.query("SELECT gitea_pr_number FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_number: number | null } | null;
+    if (prRow?.gitea_pr_number) {
+      try {
+        const branchName = task.branch_name!;
+        await pushBranchToGitea(workDir, repo.path, repo.name, branchName, true);
+        await commentOnPullRequest(repo.name, prRow.gitea_pr_number, "Revision complete. Please re-review.");
+        startReviewPoller(task.id, repo.name, repo.path, branchName, prRow.gitea_pr_number);
+      } catch (err) {
+        logger.warn("Gitea push after revision failed", { taskId: task.id, error: String(err) });
+      }
+    }
+  }
+
+  // Index chat history
+  indexTaskChatHistory(task.id).catch((err) => {
+    logger.warn("Failed to index chat history", { taskId: task.id, error: String(err) });
+  });
 }
 
 async function runCi(

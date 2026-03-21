@@ -206,4 +206,46 @@ tasks.delete("/:id", async (c) => {
   return c.json({ id, deleted: true });
 });
 
+// Input requests for human-in-the-loop
+tasks.get("/:id/input-requests", (c) => {
+  const id = c.req.param("id");
+  const db = getDb();
+  const requests = db.query(
+    "SELECT id, question, answer, status, created_at, answered_at FROM task_input_requests WHERE task_id = ? ORDER BY created_at DESC"
+  ).all(id);
+  return c.json(requests);
+});
+
+tasks.post("/:id/input-requests/:requestId/answer", async (c) => {
+  const requestId = c.req.param("requestId");
+  const body = await c.req.json<{ answer: string }>();
+
+  if (!body.answer?.trim()) {
+    return c.json({ error: "answer is required" }, 400);
+  }
+
+  const db = getDb();
+  const now = new Date().toISOString();
+  const result = db.run(
+    "UPDATE task_input_requests SET answer = ?, status = 'answered', answered_at = ? WHERE id = ? AND status = 'pending'",
+    [body.answer, now, requestId]
+  );
+
+  if (result.changes === 0) {
+    return c.json({ error: "Request not found or already answered" }, 400);
+  }
+
+  return c.json({ id: requestId, status: "answered" });
+});
+
+// Task messages (chat history)
+tasks.get("/:id/messages", (c) => {
+  const id = c.req.param("id");
+  const db = getDb();
+  const messages = db.query(
+    "SELECT id, source, sender_id, content, created_at FROM task_messages WHERE task_id = ? ORDER BY created_at"
+  ).all(id);
+  return c.json(messages);
+});
+
 export { tasks };

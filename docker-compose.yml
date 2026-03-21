@@ -1,0 +1,67 @@
+services:
+  hoto:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - hoto-data:/data
+      # Mount host credentials for Claude Code
+      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+    env_file:
+      - .env
+    environment:
+      HOTO_HOST: "0.0.0.0"
+      HOTO_PORT: "7777"
+      HOTO_WORKSPACE: /data
+      CHROMA_URL: http://chromadb:8000
+      MATRIX_HOMESERVER_URL: http://continuwuity:6167
+      GITEA_URL: http://gitea:3000
+    depends_on:
+      - chromadb
+      - continuwuity
+      - gitea
+
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+
+  continuwuity:
+    image: ghcr.io/continuwuity/continuwuity:latest
+    ports:
+      - "6167:6167"
+      - "8008:8008"
+    volumes:
+      - continuwuity-data:/var/lib/continuwuity
+    environment:
+      CONTINUWUITY_SERVER_NAME: localhost
+      CONTINUWUITY_DATABASE_PATH: /var/lib/continuwuity
+      CONTINUWUITY_ADDRESS: "0.0.0.0"
+      CONTINUWUITY_PORT: 6167
+      CONTINUWUITY_ALLOW_REGISTRATION: "true"
+
+  gitea:
+    image: gitea/gitea:latest
+    ports:
+      - "3000:3000"
+      - "2222:22"
+    volumes:
+      - gitea-data:/data
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__database__PATH: /data/gitea/gitea.db
+      GITEA__server__ROOT_URL: http://gitea:3000
+      GITEA__server__DOMAIN: gitea
+      GITEA__service__DISABLE_REGISTRATION: "false"
+      GITEA__api__ENABLE_SWAGGER: "false"
+      GITEA__security__INSTALL_LOCK: "true"
+
+volumes:
+  hoto-data:
+  chroma-data:
+  continuwuity-data:
+  gitea-data:

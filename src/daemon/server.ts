@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { serveStatic } from "hono/bun";
 import { tasks } from "./routes/tasks";
 import { agents } from "./routes/agents";
 import { repos } from "./routes/repos";
@@ -13,9 +12,11 @@ import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
 import { getDb } from "../knowledge/db";
-import { writeFile, unlink, access } from "node:fs/promises";
-import { join } from "node:path";
-import { $ } from "bun";
+import { MessagingManager, setMessagingManager } from "../messaging/manager";
+import { MatrixProvider } from "../messaging/matrix/client";
+import { initGiteaClient } from "../gitea/client";
+import { restartPollersForReviewTasks } from "../gitea/review-poller";
+import { writeFile, unlink } from "node:fs/promises";
 
 const app = new Hono();
 
@@ -34,62 +35,39 @@ app.route("/repos", secrets); // /repos/:name/secrets
 app.route("/tokens", tokens);
 app.route("/knowledge", knowledge);
 
-// Serve web UI static files
-// import.meta.dir = <project>/src/daemon
-const webDistDir = join(import.meta.dir, "..", "web", "dist");
-
-app.use(
-  "/app/*",
-  serveStatic({
-    root: webDistDir,
-    rewriteRequestPath: (path) => path.replace(/^\/app/, ""),
-  })
-);
-
-// SPA fallback: serve index.html for all /app/* routes that don't match a file
-app.get("/app/*", async (c) => {
-  try {
-    const indexPath = join(webDistDir, "index.html");
-    const file = Bun.file(indexPath);
-    if (await file.exists()) {
-      return c.html(await file.text());
-    }
-  } catch {}
-  return c.json(
-    { error: "Web UI not built. Run: cd src/web && bun run build" },
-    404
-  );
-});
-
-async function ensureWebBuild(): Promise<void> {
-  const indexPath = join(webDistDir, "index.html");
-  try {
-    await access(indexPath);
-  } catch {
-    logger.info("Web UI not built, building...");
-    const webDir = join(import.meta.dir, "..", "web");
-    await $`bun install --frozen-lockfile`.cwd(webDir).quiet().nothrow();
-    const result = await $`bun run build`.cwd(webDir).quiet().nothrow();
-    if (result.exitCode !== 0) {
-      logger.warn("Web UI build failed, UI will be unavailable", {
-        stderr: result.stderr.toString().slice(0, 500),
-      });
-    } else {
-      logger.info("Web UI built successfully");
-    }
-  }
-}
-
 export async function startDaemon(): Promise<void> {
   await ensureWorkspace();
   getDb(); // Initialize DB + run migrations
-  await ensureWebBuild();
 
   const server = Bun.serve({
     port: config.daemonPort,
     hostname: config.daemonHost,
     fetch: app.fetch,
   });
+
+  // Initialize Gitea if configured
+  if (config.giteaUrl) {
+    try {
+      await initGiteaClient();
+      restartPollersForReviewTasks();
+      logger.info("Gitea integration initialized");
+    } catch (err) {
+      logger.warn("Gitea initialization failed, continuing without it", { error: String(err) });
+    }
+  }
+
+  // Initialize messaging if configured
+  if (config.matrixHomeserverUrl) {
+    try {
+      const provider = new MatrixProvider();
+      const manager = new MessagingManager(provider);
+      setMessagingManager(manager);
+      await manager.start();
+      logger.info("Matrix messaging initialized");
+    } catch (err) {
+      logger.warn("Matrix messaging failed to initialize, continuing without it", { error: String(err) });
+    }
+  }
 
   // Write PID file
   await writeFile(config.pidFile, String(process.pid));
@@ -103,6 +81,12 @@ export async function startDaemon(): Promise<void> {
   // Handle shutdown
   const shutdown = async () => {
     logger.info("Daemon shutting down");
+    // Disconnect messaging
+    const { getMessagingManager } = await import("../messaging/manager");
+    const manager = getMessagingManager();
+    if (manager) {
+      try { await manager.stop(); } catch {}
+    }
     server.stop();
     try {
       await unlink(config.pidFile);

@@ -6,29 +6,18 @@ WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
 RUN bun install --frozen-lockfile
 
-COPY src/web/package.json src/web/bun.lock src/web/
-RUN cd src/web && bun install --frozen-lockfile
-
-# Stage 2: Build web UI
-FROM deps AS web-build
-
-COPY src/web/ src/web/
-RUN cd src/web && bun run build
-
-# Stage 3: Runtime
+# Stage 2: Runtime
 FROM oven/bun:1-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI (requires ANTHROPIC_API_KEY at runtime)
+# Install Claude Code CLI
 RUN bun install -g @anthropic-ai/claude-code
 
 WORKDIR /app
 
 COPY --from=deps /app/node_modules node_modules
-COPY --from=deps /app/src/web/node_modules src/web/node_modules
-COPY --from=web-build /app/src/web/dist src/web/dist
 COPY package.json bunfig.toml ./
 COPY src/ src/
 
