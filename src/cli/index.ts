@@ -30,7 +30,7 @@ Usage:
 export async function runCli(args: string[]): Promise<void> {
   const command = args[0];
 
-  if (!command || command === "help" || command === "--help" || command === "-h") {
+  if (command === "help" || command === "--help" || command === "-h") {
     console.log(HELP);
     return;
   }
