@@ -29,7 +29,23 @@ export class MatrixProvider implements MessagingProvider {
       }
     }
 
-    // If no token, register or login
+    // Validate the token if we have one
+    if (accessToken) {
+      try {
+        const res = await fetch(`${homeserverUrl}/_matrix/client/v3/account/whoami`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!res.ok) {
+          logger.info("Stored Matrix token is invalid, re-authenticating");
+          accessToken = null;
+        }
+      } catch {
+        logger.info("Could not validate Matrix token, re-authenticating");
+        accessToken = null;
+      }
+    }
+
+    // If no valid token, register or login
     if (!accessToken) {
       accessToken = await this.authenticate(homeserverUrl, botUser);
     }
