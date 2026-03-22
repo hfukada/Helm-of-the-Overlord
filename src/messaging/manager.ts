@@ -4,6 +4,78 @@ import { logger } from "../shared/logger";
 import { config } from "../shared/config";
 import type { Task, TaskStatus } from "../shared/types";
 
+const COMMAND_HELP: Record<string, string> = {
+  list: [
+    "!list",
+    "List the 20 most recent tasks with their ID (first 8 chars), status, and title.",
+    "Example: !list",
+  ].join("\n"),
+  status: [
+    "!status <id>",
+    "Show details for a task. You can use just the first few characters of the ID.",
+    "Shows: title, full ID, status, branch name, created/updated timestamps.",
+    "Example: !status 01JA3B",
+  ].join("\n"),
+  cancel: [
+    "!cancel <id>",
+    "Cancel a running task. Kills subprocesses, tears down containers, removes the worktree.",
+    "Cannot cancel tasks already in a terminal state (committed, cancelled).",
+    "Example: !cancel 01JA3B",
+  ].join("\n"),
+  run: [
+    "!run <description> [-r repo]",
+    "Submit a new task. If only one repo is registered, it is used automatically.",
+    "Use -r to specify which repo if multiple are registered.",
+    "Examples:",
+    "  !run Add a health check endpoint",
+    "  !run Fix the login bug -r my-api",
+  ].join("\n"),
+  repos: [
+    "!repos",
+    "List all registered repos with their detected language and framework.",
+  ].join("\n"),
+  "repo": [
+    "!repo add <git-url> [--name <name>]",
+    "Clone a git repo and register it. Auto-detects language, framework, and commands.",
+    "Indexes the repo into the knowledge base after cloning.",
+    "Examples:",
+    "  !repo add https://github.com/org/project.git",
+    "  !repo add git@github.com:org/project.git --name my-project",
+  ].join("\n"),
+  reindex: [
+    "!reindex <repo>",
+    "Re-scan and index a repo's documentation, config files, and key source files.",
+    "Updates both SQLite (keyword search) and ChromaDB (vector search).",
+    "Example: !reindex my-api",
+  ].join("\n"),
+  tokens: [
+    "!tokens",
+    "Show today's token usage broken down by model.",
+    "Displays input tokens, output tokens, and estimated cost in USD.",
+  ].join("\n"),
+  ask: [
+    "!ask <question>",
+    "Query the knowledge base. Searches indexed repos and uses AI to synthesize an answer.",
+    "Example: !ask How does authentication work in my-api?",
+  ].join("\n"),
+  approve: [
+    "!approve",
+    "Accept the current implementation. Only works in task channels.",
+    "If Gitea is configured, this is equivalent to merging the PR.",
+  ].join("\n"),
+  revise: [
+    "!revise <feedback>",
+    "Request changes to the implementation. Only works in task channels.",
+    "The agent will revise based on your feedback, then re-push for review.",
+    "Example: !revise Use a map instead of an array for O(1) lookups",
+  ].join("\n"),
+  help: [
+    "!help [command]",
+    "Show the command list, or detailed help for a specific command.",
+    "Example: !help run",
+  ].join("\n"),
+};
+
 export class MessagingManager {
   private provider: MessagingProvider;
   private mainChannelId: string | null = null;
@@ -54,8 +126,14 @@ export class MessagingManager {
       case "status":
         await this.cmdStatus(cmd);
         break;
+      case "run":
+        await this.cmdRun(cmd);
+        break;
       case "repos":
         await this.cmdRepos(cmd);
+        break;
+      case "repo":
+        await this.cmdRepo(cmd);
         break;
       case "reindex":
         await this.cmdReindex(cmd);
@@ -222,6 +300,81 @@ export class MessagingManager {
   }
 
   // Command handlers
+
+  private async cmdRun(cmd: CommandEvent): Promise<void> {
+    // Parse: !run <description> [-r repo]
+    let repoName: string | undefined;
+    const descParts: string[] = [];
+
+    for (let i = 0; i < cmd.args.length; i++) {
+      if (cmd.args[i] === "-r" && cmd.args[i + 1]) {
+        repoName = cmd.args[++i];
+      } else {
+        descParts.push(cmd.args[i]);
+      }
+    }
+
+    const description = descParts.join(" ");
+    if (!description) {
+      await this.provider.sendMessage(cmd.channelId, "Usage: !run <description> [-r repo]\nType !help run for details.");
+      return;
+    }
+
+    const body: Record<string, string> = { description, source: "matrix" };
+    if (repoName) body.repo_name = repoName;
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data = await res.json() as { id: string; title: string };
+      await this.provider.sendMessage(cmd.channelId, `Task created: ${data.title} (${data.id.slice(0, 8)})`);
+    } else {
+      const err = await res.json() as { error: string };
+      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    }
+  }
+
+  private async cmdRepo(cmd: CommandEvent): Promise<void> {
+    const sub = cmd.args[0];
+    if (sub !== "add" || !cmd.args[1]) {
+      await this.provider.sendMessage(cmd.channelId, "Usage: !repo add <git-url> [--name <name>]\nType !help repo for details.");
+      return;
+    }
+
+    const url = cmd.args[1];
+    let name: string | undefined;
+    for (let i = 2; i < cmd.args.length; i++) {
+      if (cmd.args[i] === "--name" && cmd.args[i + 1]) {
+        name = cmd.args[++i];
+      }
+    }
+
+    await this.provider.sendMessage(cmd.channelId, `Cloning ${url}...`);
+
+    const body: Record<string, string> = { url };
+    if (name) body.name = name;
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data = await res.json() as { name: string; language?: string; framework?: string };
+      const info = [data.name];
+      if (data.language) info.push(`(${data.language})`);
+      if (data.framework) info.push(`[${data.framework}]`);
+      await this.provider.sendMessage(cmd.channelId, `Repo registered: ${info.join(" ")}. Indexing in background.`);
+    } else {
+      const err = await res.json() as { error: string };
+      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    }
+  }
 
   private async cmdList(cmd: CommandEvent): Promise<void> {
     const db = getDb();
@@ -440,20 +593,37 @@ export class MessagingManager {
   }
 
   private async cmdHelp(cmd: CommandEvent): Promise<void> {
+    const topic = cmd.args[0];
+
+    if (topic) {
+      const detailed = COMMAND_HELP[topic];
+      if (detailed) {
+        await this.provider.sendMessage(cmd.channelId, detailed);
+        return;
+      }
+      await this.provider.sendMessage(cmd.channelId, `Unknown command: ${topic}. Type !help for a list.`);
+      return;
+    }
+
     const help = [
-      "Available commands:",
-      "  !list              -- List recent tasks",
-      "  !status <id>       -- Task details",
-      "  !cancel <id>       -- Cancel a task",
-      "  !repos             -- List registered repos",
-      "  !reindex <repo>    -- Reindex a repo",
-      "  !tokens            -- Today's token usage",
-      "  !ask <question>    -- Query the knowledge base",
+      "Hoto Bot Commands",
+      "",
+      "General (any channel):",
+      "  !list                     List recent tasks (last 20)",
+      "  !status <id>              Show task details (status, branch, timestamps)",
+      "  !cancel <id>              Cancel a running task and clean up its worktree",
+      "  !run <description>        Submit a new task",
+      "  !repos                    List all registered repos with language/framework",
+      "  !repo add <url> [--name]  Clone and register a repo from a git URL",
+      "  !reindex <repo>           Reindex a repo's knowledge base (docs, code, config)",
+      "  !tokens                   Show today's token usage and cost per model",
+      "  !ask <question>           Query the knowledge base using AI",
+      "  !help [command]           Show this help, or details for a specific command",
       "",
       "In task channels:",
-      "  !approve           -- Accept the current implementation",
-      "  !revise <feedback> -- Request changes",
-      "  (plain messages)   -- Answer agent questions",
+      "  !approve                  Accept the implementation (merge via Gitea)",
+      "  !revise <feedback>        Request changes with specific feedback",
+      "  (plain messages)          Answer questions from the agent",
     ];
     await this.provider.sendMessage(cmd.channelId, help.join("\n"));
   }

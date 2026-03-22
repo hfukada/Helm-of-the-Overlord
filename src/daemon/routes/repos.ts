@@ -1,9 +1,11 @@
 import { Hono } from "hono";
+import { join } from "node:path";
+import { $ } from "bun";
 import { getDb } from "../../knowledge/db";
 import { logger } from "../../shared/logger";
+import { config } from "../../shared/config";
 import { parseRepo } from "../../knowledge/repo-parser";
 import { indexRepo } from "../../knowledge/indexer";
-import { resolve } from "node:path";
 import type { Repo } from "../../shared/types";
 
 const repos = new Hono();
@@ -16,7 +18,8 @@ repos.get("/", (c) => {
 
 repos.post("/", async (c) => {
   const body = await c.req.json<{
-    path: string;
+    url?: string;
+    path?: string;
     name?: string;
     description?: string;
     language?: string;
@@ -27,17 +30,50 @@ repos.post("/", async (c) => {
     lint_cmd?: string;
   }>();
 
-  const repoPath = resolve(body.path);
+  if (!body.url && !body.path) {
+    return c.json({ error: "Either 'url' (git clone URL) or 'path' (local path) is required" }, 400);
+  }
 
-  // Derive name from directory if not provided
-  const name = body.name ?? repoPath.split("/").pop() ?? "unknown";
+  let repoPath: string;
+  let name: string;
+
+  if (body.url) {
+    // Derive name from URL if not provided
+    name = body.name ?? body.url.split("/").pop()?.replace(/\.git$/, "") ?? "unknown";
+
+    // Clone into workspace/repos/<name>
+    const reposDir = join(config.workspaceDir, "repos");
+    repoPath = join(reposDir, name);
+
+    const db = getDb();
+    const existing = db.query("SELECT id FROM repos WHERE name = ?").get(name);
+    if (existing) {
+      return c.json({ error: `Repo '${name}' already exists` }, 409);
+    }
+
+    try {
+      await $`mkdir -p ${reposDir}`.quiet();
+      logger.info("Cloning repo", { url: body.url, dest: repoPath });
+      await $`git clone ${body.url} ${repoPath}`.quiet();
+    } catch (err) {
+      logger.error("Clone failed", { url: body.url, error: String(err) });
+      return c.json({ error: `Clone failed: ${String(err)}` }, 500);
+    }
+  } else {
+    // Legacy local path mode
+    const { resolve } = await import("node:path");
+    repoPath = resolve(body.path!);
+    name = body.name ?? repoPath.split("/").pop() ?? "unknown";
+  }
 
   const db = getDb();
 
-  // Check for duplicates
-  const existing = db.query("SELECT id FROM repos WHERE name = ?").get(name);
-  if (existing) {
-    return c.json({ error: `Repo '${name}' already exists` }, 409);
+  // Check for duplicates (for local path mode -- URL mode already checked)
+  if (body.path) {
+    const existing = db.query("SELECT id FROM repos WHERE name = ?").get(name);
+    if (existing) {
+      return c.json({ error: `Repo '${name}' already exists` }, 409);
+    }
   }
 
   // Auto-detect repo metadata
@@ -82,7 +118,8 @@ repos.post("/", async (c) => {
 
   return c.json({
     id: repoId, name, path: repoPath,
-    language: parsed.language, framework: parsed.framework,
+    language: body.language ?? parsed.language,
+    framework: body.framework ?? parsed.framework,
   }, 201);
 });
 

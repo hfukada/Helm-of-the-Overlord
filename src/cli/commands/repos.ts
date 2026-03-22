@@ -40,7 +40,7 @@ async function listRepos(): Promise<void> {
   }>;
 
   if (repos.length === 0) {
-    console.log("No repos tracked. Add one with: hoto repos add /path/to/repo");
+    console.log("No repos tracked. Add one with: hoto repos add <url>");
     return;
   }
 
@@ -52,9 +52,9 @@ async function listRepos(): Promise<void> {
 }
 
 async function addRepo(args: string[]): Promise<void> {
-  const path = args[0];
-  if (!path) {
-    console.log("Usage: hoto repos add /path/to/repo [--name name]");
+  const target = args[0];
+  if (!target) {
+    console.log("Usage: hoto repos add <git-url-or-path> [--name name]");
     process.exit(1);
   }
 
@@ -65,10 +65,19 @@ async function addRepo(args: string[]): Promise<void> {
     }
   }
 
+  // Detect if target is a URL or local path
+  const isUrl = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("git@") || target.includes("://");
+  const body: Record<string, string> = isUrl ? { url: target } : { path: target };
+  if (name) body.name = name;
+
+  if (isUrl) {
+    console.log(`Cloning ${target}...`);
+  }
+
   const res = await fetch(daemonUrl("/repos"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, name }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -77,8 +86,12 @@ async function addRepo(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  const repo = (await res.json()) as { id: number; name: string; path: string };
-  console.log(`Repo added: ${repo.name} -> ${repo.path}`);
+  const repo = (await res.json()) as { id: number; name: string; path: string; language?: string; framework?: string };
+  const info = [repo.name];
+  if (repo.language) info.push(`(${repo.language})`);
+  if (repo.framework) info.push(`[${repo.framework}]`);
+  console.log(`Repo added: ${info.join(" ")} -> ${repo.path}`);
+  console.log("Indexing in background...");
 }
 
 async function removeRepo(name: string | undefined): Promise<void> {

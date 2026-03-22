@@ -18,7 +18,7 @@ Usage:
   hoto status <id>                  Task detail + diff
   hoto cancel <id>                  Cancel a task
   hoto repos                        List tracked repos
-  hoto repos add /path/to/repo     Add + index repo
+  hoto repos add <url-or-path>     Clone/add + index repo
   hoto repos remove <name>          Untrack repo
   hoto repos reindex [name]         Re-index repo knowledge
   hoto tokens                       Token usage summary
