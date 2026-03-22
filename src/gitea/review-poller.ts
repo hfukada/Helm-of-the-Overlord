@@ -1,6 +1,7 @@
 import {
   getPullRequest,
   listPullRequestReviews,
+  listReviewComments,
   listPullRequestComments,
   commentOnPullRequest,
   isGiteaConfigured,
@@ -117,9 +118,24 @@ async function pollPR(state: PollerState): Promise<void> {
   );
 
   if (changeRequests.length > 0) {
-    // Collect feedback from reviews + any new PR comments
-    const reviewBodies = changeRequests.map((r) => r.body).filter(Boolean);
+    // Collect feedback: review body + inline line comments + general PR comments
+    const feedbackParts: string[] = [];
 
+    for (const review of changeRequests) {
+      if (review.body?.trim()) {
+        feedbackParts.push(review.body);
+      }
+
+      // Fetch per-line inline comments for this review
+      const inlineComments = await listReviewComments(repoName, prNumber, review.id);
+      for (const c of inlineComments) {
+        if (c.body?.trim()) {
+          feedbackParts.push(`[${c.path}:${c.line}] ${c.body}`);
+        }
+      }
+    }
+
+    // Also include general PR comments (not inline)
     const comments = await listPullRequestComments(repoName, prNumber);
     const botUser = config.giteaBotUser;
     const newComments = comments.filter(
@@ -128,9 +144,13 @@ async function pollPR(state: PollerState): Promise<void> {
     if (newComments.length > 0) {
       state.lastCommentId = Math.max(...newComments.map((c) => c.id));
     }
-    const commentBodies = newComments.map((c) => c.body).filter(Boolean);
+    for (const c of newComments) {
+      if (c.body?.trim()) {
+        feedbackParts.push(c.body);
+      }
+    }
 
-    const feedback = [...reviewBodies, ...commentBodies].join("\n\n").trim()
+    const feedback = feedbackParts.join("\n\n").trim()
       || "Changes requested (no specific feedback provided).";
 
     logger.info("Review changes requested, starting revision", { taskId, prNumber, feedback });

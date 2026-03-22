@@ -582,21 +582,18 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   updateTaskStatus(task.id, "planning", state);
   logger.info("Starting revision plan phase", { taskId: task.id });
 
-  // Build revision context: feedback + chat history
-  const { getChatContext } = await import("./context-builder");
-  const chatContext = await getChatContext(task.id);
-  const revisionContext = await renderTemplate("revise", {
-    feedback,
-    chatContext: chatContext || undefined,
-  });
+  // Fetch the previous plan output
+  const previousPlanRow = db.query(
+    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name = 'plan' ORDER BY finished_at DESC LIMIT 1"
+  ).get(task.id) as { output: string } | null;
+  const previousPlan = previousPlanRow?.output ?? "(no previous plan found)";
 
-  // Append revision context to the task description for planning
-  const revisedTask = {
-    ...task,
-    description: `${task.description}\n\n---\nRevision feedback:\n${revisionContext}`,
-  };
+  // Build revision-specific plan prompt
+  const { buildRevisionPlanPrompt } = await import("./context-builder");
+  const revisionPlanPrompt = await buildRevisionPlanPrompt(task, repo, feedback, previousPlan);
 
-  const planResult = await executePlan(revisedTask, repo, workDir, mcpConfigPath);
+  // Run plan with the revision-specific prompt
+  const planResult = await executePlan(task, repo, workDir, mcpConfigPath, undefined, revisionPlanPrompt);
 
   if (planResult.error) {
     if (isTaskCancelled(task.id)) return;

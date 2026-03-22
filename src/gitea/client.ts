@@ -292,6 +292,14 @@ export interface GiteaComment {
   updated_at: string;
 }
 
+export interface GiteaReviewComment {
+  id: number;
+  body: string;
+  path: string;
+  line: number;
+  user: { login: string };
+}
+
 export async function createPullRequest(
   repoName: string,
   head: string,
@@ -327,6 +335,19 @@ export async function listPullRequestReviews(repoName: string, prNumber: number)
   const res = await giteaFetch(`/api/v1/repos/${org}/${repoName}/pulls/${prNumber}/reviews`);
   if (!res.ok) return [];
   return res.json() as Promise<GiteaReview[]>;
+}
+
+export async function listReviewComments(
+  repoName: string,
+  prNumber: number,
+  reviewId: number
+): Promise<GiteaReviewComment[]> {
+  const org = config.giteaOrg;
+  const res = await giteaFetch(
+    `/api/v1/repos/${org}/${repoName}/pulls/${prNumber}/reviews/${reviewId}/comments`
+  );
+  if (!res.ok) return [];
+  return res.json() as Promise<GiteaReviewComment[]>;
 }
 
 export async function listPullRequestComments(repoName: string, prNumber: number): Promise<GiteaComment[]> {

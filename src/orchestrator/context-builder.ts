@@ -67,6 +67,62 @@ export async function buildPlanPrompt(task: Task, repo: Repo): Promise<string> {
   });
 }
 
+export async function buildRevisionPlanPrompt(
+  task: Task,
+  repo: Repo,
+  feedback: string,
+  previousPlan: string,
+): Promise<string> {
+  let knowledgeContext = "";
+  if (repo.id) {
+    knowledgeContext = await getKnowledgeContext(task.description, repo.id);
+  }
+
+  const chatContext = await getChatContext(task.id);
+
+  // Get lint/CI status from the DB
+  const { getDb } = await import("../knowledge/db");
+  const db = getDb();
+  const row = db.query(
+    "SELECT lint_passed, lint_output, ci_passed, ci_output FROM tasks WHERE id = ?"
+  ).get(task.id) as {
+    lint_passed: number | null;
+    lint_output: string | null;
+    ci_passed: number | null;
+    ci_output: string | null;
+  } | null;
+
+  const lintPassed = row?.lint_passed;
+  const ciPassed = row?.ci_passed;
+
+  // Only include output if it failed (no need to show passing output)
+  const lintErrors = lintPassed === 0 && row?.lint_output
+    ? row.lint_output.slice(0, 3000) : undefined;
+  const ciErrors = ciPassed === 0 && row?.ci_output
+    ? row.ci_output.slice(0, 3000) : undefined;
+
+  return renderTemplate("plan-revise", {
+    repoName: repo.name,
+    repoPath: repo.path,
+    language: repo.language ?? undefined,
+    framework: repo.framework ?? undefined,
+    buildCmd: repo.build_cmd ?? undefined,
+    testCmd: repo.test_cmd ?? undefined,
+    lintCmd: repo.lint_cmd ?? undefined,
+    description: repo.description ?? undefined,
+    taskTitle: task.title,
+    taskDescription: task.description,
+    previousPlan,
+    feedback,
+    chatContext: chatContext || undefined,
+    lintStatus: lintPassed !== null ? (lintPassed ? "passed" : "failed") : undefined,
+    lintErrors,
+    ciStatus: ciPassed !== null ? (ciPassed ? "passed" : "failed") : undefined,
+    ciErrors,
+    knowledgeContext: knowledgeContext || undefined,
+  });
+}
+
 export async function buildImplementPrompt(
   task: Task,
   repo: Repo,

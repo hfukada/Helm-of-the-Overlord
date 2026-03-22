@@ -10,10 +10,11 @@ export async function executePlan(
   repo: Repo,
   workDir: string,
   mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void
+  onEvent?: (type: string, content: string) => void,
+  promptOverride?: string,
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
-  const prompt = await buildPlanPrompt(task, repo);
+  const prompt = promptOverride ?? await buildPlanPrompt(task, repo);
   const model = config.defaultModel;
 
   const db = getDb();
