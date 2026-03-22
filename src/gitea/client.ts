@@ -12,6 +12,20 @@ function giteaUrl(path: string): string {
   return `${config.giteaUrl}${path}`;
 }
 
+/** Rewrite a Gitea-generated URL to use GITEA_URL as the base (Gitea may return an internal hostname). */
+export function rewriteGiteaUrl(url: string): string {
+  if (!config.giteaUrl) return url;
+  try {
+    const target = new URL(config.giteaUrl);
+    const parsed = new URL(url);
+    parsed.protocol = target.protocol;
+    parsed.host = target.host;
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
 function authHeaders(token?: string): Record<string, string> {
   const t = token ?? _botToken;
   if (!t) throw new Error("Gitea bot token not initialized");

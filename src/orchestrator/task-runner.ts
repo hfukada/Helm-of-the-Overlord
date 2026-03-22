@@ -19,7 +19,7 @@ import { renderTemplate } from "../prompts/loader";
 import { getMessagingManager } from "../messaging/manager";
 import { config } from "../shared/config";
 import { indexTaskChatHistory } from "../messaging/indexer";
-import { isGiteaConfigured, createPullRequest, commentOnPullRequest } from "../gitea/client";
+import { isGiteaConfigured, createPullRequest, commentOnPullRequest, rewriteGiteaUrl } from "../gitea/client";
 import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
 import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
@@ -502,12 +502,13 @@ export async function runTask(taskId: string): Promise<void> {
         prBody
       );
 
+      const prUrl = rewriteGiteaUrl(pr.html_url);
       db.run(
         "UPDATE tasks SET gitea_pr_number = ?, gitea_pr_url = ? WHERE id = ?",
-        [pr.number, pr.html_url, task.id]
+        [pr.number, prUrl, task.id]
       );
 
-      logger.info("Created Gitea PR", { taskId: task.id, prNumber: pr.number, url: pr.html_url });
+      logger.info("Created Gitea PR", { taskId: task.id, prNumber: pr.number, url: prUrl });
 
       // Seed cursors and start polling for review events
       await seedCursors(task.id, repo.name, pr.number);
