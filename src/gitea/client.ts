@@ -1,6 +1,10 @@
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { config } from "../shared/config";
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
+
+const ADMIN_TOKEN_FILE = "/gitea-data/gitea/hoto-admin-token";
 
 let _botToken: string | null = null;
 
@@ -72,11 +76,26 @@ async function waitForGitea(): Promise<void> {
   throw new Error("Gitea did not become ready in time");
 }
 
-async function createBotUser(): Promise<void> {
-  const adminToken = config.giteaAdminToken;
-  if (!adminToken) {
-    throw new Error("GITEA_ADMIN_TOKEN required for initial bot user creation");
+async function getAdminToken(): Promise<string> {
+  // Try env var first
+  if (config.giteaAdminToken) return config.giteaAdminToken;
+
+  // Try reading from the auto-generated token file (written by gitea-init.sh)
+  if (existsSync(ADMIN_TOKEN_FILE)) {
+    const token = (await readFile(ADMIN_TOKEN_FILE, "utf-8")).trim();
+    if (token) {
+      logger.info("Read Gitea admin token from init file");
+      return token;
+    }
   }
+
+  throw new Error(
+    "No Gitea admin token found. Either set GITEA_ADMIN_TOKEN or use the gitea-init.sh entrypoint in docker-compose."
+  );
+}
+
+async function createBotUser(): Promise<void> {
+  const adminToken = await getAdminToken();
 
   const username = config.giteaBotUser;
   const password = config.giteaBotPassword;
