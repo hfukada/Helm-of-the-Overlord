@@ -22,7 +22,7 @@ Usage:
   hoto repos remove <name>          Untrack repo
   hoto repos reindex [name]         Re-index repo knowledge
   hoto tokens                       Token usage summary
-  hoto open [task-id]               Open web UI in browser
+  hoto open [task-id]               Open Gitea PR in browser
   hoto daemon start|stop|status    Daemon management
   hoto help                         Show this help
 `.trim();

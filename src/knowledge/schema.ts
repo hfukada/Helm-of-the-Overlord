@@ -122,6 +122,40 @@ const MIGRATIONS = [
 ];
 
 const MIGRATIONS_V2 = [
+  `CREATE TABLE IF NOT EXISTS messaging_channels (
+    task_id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    provider TEXT NOT NULL DEFAULT 'matrix',
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS messaging_config (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS task_messages (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    source TEXT NOT NULL,
+    sender_id TEXT,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS task_input_requests (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    question TEXT NOT NULL,
+    answer TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    answered_at TEXT
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_task_input_requests_task ON task_input_requests(task_id, status)`,
+
   `CREATE TABLE IF NOT EXISTS container_secrets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
@@ -145,6 +179,8 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN ci_output TEXT",
   "ALTER TABLE tasks ADD COLUMN ci_passed INTEGER",
   "ALTER TABLE tasks ADD COLUMN use_full_copy INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE tasks ADD COLUMN gitea_pr_number INTEGER",
+  "ALTER TABLE tasks ADD COLUMN gitea_pr_url TEXT",
 ];
 
 export function runMigrations(db: Database): void {

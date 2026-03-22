@@ -1,6 +1,5 @@
 import { getDb } from "./db";
-import { embed, cosineSimilarity } from "./embeddings";
-import { isOllamaAvailable } from "./embeddings";
+import { isChromaAvailable, getOrCreateCollection } from "./chromadb";
 import { logger } from "../shared/logger";
 
 export interface SearchResult {
@@ -27,10 +26,10 @@ export async function search(opts: SearchOptions): Promise<SearchResult[]> {
 
   // Run keyword and vector search in parallel where possible
   const keywordResults = keywordSearch(opts);
-  const ollamaReady = await isOllamaAvailable();
+  const chromaReady = await isChromaAvailable();
 
   let vectorResults: SearchResult[] = [];
-  if (ollamaReady) {
+  if (chromaReady) {
     vectorResults = await vectorSearch(opts);
   }
 
@@ -90,70 +89,75 @@ function keywordSearch(opts: SearchOptions): SearchResult[] {
 
 async function vectorSearch(opts: SearchOptions): Promise<SearchResult[]> {
   const db = getDb();
+  const limit = opts.limit ?? 20;
 
-  let queryEmbedding: number[];
-  try {
-    const result = await embed(opts.query);
-    queryEmbedding = result.embedding;
-  } catch (err) {
-    logger.warn("Failed to embed query", { error: String(err) });
-    return [];
-  }
-
-  // Fetch all embeddings for the relevant scope
-  let whereClause = "1=1";
-  const params: (string | number)[] = [];
+  // Find repo name for collection lookup
+  let repoName: string | null = null;
   if (opts.repo_id) {
-    whereClause += " AND kc.repo_id = ?";
-    params.push(opts.repo_id);
-  }
-  if (opts.chunk_type) {
-    whereClause += " AND kc.chunk_type = ?";
-    params.push(opts.chunk_type);
+    const row = db.query("SELECT name FROM repos WHERE id = ?").get(opts.repo_id) as { name: string } | null;
+    repoName = row?.name ?? null;
   }
 
-  const rows = db.query(
-    `SELECT kc.id as chunk_id, kc.repo_id, r.name as repo_name,
-            kc.source_file, kc.chunk_type, kc.title, kc.content,
-            ke.embedding
-     FROM knowledge_chunks kc
-     JOIN repos r ON r.id = kc.repo_id
-     JOIN knowledge_embeddings ke ON ke.chunk_id = kc.id
-     WHERE ${whereClause}`
-  ).all(...params) as Array<{
-    chunk_id: number;
-    repo_id: number;
-    repo_name: string;
-    source_file: string;
-    chunk_type: string;
-    title: string;
-    content: string;
-    embedding: Buffer;
-  }>;
+  // If no specific repo, search all repos
+  const repoNames: string[] = [];
+  if (repoName) {
+    repoNames.push(repoName);
+  } else {
+    const rows = db.query("SELECT name FROM repos").all() as Array<{ name: string }>;
+    repoNames.push(...rows.map((r) => r.name));
+  }
 
-  const scored = rows.map((row) => {
-    const storedEmbedding = new Float32Array(
-      row.embedding.buffer,
-      row.embedding.byteOffset,
-      row.embedding.byteLength / 4
-    );
-    const score = cosineSimilarity(queryEmbedding, Array.from(storedEmbedding));
+  const allResults: SearchResult[] = [];
 
-    return {
-      chunk_id: row.chunk_id,
-      repo_id: row.repo_id,
-      repo_name: row.repo_name,
-      source_file: row.source_file,
-      chunk_type: row.chunk_type,
-      title: row.title,
-      content: row.content,
-      score,
-      match_type: "vector" as const,
-    };
-  });
+  for (const name of repoNames) {
+    try {
+      const collection = await getOrCreateCollection(name);
+      const whereFilter: Record<string, string> = {};
+      if (opts.chunk_type) {
+        whereFilter["chunk_type"] = opts.chunk_type;
+      }
 
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, opts.limit ?? 20);
+      const queryOpts: {
+        queryTexts: string[];
+        nResults: number;
+        where?: Record<string, string>;
+      } = {
+        queryTexts: [opts.query],
+        nResults: limit,
+      };
+      if (Object.keys(whereFilter).length > 0) {
+        queryOpts.where = whereFilter;
+      }
+
+      const results = await collection.query(queryOpts);
+
+      if (results.ids[0]) {
+        for (let i = 0; i < results.ids[0].length; i++) {
+          const meta = results.metadatas?.[0]?.[i] as Record<string, string> | undefined;
+          const distance = results.distances?.[0]?.[i] ?? 1;
+          // ChromaDB returns distances; convert to similarity score (cosine distance -> similarity)
+          const score = 1 - distance;
+
+          allResults.push({
+            chunk_id: 0, // ChromaDB results don't have SQLite IDs
+            repo_id: meta?.repo_id ? parseInt(meta.repo_id, 10) : 0,
+            repo_name: meta?.repo_name ?? name,
+            source_file: meta?.source_file ?? "",
+            chunk_type: meta?.chunk_type ?? "",
+            title: meta?.title ?? "",
+            content: results.documents?.[0]?.[i] ?? "",
+            score,
+            match_type: "vector" as const,
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn("ChromaDB vector search failed for repo", { repo: name, error: String(err) });
+    }
+  }
+
+  allResults.sort((a, b) => b.score - a.score);
+  return allResults.slice(0, limit);
 }
 
 function mergeResults(
@@ -161,22 +165,26 @@ function mergeResults(
   vector: SearchResult[],
   limit: number
 ): SearchResult[] {
-  const merged = new Map<number, SearchResult>();
+  const merged = new Map<string, SearchResult>();
+
+  // Use source_file + content prefix as dedup key since ChromaDB results lack chunk_id
+  const key = (r: SearchResult) => `${r.repo_name}:${r.source_file}:${r.content.slice(0, 100)}`;
 
   // Add keyword results
   for (const r of keyword) {
-    merged.set(r.chunk_id, r);
+    merged.set(key(r), r);
   }
 
   // Merge vector results, combining scores for overlaps
   for (const r of vector) {
-    const existing = merged.get(r.chunk_id);
+    const k = key(r);
+    const existing = merged.get(k);
     if (existing) {
       // Hybrid score: weighted combination
       existing.score = existing.score * 0.3 + r.score * 0.7;
       existing.match_type = "hybrid";
     } else {
-      merged.set(r.chunk_id, r);
+      merged.set(k, r);
     }
   }
 

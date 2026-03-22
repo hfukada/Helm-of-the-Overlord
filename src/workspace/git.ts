@@ -204,6 +204,28 @@ export async function getDefaultBranch(repoPath: string): Promise<string> {
   }
 }
 
+export async function addRemote(repoPath: string, name: string, url: string): Promise<void> {
+  try {
+    await $`git -C ${repoPath} remote add ${name} ${url}`.quiet();
+  } catch {
+    // Remote may already exist -- update the URL
+    await $`git -C ${repoPath} remote set-url ${name} ${url}`.quiet();
+  }
+}
+
+export async function pushToRemote(
+  wtDir: string,
+  branchName: string,
+  remoteName: string,
+  force?: boolean
+): Promise<void> {
+  if (force) {
+    await $`git -C ${wtDir} push --force ${remoteName} ${branchName}`.quiet();
+  } else {
+    await $`git -C ${wtDir} push ${remoteName} ${branchName}`.quiet();
+  }
+}
+
 export function generateBranchName(taskId: string, title: string): string {
   const slug = title
     .toLowerCase()

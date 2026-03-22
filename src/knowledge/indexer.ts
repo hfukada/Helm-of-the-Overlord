@@ -3,7 +3,7 @@ import { join, } from "node:path";
 import { existsSync } from "node:fs";
 import { $ } from "bun";
 import { getDb } from "./db";
-import { embedBatch, isOllamaAvailable } from "./embeddings";
+import { isChromaAvailable, getOrCreateCollection, deleteCollectionItems } from "./chromadb";
 import { logger } from "../shared/logger";
 import type { Repo } from "../shared/types";
 
@@ -14,7 +14,8 @@ type ChunkType =
   | "architecture"
   | "code_pattern"
   | "config"
-  | "changelog";
+  | "changelog"
+  | "chat_history";
 
 interface Chunk {
   source_file: string;
@@ -86,12 +87,12 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
       const changed = await getChangedFiles(repoPath, storedHash, currentHash);
       if (changed.length === 0) {
         logger.info("No files changed since last index", { repo: repo.name, hash: storedHash });
-        // Update hash even if no changes (in case it was a merge with no diff)
         db.run("UPDATE repos SET index_commit_hash = ? WHERE id = ?", [currentHash, repo.id]);
         return { chunks: 0, embeddings: 0 };
       }
       changedFileSet = new Set(changed);
       logger.info("Incremental reindex", { repo: repo.name, changedFiles: changed.length });
+
       // Delete chunks only for changed files
       const deleteStmt = db.prepare("DELETE FROM knowledge_chunks WHERE repo_id = ? AND source_file = ?");
       const deleteTx = db.transaction((files: string[]) => {
@@ -100,6 +101,13 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
         }
       });
       deleteTx(changed);
+
+      // Also delete from ChromaDB for changed files
+      const chromaReady = await isChromaAvailable();
+      if (chromaReady) {
+        const chromaIds = changed.map((f) => `${repo.id}-${f}`);
+        await deleteCollectionItems(repo.name, chromaIds);
+      }
     } else {
       logger.info("Stored commit hash invalid, full reindex", { repo: repo.name, storedHash });
       db.run("DELETE FROM knowledge_chunks WHERE repo_id = ?", [repo.id]);
@@ -211,14 +219,14 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
   insertTx(chunks);
   logger.info("Indexed chunks", { repo: repo.name, count: chunks.length });
 
-  // Generate embeddings if Ollama is available
+  // Upsert into ChromaDB if available
   let embeddingCount = 0;
-  const ollamaReady = await isOllamaAvailable();
+  const chromaReady = await isChromaAvailable();
 
-  if (ollamaReady) {
-    embeddingCount = await generateEmbeddings(repo.id);
+  if (chromaReady) {
+    embeddingCount = await upsertToChroma(repo, chunks);
   } else {
-    logger.warn("Ollama not available, skipping embeddings", { repo: repo.name });
+    logger.warn("ChromaDB not available, skipping vector indexing", { repo: repo.name });
   }
 
   // Update stored commit hash
@@ -229,50 +237,63 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
   return { chunks: chunks.length, embeddings: embeddingCount };
 }
 
-async function generateEmbeddings(repoId: number): Promise<number> {
+async function upsertToChroma(repo: Repo, chunks: Chunk[]): Promise<number> {
+  if (chunks.length === 0) return 0;
+
+  try {
+    const collection = await getOrCreateCollection(repo.name);
+    const BATCH_SIZE = 100;
+    let total = 0;
+
+    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
+      const batch = chunks.slice(i, i + BATCH_SIZE);
+      const ids = batch.map((c, j) => `${repo.id}-${c.source_file}-${i + j}`);
+      const documents = batch.map((c) => c.content);
+      const metadatas = batch.map((c) => ({
+        repo_id: String(repo.id),
+        repo_name: repo.name,
+        source_file: c.source_file,
+        chunk_type: c.chunk_type,
+        title: c.title,
+      }));
+
+      await collection.upsert({ ids, documents, metadatas });
+      total += batch.length;
+    }
+
+    logger.info("ChromaDB upsert complete", { repo: repo.name, count: total });
+    return total;
+  } catch (err) {
+    logger.error("ChromaDB upsert failed", { repo: repo.name, error: String(err) });
+    return 0;
+  }
+}
+
+export async function indexChatHistory(
+  repo: Repo,
+  taskId: string,
+  content: string
+): Promise<void> {
   const db = getDb();
 
-  const chunkRows = db.query(
-    `SELECT kc.id, kc.content FROM knowledge_chunks kc
-     LEFT JOIN knowledge_embeddings ke ON ke.chunk_id = kc.id
-     WHERE kc.repo_id = ? AND ke.chunk_id IS NULL`
-  ).all(repoId) as Array<{ id: number; content: string }>;
+  const chunk: Chunk = {
+    source_file: `chat/${taskId}`,
+    chunk_type: "chat_history",
+    title: `Chat history for task ${taskId}`,
+    content,
+    metadata: { taskId },
+  };
 
-  if (chunkRows.length === 0) return 0;
-
-  logger.info("Generating embeddings", { count: chunkRows.length });
-
-  const BATCH_SIZE = 32;
-  const insertEmbed = db.prepare(
-    "INSERT OR REPLACE INTO knowledge_embeddings (chunk_id, embedding, model) VALUES (?, ?, ?)"
+  db.run(
+    `INSERT INTO knowledge_chunks (repo_id, source_file, chunk_type, title, content, metadata)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [repo.id, chunk.source_file, chunk.chunk_type, chunk.title, chunk.content, JSON.stringify(chunk.metadata)]
   );
-  let total = 0;
 
-  for (let i = 0; i < chunkRows.length; i += BATCH_SIZE) {
-    const batch = chunkRows.slice(i, i + BATCH_SIZE);
-    const texts = batch.map((c) => c.content.slice(0, 8000)); // Ollama context limit
-
-    try {
-      const results = await embedBatch(texts);
-      const tx = db.transaction(() => {
-        for (let j = 0; j < batch.length; j++) {
-          const buf = new Float32Array(results[j].embedding);
-          insertEmbed.run(
-            batch[j].id,
-            Buffer.from(buf.buffer),
-            results[j].model
-          );
-        }
-      });
-      tx();
-      total += batch.length;
-    } catch (err) {
-      logger.error("Embedding batch failed", { error: String(err), offset: i });
-    }
+  const chromaReady = await isChromaAvailable();
+  if (chromaReady) {
+    await upsertToChroma(repo, [chunk]);
   }
-
-  logger.info("Embeddings generated", { count: total });
-  return total;
 }
 
 function splitIntoChunks(

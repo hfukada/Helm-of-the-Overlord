@@ -1,0 +1,65 @@
+services:
+  hoto:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - hoto-data:/data
+      - gitea-data:/gitea-data:ro
+      # Mount host credentials for Claude Code
+      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+    env_file:
+      - .env
+    environment:
+      HOTO_HOST: "0.0.0.0"
+      HOTO_PORT: "7777"
+      HOTO_WORKSPACE: /data
+      CHROMA_URL: http://chromadb:8000
+      MATRIX_HOMESERVER_URL: http://synapse:8008
+      GITEA_URL: http://gitea:3000
+    depends_on:
+      - chromadb
+      - synapse
+      - gitea
+
+  chromadb:
+    image: ghcr.io/chroma-core/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+
+  synapse:
+    image: matrixdotorg/synapse:latest
+    entrypoint: ["/bin/bash", "/scripts/synapse-init.sh"]
+    ports:
+      - "8008:8008"
+    volumes:
+      - synapse-data:/data
+      - ./scripts/synapse-init.sh:/scripts/synapse-init.sh:ro
+
+  gitea:
+    image: gitea/gitea:latest
+    entrypoint: ["/bin/sh", "/hoto-scripts/gitea-init.sh"]
+    ports:
+      - "3000:3000"
+    volumes:
+      - gitea-data:/data
+      - ./scripts/gitea-init.sh:/hoto-scripts/gitea-init.sh:ro
+    environment:
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__database__PATH: /data/gitea/gitea.db
+      GITEA__server__ROOT_URL: http://gitea:3000
+      GITEA__server__DOMAIN: gitea
+      GITEA__service__DISABLE_REGISTRATION: "false"
+      GITEA__api__ENABLE_SWAGGER: "false"
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__server__DISABLE_SSH: "true"
+
+volumes:
+  hoto-data:
+  chroma-data:
+  synapse-data:
+  gitea-data:

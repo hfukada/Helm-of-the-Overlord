@@ -1,9 +1,10 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
 import { runClaude } from "../../subprocess";
-import { buildSystemPrompt } from "../../context-builder";
+import { buildSystemPrompt, getChatContext } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
+import { renderTemplate } from "../../../prompts/loader";
 
 export async function executeFixLint(
   task: Task,
@@ -17,23 +18,14 @@ export async function executeFixLint(
   const agentRunId = ulid();
   const model = config.defaultModel;
 
-  const prompt = [
-    "You are a lint-fixing agent. Fix all lint errors shown below.",
-    "",
-    `## Repository: ${repo.name}`,
-    `Lint command: ${lintCommand}`,
-    "",
-    "## Lint Output (errors to fix)",
-    "```",
+  const chatContext = await getChatContext(task.id);
+
+  const prompt = await renderTemplate("fix-lint", {
+    repoName: repo.name,
+    lintCommand,
     lintOutput,
-    "```",
-    "",
-    "## Instructions",
-    "- Read the files that have lint errors.",
-    "- Fix each error. Prefer minimal, targeted fixes.",
-    "- Do NOT change logic or add features -- only fix lint issues.",
-    "- Do NOT run the lint command yourself.",
-  ].join("\n");
+    chatContext: chatContext || undefined,
+  });
 
   const db = getDb();
   db.run(

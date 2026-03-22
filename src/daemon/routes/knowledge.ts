@@ -9,6 +9,7 @@ import { parseRepo } from "../../knowledge/repo-parser";
 import { logger } from "../../shared/logger";
 import type { Repo } from "../../shared/types";
 import { claudeStream } from "../../shared/claude-cli";
+import { renderTemplate } from "../../prompts/loader";
 
 const knowledge = new Hono();
 
@@ -216,7 +217,7 @@ knowledge.get("/ask/:id/stream", (c) => {
   });
 });
 
-function buildAskPrompt(query: string, results: SearchResult[]) {
+async function buildAskPrompt(query: string, results: SearchResult[]) {
   const MAX_CONTENT_CHARS = 1200;
 
   const contextParts = results.map((r, i) => {
@@ -228,40 +229,36 @@ function buildAskPrompt(query: string, results: SearchResult[]) {
 
   const context = contextParts.join("\n\n---\n\n");
 
-  return {
-    systemPrompt:
-      "You are a helpful assistant with access to a codebase knowledge base. " +
-      "Answer the user's question based on the provided context. " +
-      "Be concise and precise. Reference specific files or code when relevant. " +
-      "If the context does not contain enough information to answer, say so clearly.",
-    prompt:
-      `Question: ${query}\n\nContext from knowledge base:\n\n${context}\n\nAnswer the question based on the context above.`,
-  };
+  const systemPrompt = await renderTemplate("ask-system", {});
+  const prompt = await renderTemplate("ask-user", { query, context });
+
+  return { systemPrompt, prompt };
 }
 
 function runAskInBackground(askId: string, query: string, results: SearchResult[]): void {
   const db = getDb();
-  const { systemPrompt, prompt } = buildAskPrompt(query, results);
 
-  const insertEvent = db.query(
-    "INSERT INTO ask_stream (ask_query_id, event_type, content) VALUES (?, ?, ?)"
-  );
+  buildAskPrompt(query, results).then(({ systemPrompt, prompt }) => {
+    const insertEvent = db.query(
+      "INSERT INTO ask_stream (ask_query_id, event_type, content) VALUES (?, ?, ?)"
+    );
 
-  claudeStream(
-    { prompt, systemPrompt },
-    async (evt) => {
-      insertEvent.run(askId, evt.type, evt.content);
-    },
-  ).then((result) => {
-    if (result.error) {
-      db.query(
-        "UPDATE ask_queries SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?"
-      ).run(result.error, askId);
-    } else {
-      db.query(
-        "UPDATE ask_queries SET status = 'completed', answer = ?, sources = ?, finished_at = datetime('now') WHERE id = ?"
-      ).run(result.text, JSON.stringify(results), askId);
-    }
+    return claudeStream(
+      { prompt, systemPrompt },
+      async (evt) => {
+        insertEvent.run(askId, evt.type, evt.content);
+      },
+    ).then((result) => {
+      if (result.error) {
+        db.query(
+          "UPDATE ask_queries SET status = 'failed', error = ?, finished_at = datetime('now') WHERE id = ?"
+        ).run(result.error, askId);
+      } else {
+        db.query(
+          "UPDATE ask_queries SET status = 'completed', answer = ?, sources = ?, finished_at = datetime('now') WHERE id = ?"
+        ).run(result.text, JSON.stringify(results), askId);
+      }
+    });
   }).catch((err) => {
     logger.error("Background ask failed", { askId, error: String(err) });
     db.query(

@@ -8,6 +8,7 @@ export type TaskStatus =
   | "ci_running"
   | "ci_fixing"
   | "review"
+  | "waiting_for_input"
   | "accepted"
   | "committed"
   | "failed"

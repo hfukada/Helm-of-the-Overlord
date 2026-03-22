@@ -1,10 +1,9 @@
 import { $ } from "bun";
 import { daemonUrl } from "../../shared/config";
+import { config } from "../../shared/config";
 
 export async function openCommand(args: string[]): Promise<void> {
   const taskId = args[0];
-  const path = taskId ? `/app/tasks/${taskId}` : "/app/";
-  const url = daemonUrl(path);
 
   // Verify daemon is running
   try {
@@ -14,9 +13,36 @@ export async function openCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  let url: string;
+
+  if (taskId) {
+    // Try to get the Gitea PR URL for this task
+    try {
+      const res = await fetch(daemonUrl(`/tasks/${taskId}`));
+      if (res.ok) {
+        const task = await res.json() as { gitea_pr_url?: string };
+        if (task.gitea_pr_url) {
+          url = task.gitea_pr_url;
+        } else {
+          // Fall back to API URL
+          url = daemonUrl(`/tasks/${taskId}`);
+        }
+      } else {
+        console.error("Task not found");
+        process.exit(1);
+      }
+    } catch {
+      url = daemonUrl(`/tasks/${taskId}`);
+    }
+  } else if (config.giteaUrl) {
+    // Open the Gitea org page
+    url = `${config.giteaUrl}/${config.giteaOrg}`;
+  } else {
+    url = daemonUrl("/health");
+  }
+
   console.log(`Opening ${url}`);
 
-  // Open browser (cross-platform)
   const platform = process.platform;
   try {
     if (platform === "darwin") {

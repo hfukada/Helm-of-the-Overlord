@@ -1,9 +1,10 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
 import { runClaude } from "../../subprocess";
-import { buildSystemPrompt } from "../../context-builder";
+import { buildSystemPrompt, getChatContext } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
+import { renderTemplate } from "../../../prompts/loader";
 
 export async function executeFixCi(
   task: Task,
@@ -16,25 +17,15 @@ export async function executeFixCi(
   const agentRunId = ulid();
   const model = config.defaultModel;
 
-  const prompt = [
-    "You are a CI-fixing agent. The CI/test pipeline has failed. Fix the issues.",
-    "",
-    `## Repository: ${repo.name}`,
-    repo.test_cmd ? `Test command: ${repo.test_cmd}` : "",
-    repo.build_cmd ? `Build command: ${repo.build_cmd}` : "",
-    "",
-    "## CI/Test Output (failures)",
-    "```",
+  const chatContext = await getChatContext(task.id);
+
+  const prompt = await renderTemplate("fix-ci", {
+    repoName: repo.name,
+    testCmd: repo.test_cmd ?? undefined,
+    buildCmd: repo.build_cmd ?? undefined,
     ciOutput,
-    "```",
-    "",
-    "## Instructions",
-    "- Analyze the test/build failures.",
-    "- Read the relevant source and test files.",
-    "- Fix the failures with minimal, targeted changes.",
-    "- Do NOT add new tests or features -- only fix what's broken.",
-    "- Do NOT run the tests yourself.",
-  ].join("\n");
+    chatContext: chatContext || undefined,
+  });
 
   const db = getDb();
   db.run(
