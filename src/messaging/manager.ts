@@ -684,14 +684,15 @@ export class MessagingManager {
     });
 
     if (res.ok) {
-      // Announce in main channel if we're not already there
+      // Always notify the channel where the command was issued
+      await this.provider.sendMessage(cmd.channelId, `Task "${title}" (${taskId}) deleted.`);
+
+      // Also announce in main channel if the command came from a task channel
       if (this.mainChannelId && cmd.channelId !== this.mainChannelId) {
         await this.provider.sendMessage(
           this.mainChannelId,
-          `Task "${title}" (${taskId.slice(0, 8)}) deleted.`
+          `Task "${title}" (${taskId}) deleted.`
         );
-      } else {
-        await this.provider.sendMessage(cmd.channelId, `Task "${title}" (${taskId.slice(0, 8)}) deleted.`);
       }
     } else {
       const body = await res.text();
