@@ -8,7 +8,7 @@ import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
 import { executeLint } from "./nodes/deterministic/lint";
 import { rm } from "node:fs/promises";
-import { createWorktree, generateBranchName, removeWorktree } from "../workspace/git";
+import { createTaskClone, generateBranchName, removeTaskClone } from "../workspace/git";
 import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
@@ -166,46 +166,7 @@ export async function cleanupTask(taskId: string): Promise<void> {
     [taskId]
   );
 
-  // Look up task and repo to find the worktree
-  const taskRow = db.query("SELECT branch_name, repo_id FROM tasks WHERE id = ?").get(taskId) as {
-    branch_name: string | null;
-    repo_id: number | null;
-  } | null;
-
-  if (!taskRow || !taskRow.repo_id || !taskRow.branch_name) {
-    logger.info("No worktree to clean up", { taskId });
-    return;
-  }
-
-  const repoRow = db.query("SELECT path, name FROM repos WHERE id = ?").get(taskRow.repo_id) as {
-    path: string;
-    name: string;
-  } | null;
-
-  if (!repoRow) {
-    logger.warn("Repo not found during cleanup", { taskId, repoId: taskRow.repo_id });
-    return;
-  }
-
-  const wtDir = worktreeDir(taskId, repoRow.name);
-
-  // Remove git worktree
-  try {
-    await removeWorktree(repoRow.path, wtDir);
-    logger.info("Removed worktree", { taskId, wtDir });
-  } catch (err) {
-    logger.warn("Failed to remove worktree (may not exist)", { taskId, wtDir, error: String(err) });
-  }
-
-  // Delete the branch
-  try {
-    await $`git -C ${repoRow.path} branch -D ${taskRow.branch_name}`.quiet().nothrow();
-    logger.info("Deleted branch", { taskId, branch: taskRow.branch_name });
-  } catch (err) {
-    logger.warn("Failed to delete branch", { taskId, branch: taskRow.branch_name, error: String(err) });
-  }
-
-  // Remove the task directory (MCP config, logs, etc.)
+  // Remove the task directory (clone, MCP config, logs, etc.)
   try {
     const tDir = taskDir(taskId);
     await rm(tDir, { recursive: true, force: true });
@@ -285,9 +246,9 @@ export async function runTask(taskId: string): Promise<void> {
   let workDir: string;
   try {
     await ensureTaskDir(task.id);
-    workDir = await createWorktree(repo.path, task.id, repo.name, branchName);
+    workDir = await createTaskClone(repo.path, task.id, repo.name, branchName);
   } catch (err) {
-    logger.error("Failed to create worktree", { error: String(err) });
+    logger.error("Failed to clone repo for task", { error: String(err) });
     updateTaskStatus(task.id, "failed");
     return;
   }
@@ -490,10 +451,9 @@ export async function runTask(taskId: string): Promise<void> {
   }
 
   // === REVIEW ===
-  updateTaskStatus(task.id, "review", state);
   logger.info("Task ready for review", { taskId: task.id });
 
-  // Commit all changes and push to Gitea for review
+  // 1. Commit all changes
   try {
     await $`git -C ${workDir} add -A`.quiet();
     const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
@@ -505,7 +465,7 @@ export async function runTask(taskId: string): Promise<void> {
     logger.warn("Failed to commit changes", { taskId: task.id, error: String(err) });
   }
 
-  // Push to Gitea and create PR if configured
+  // 2. Push to Gitea and create PR (before setting review status, so the URL is available)
   if (isGiteaConfigured()) {
     try {
       await ensureRepoOnGitea(repo.path, repo.name);
@@ -550,7 +510,10 @@ export async function runTask(taskId: string): Promise<void> {
     }
   }
 
-  // Notify review ready via messaging
+  // 3. Now set review status -- notifyTaskStatusChange will read the PR URL from DB
+  updateTaskStatus(task.id, "review", state);
+
+  // 4. Also announce in main channel with PR link
   if (manager) {
     manager.notifyReviewReady(task).catch(() => {});
   }

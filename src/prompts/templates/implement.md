@@ -17,9 +17,9 @@ Description: {{taskDescription}}
 - Follow the Execution Plan checklist above step by step, in order.
 - Use the repository knowledge above to understand existing patterns and conventions.
 - Write clean, idiomatic code that matches the existing style.
-- Do a final check to see if you can generalize things or hook into existing patterns
 - Do NOT run lint or test commands yourself -- the orchestrator handles that automatically after you finish.
 - Do NOT commit changes -- just write the files.
+- Do a final check to see if you can generalize things or hook into existing patterns
 {{#if chatContext}}
 ## Human Feedback
 The following messages were exchanged during this task:

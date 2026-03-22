@@ -18,6 +18,9 @@ export async function ensureTaskDir(taskId: string): Promise<string> {
   return dir;
 }
 
-export function worktreeDir(taskId: string, repoName: string): string {
+export function taskWorkDir(taskId: string, repoName: string): string {
   return join(taskDir(taskId), repoName);
 }
+
+/** @deprecated Use taskWorkDir instead */
+export const worktreeDir = taskWorkDir;
