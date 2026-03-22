@@ -22,9 +22,16 @@ export interface Config {
   giteaPollIntervalMs: number;
 }
 
+function expandHome(p: string): string {
+  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+  if (p === "~") return homedir();
+  return p;
+}
+
 function loadConfig(): Config {
-  const workspaceDir =
-    process.env.HOTO_WORKSPACE ?? join(homedir(), ".hoto-workspace");
+  const workspaceDir = expandHome(
+    process.env.HOTO_WORKSPACE ?? join(homedir(), ".hoto-workspace")
+  );
   const daemonPort = parseInt(process.env.HOTO_PORT ?? "7777", 10);
   const daemonHost = process.env.HOTO_HOST ?? "127.0.0.1";
   const defaultModel = process.env.HOTO_MODEL ?? "claude-sonnet-4-6";

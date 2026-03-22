@@ -493,6 +493,18 @@ export async function runTask(taskId: string): Promise<void> {
   updateTaskStatus(task.id, "review", state);
   logger.info("Task ready for review", { taskId: task.id });
 
+  // Commit all changes and push to Gitea for review
+  try {
+    await $`git -C ${workDir} add -A`.quiet();
+    const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
+    if (hasChanges.exitCode !== 0) {
+      await $`git -C ${workDir} commit -m ${"hoto: " + task.title}`.quiet();
+      logger.info("Committed implementation changes", { taskId: task.id });
+    }
+  } catch (err) {
+    logger.warn("Failed to commit changes", { taskId: task.id, error: String(err) });
+  }
+
   // Push to Gitea and create PR if configured
   if (isGiteaConfigured()) {
     try {
@@ -713,6 +725,18 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   // === REVIEW ===
   updateTaskStatus(task.id, "review", state);
   logger.info("Revision ready for review", { taskId: task.id });
+
+  // Commit revision changes
+  try {
+    await $`git -C ${workDir} add -A`.quiet();
+    const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
+    if (hasChanges.exitCode !== 0) {
+      await $`git -C ${workDir} commit -m ${"hoto: revision for " + task.title}`.quiet();
+      logger.info("Committed revision changes", { taskId: task.id });
+    }
+  } catch (err) {
+    logger.warn("Failed to commit revision changes", { taskId: task.id, error: String(err) });
+  }
 
   // Re-push to Gitea and restart poller if we have a PR
   if (isGiteaConfigured()) {
