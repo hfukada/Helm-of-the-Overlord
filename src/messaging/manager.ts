@@ -69,6 +69,16 @@ const COMMAND_HELP: Record<string, string> = {
     "The agent will revise based on your feedback, then re-push for review.",
     "Example: !revise Use a map instead of an array for O(1) lookups",
   ].join("\n"),
+  "delete-task": [
+    "!delete-task [id]",
+    "Delete a task and clean up its working directories and database entries.",
+    "In the main channel: !delete-task <id>  (use the first few characters of the ID)",
+    "In a task channel:   !delete-task       (no argument needed)",
+    "This permanently removes the task, its worktree, agent runs, messages, and channel.",
+    "Examples:",
+    "  !delete-task 01JA3B",
+    "  !delete-task  (from inside the task's channel)",
+  ].join("\n"),
   help: [
     "!help [command]",
     "Show the command list, or detailed help for a specific command.",
@@ -150,6 +160,9 @@ export class MessagingManager {
         break;
       case "revise":
         await this.cmdRevise(cmd);
+        break;
+      case "delete-task":
+        await this.cmdDeleteTask(cmd);
         break;
       case "help":
         await this.cmdHelp(cmd);
@@ -318,6 +331,21 @@ export class MessagingManager {
     } catch (err) {
       logger.warn("Failed to create task channel", { taskId: task.id, error: String(err) });
       return null;
+    }
+  }
+
+  async archiveTaskChannel(taskId: string): Promise<void> {
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT channel_id FROM messaging_channels WHERE task_id = ?"
+    ).get(taskId) as { channel_id: string } | null;
+
+    if (!channelRow) return;
+
+    try {
+      await this.provider.archiveChannel(channelRow.channel_id);
+    } catch (err) {
+      logger.warn("Failed to archive task channel", { taskId, error: String(err) });
     }
   }
 
@@ -615,6 +643,62 @@ export class MessagingManager {
     }
   }
 
+  private async cmdDeleteTask(cmd: CommandEvent): Promise<void> {
+    const db = getDb();
+    let taskId: string | null = null;
+
+    if (cmd.args[0]) {
+      // Main channel usage: !delete-task <id-prefix>
+      const prefix = cmd.args[0];
+      const task = db.query(
+        "SELECT id FROM tasks WHERE id LIKE ?"
+      ).get(`${prefix}%`) as { id: string } | null;
+
+      if (!task) {
+        await this.provider.sendMessage(cmd.channelId, `Task not found: ${prefix}`);
+        return;
+      }
+      taskId = task.id;
+    } else {
+      // Task channel usage: no argument
+      const channelRow = db.query(
+        "SELECT task_id FROM messaging_channels WHERE channel_id = ?"
+      ).get(cmd.channelId) as { task_id: string } | null;
+
+      if (!channelRow) {
+        await this.provider.sendMessage(
+          cmd.channelId,
+          "Usage: !delete-task <id>  (or run !delete-task from inside a task channel)"
+        );
+        return;
+      }
+      taskId = channelRow.task_id;
+    }
+
+    // Fetch task title for the announcement before deletion
+    const taskRow = db.query("SELECT title FROM tasks WHERE id = ?").get(taskId) as { title: string } | null;
+    const title = taskRow?.title ?? taskId;
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/${taskId}`, {
+      method: "DELETE",
+    });
+
+    if (res.ok) {
+      // Announce in main channel if we're not already there
+      if (this.mainChannelId && cmd.channelId !== this.mainChannelId) {
+        await this.provider.sendMessage(
+          this.mainChannelId,
+          `Task "${title}" (${taskId.slice(0, 8)}) deleted.`
+        );
+      } else {
+        await this.provider.sendMessage(cmd.channelId, `Task "${title}" (${taskId.slice(0, 8)}) deleted.`);
+      }
+    } else {
+      const body = await res.text();
+      await this.provider.sendMessage(cmd.channelId, `Failed to delete task: ${body}`);
+    }
+  }
+
   private async cmdHelp(cmd: CommandEvent): Promise<void> {
     const topic = cmd.args[0];
 
@@ -635,6 +719,7 @@ export class MessagingManager {
       "  !list                     List recent tasks (last 20)",
       "  !status <id>              Show task details (status, branch, timestamps)",
       "  !cancel <id>              Cancel a running task and clean up its worktree",
+      "  !delete-task <id>         Delete a task and remove all associated data",
       "  !run <description>        Submit a new task",
       "  !repos                    List all registered repos with language/framework",
       "  !repo add <url> [--name]  Clone and register a repo from a git URL",
@@ -646,6 +731,7 @@ export class MessagingManager {
       "In task channels:",
       "  !approve                  Accept the implementation (merge via Gitea)",
       "  !revise <feedback>        Request changes with specific feedback",
+      "  !delete-task              Delete this task and close the channel",
       "  (plain messages)          Answer questions from the agent",
     ];
     await this.provider.sendMessage(cmd.channelId, help.join("\n"));

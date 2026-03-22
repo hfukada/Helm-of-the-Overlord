@@ -5,6 +5,7 @@ import { runTask, cleanupTask } from "../../orchestrator/task-runner";
 import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
+import { getMessagingManager } from "../../messaging/manager";
 
 const tasks = new Hono();
 
@@ -189,6 +190,9 @@ tasks.delete("/:id", async (c) => {
     });
   }
 
+  // Archive the messaging channel before deleting DB rows
+  await getMessagingManager()?.archiveTaskChannel(id);
+
   // Delete related rows in dependency order to satisfy foreign-key constraints
   const agentRunIds = db
     .query("SELECT id FROM agent_runs WHERE task_id = ?")
@@ -199,6 +203,9 @@ tasks.delete("/:id", async (c) => {
   }
   db.run("DELETE FROM agent_runs WHERE task_id = ?", [id]);
   db.run("DELETE FROM diff_comments WHERE task_id = ?", [id]);
+  db.run("DELETE FROM task_input_requests WHERE task_id = ?", [id]);
+  db.run("DELETE FROM task_messages WHERE task_id = ?", [id]);
+  db.run("DELETE FROM messaging_channels WHERE task_id = ?", [id]);
   db.run("DELETE FROM tasks WHERE id = ?", [id]);
 
   logger.info("Task deleted", { taskId: id });
