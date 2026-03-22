@@ -21,7 +21,7 @@ import { config } from "../shared/config";
 import { indexTaskChatHistory } from "../messaging/indexer";
 import { isGiteaConfigured, createPullRequest, commentOnPullRequest } from "../gitea/client";
 import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
-import { startReviewPoller } from "../gitea/review-poller";
+import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
 
 const MAX_LINT_ROUNDS = 1;
@@ -509,7 +509,8 @@ export async function runTask(taskId: string): Promise<void> {
 
       logger.info("Created Gitea PR", { taskId: task.id, prNumber: pr.number, url: pr.html_url });
 
-      // Start polling for review events
+      // Seed cursors and start polling for review events
+      await seedCursors(task.id, repo.name, pr.number);
       startReviewPoller(task.id, repo.name, repo.path, branchName, pr.number);
     } catch (err) {
       notifyError(`Gitea push/PR failed: ${err}`);

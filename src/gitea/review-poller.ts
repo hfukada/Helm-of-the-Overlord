@@ -6,12 +6,10 @@ import {
   commentOnPullRequest,
   isGiteaConfigured,
 } from "./client";
-import { pushBranchToGitea } from "./repo-sync";
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
 import { reviseTask } from "../orchestrator/task-runner";
-import { worktreeDir } from "../workspace/manager";
 
 interface PollerState {
   taskId: string;
@@ -19,12 +17,52 @@ interface PollerState {
   repoPath: string;
   branchName: string;
   prNumber: number;
-  lastReviewId: number;
-  lastCommentId: number;
   timer: ReturnType<typeof setInterval> | null;
 }
 
 const activePollers = new Map<string, PollerState>();
+
+function loadCursors(taskId: string): { lastReviewId: number; lastCommentId: number } {
+  const db = getDb();
+  const row = db.query(
+    "SELECT gitea_last_review_id, gitea_last_comment_id FROM tasks WHERE id = ?"
+  ).get(taskId) as { gitea_last_review_id: number; gitea_last_comment_id: number } | null;
+  return {
+    lastReviewId: row?.gitea_last_review_id ?? 0,
+    lastCommentId: row?.gitea_last_comment_id ?? 0,
+  };
+}
+
+function saveCursors(taskId: string, lastReviewId: number, lastCommentId: number): void {
+  const db = getDb();
+  db.run(
+    "UPDATE tasks SET gitea_last_review_id = ?, gitea_last_comment_id = ? WHERE id = ?",
+    [lastReviewId, lastCommentId, taskId]
+  );
+}
+
+export async function seedCursors(
+  taskId: string,
+  repoName: string,
+  prNumber: number
+): Promise<void> {
+  let lastReviewId = 0;
+  let lastCommentId = 0;
+  try {
+    const reviews = await listPullRequestReviews(repoName, prNumber);
+    if (reviews.length > 0) {
+      lastReviewId = Math.max(...reviews.map((r) => r.id));
+    }
+    const comments = await listPullRequestComments(repoName, prNumber);
+    if (comments.length > 0) {
+      lastCommentId = Math.max(...comments.map((c) => c.id));
+    }
+  } catch (err) {
+    logger.warn("Failed to seed poller cursors from Gitea", { taskId, error: String(err) });
+    return;
+  }
+  saveCursors(taskId, lastReviewId, lastCommentId);
+}
 
 export function startReviewPoller(
   taskId: string,
@@ -42,8 +80,6 @@ export function startReviewPoller(
     repoPath,
     branchName,
     prNumber,
-    lastReviewId: 0,
-    lastCommentId: 0,
     timer: null,
   };
 
@@ -54,7 +90,9 @@ export function startReviewPoller(
   }, config.giteaPollIntervalMs);
 
   activePollers.set(taskId, state);
-  logger.info("Started review poller", { taskId, prNumber });
+
+  const { lastReviewId, lastCommentId } = loadCursors(taskId);
+  logger.info("Started review poller", { taskId, prNumber, lastReviewId, lastCommentId });
 }
 
 export function stopReviewPoller(taskId: string): void {
@@ -68,6 +106,7 @@ export function stopReviewPoller(taskId: string): void {
 
 async function pollPR(state: PollerState): Promise<void> {
   const { taskId, repoName, prNumber } = state;
+  let { lastReviewId, lastCommentId } = loadCursors(taskId);
 
   const pr = await getPullRequest(repoName, prNumber);
 
@@ -101,10 +140,10 @@ async function pollPR(state: PollerState): Promise<void> {
 
   // Check for new reviews
   const reviews = await listPullRequestReviews(repoName, prNumber);
-  const newReviews = reviews.filter((r) => r.id > state.lastReviewId);
+  const newReviews = reviews.filter((r) => r.id > lastReviewId);
 
   if (newReviews.length > 0) {
-    state.lastReviewId = Math.max(...newReviews.map((r) => r.id));
+    lastReviewId = Math.max(...newReviews.map((r) => r.id));
     logger.info("New reviews detected", {
       taskId,
       count: newReviews.length,
@@ -139,16 +178,19 @@ async function pollPR(state: PollerState): Promise<void> {
     const comments = await listPullRequestComments(repoName, prNumber);
     const botUser = config.giteaBotUser;
     const newComments = comments.filter(
-      (c) => c.id > state.lastCommentId && c.user.login !== botUser
+      (c) => c.id > lastCommentId && c.user.login !== botUser
     );
     if (newComments.length > 0) {
-      state.lastCommentId = Math.max(...newComments.map((c) => c.id));
+      lastCommentId = Math.max(...newComments.map((c) => c.id));
     }
     for (const c of newComments) {
       if (c.body?.trim()) {
         feedbackParts.push(c.body);
       }
     }
+
+    // Persist cursors before starting revision (so restart won't re-trigger)
+    saveCursors(taskId, lastReviewId, lastCommentId);
 
     const feedback = feedbackParts.join("\n\n").trim()
       || "Changes requested (no specific feedback provided).";
@@ -162,6 +204,9 @@ async function pollPR(state: PollerState): Promise<void> {
 
       await commentOnPullRequest(repoName, prNumber, "Revision complete based on review feedback. Please re-review.");
 
+      // Seed cursors from current Gitea state before restarting poller
+      await seedCursors(taskId, repoName, prNumber);
+
       // Restart poller
       startReviewPoller(taskId, repoName, state.repoPath, state.branchName, prNumber);
     } catch (err) {
@@ -172,14 +217,18 @@ async function pollPR(state: PollerState): Promise<void> {
     return;
   }
 
-  // Track comment IDs even when no rejection, so we don't miss them on next rejection
+  // Persist updated cursors (even if no rejection, track comment IDs)
   const comments = await listPullRequestComments(repoName, prNumber);
   const botUser = config.giteaBotUser;
   const newComments = comments.filter(
-    (c) => c.id > state.lastCommentId && c.user.login !== botUser
+    (c) => c.id > lastCommentId && c.user.login !== botUser
   );
   if (newComments.length > 0) {
-    state.lastCommentId = Math.max(...newComments.map((c) => c.id));
+    lastCommentId = Math.max(...newComments.map((c) => c.id));
+  }
+
+  if (lastReviewId > 0 || lastCommentId > 0) {
+    saveCursors(taskId, lastReviewId, lastCommentId);
   }
 }
 

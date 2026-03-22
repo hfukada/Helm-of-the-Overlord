@@ -17,6 +17,7 @@ Description: {{taskDescription}}
 - Follow the Execution Plan checklist above step by step, in order.
 - Use the repository knowledge above to understand existing patterns and conventions.
 - Write clean, idiomatic code that matches the existing style.
+- If the plan references per-line review comments (formatted as `[file:line]`), every one of them MUST be addressed in your implementation.
 - Do NOT run lint or test commands yourself -- the orchestrator handles that automatically after you finish.
 - Do NOT commit changes -- just write the files.
 - Do a final check to see if you can generalize things or hook into existing patterns

@@ -17,7 +17,8 @@ Description: {{taskDescription}}
 {{previousPlan}}
 
 ## Review Feedback
-The reviewer rejected the previous implementation with the following feedback:
+The reviewer rejected the previous implementation with the following feedback.
+Per-line comments (formatted as `[file:line]`) are specific, targeted requests -- every one of them MUST be addressed in the plan.
 
 {{feedback}}
 {{#if chatContext}}

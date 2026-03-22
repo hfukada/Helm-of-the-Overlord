@@ -181,6 +181,8 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN use_full_copy INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE tasks ADD COLUMN gitea_pr_number INTEGER",
   "ALTER TABLE tasks ADD COLUMN gitea_pr_url TEXT",
+  "ALTER TABLE tasks ADD COLUMN gitea_last_review_id INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE tasks ADD COLUMN gitea_last_comment_id INTEGER NOT NULL DEFAULT 0",
 ];
 
 export function runMigrations(db: Database): void {
