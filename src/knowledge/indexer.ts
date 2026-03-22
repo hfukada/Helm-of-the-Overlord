@@ -3,7 +3,7 @@ import { join, } from "node:path";
 import { existsSync } from "node:fs";
 import { $ } from "bun";
 import { getDb } from "./db";
-import { isChromaAvailable, getOrCreateCollection, deleteCollectionItems } from "./chromadb";
+import { isChromaAvailable, upsertDocuments, deleteCollectionItems } from "./chromadb";
 import { logger } from "../shared/logger";
 import type { Repo } from "../shared/types";
 
@@ -241,28 +241,19 @@ async function upsertToChroma(repo: Repo, chunks: Chunk[]): Promise<number> {
   if (chunks.length === 0) return 0;
 
   try {
-    const collection = await getOrCreateCollection(repo.name);
-    const BATCH_SIZE = 100;
-    let total = 0;
+    const ids = chunks.map((c, i) => `${repo.id}-${c.source_file}-${i}`);
+    const documents = chunks.map((c) => c.content);
+    const metadatas = chunks.map((c) => ({
+      repo_id: String(repo.id),
+      repo_name: repo.name,
+      source_file: c.source_file,
+      chunk_type: c.chunk_type,
+      title: c.title,
+    }));
 
-    for (let i = 0; i < chunks.length; i += BATCH_SIZE) {
-      const batch = chunks.slice(i, i + BATCH_SIZE);
-      const ids = batch.map((c, j) => `${repo.id}-${c.source_file}-${i + j}`);
-      const documents = batch.map((c) => c.content);
-      const metadatas = batch.map((c) => ({
-        repo_id: String(repo.id),
-        repo_name: repo.name,
-        source_file: c.source_file,
-        chunk_type: c.chunk_type,
-        title: c.title,
-      }));
-
-      await collection.upsert({ ids, documents, metadatas });
-      total += batch.length;
-    }
-
-    logger.info("ChromaDB upsert complete", { repo: repo.name, count: total });
-    return total;
+    await upsertDocuments(repo.name, ids, documents, metadatas);
+    logger.info("ChromaDB upsert complete", { repo: repo.name, count: chunks.length });
+    return chunks.length;
   } catch (err) {
     logger.error("ChromaDB upsert failed", { repo: repo.name, error: String(err) });
     return 0;

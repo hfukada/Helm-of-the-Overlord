@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { isChromaAvailable, getOrCreateCollection } from "./chromadb";
+import { isChromaAvailable, queryDocuments } from "./chromadb";
 import { logger } from "../shared/logger";
 
 export interface SearchResult {
@@ -111,45 +111,22 @@ async function vectorSearch(opts: SearchOptions): Promise<SearchResult[]> {
 
   for (const name of repoNames) {
     try {
-      const collection = await getOrCreateCollection(name);
-      const whereFilter: Record<string, string> = {};
-      if (opts.chunk_type) {
-        whereFilter["chunk_type"] = opts.chunk_type;
-      }
+      const where = opts.chunk_type ? { chunk_type: opts.chunk_type } : undefined;
+      const results = await queryDocuments(name, opts.query, limit, where);
 
-      const queryOpts: {
-        queryTexts: string[];
-        nResults: number;
-        where?: Record<string, string>;
-      } = {
-        queryTexts: [opts.query],
-        nResults: limit,
-      };
-      if (Object.keys(whereFilter).length > 0) {
-        queryOpts.where = whereFilter;
-      }
-
-      const results = await collection.query(queryOpts);
-
-      if (results.ids[0]) {
-        for (let i = 0; i < results.ids[0].length; i++) {
-          const meta = results.metadatas?.[0]?.[i] as Record<string, string> | undefined;
-          const distance = results.distances?.[0]?.[i] ?? 1;
-          // ChromaDB returns distances; convert to similarity score (cosine distance -> similarity)
-          const score = 1 - distance;
-
-          allResults.push({
-            chunk_id: 0, // ChromaDB results don't have SQLite IDs
-            repo_id: meta?.repo_id ? parseInt(meta.repo_id, 10) : 0,
-            repo_name: meta?.repo_name ?? name,
-            source_file: meta?.source_file ?? "",
-            chunk_type: meta?.chunk_type ?? "",
-            title: meta?.title ?? "",
-            content: results.documents?.[0]?.[i] ?? "",
-            score,
-            match_type: "vector" as const,
-          });
-        }
+      for (const r of results) {
+        const score = 1 - r.distance;
+        allResults.push({
+          chunk_id: 0,
+          repo_id: r.metadata.repo_id ? parseInt(r.metadata.repo_id, 10) : 0,
+          repo_name: r.metadata.repo_name ?? name,
+          source_file: r.metadata.source_file ?? "",
+          chunk_type: r.metadata.chunk_type ?? "",
+          title: r.metadata.title ?? "",
+          content: r.document,
+          score,
+          match_type: "vector" as const,
+        });
       }
     } catch (err) {
       logger.warn("ChromaDB vector search failed for repo", { repo: name, error: String(err) });

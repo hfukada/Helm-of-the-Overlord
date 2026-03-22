@@ -268,19 +268,19 @@ export async function runTask(taskId: string): Promise<void> {
 
   const { task, repo } = loaded;
 
+  // Set up branch name first so we can announce it
+  const branchName = generateBranchName(task.id, task.title);
+  updateTaskBranch(task.id, branchName);
+
   // Create messaging channel for this task
   const manager = getMessagingManager();
   if (manager) {
     try {
-      await manager.createTaskChannel(task);
+      await manager.createTaskChannel(task, branchName);
     } catch (err) {
       logger.warn("Failed to create messaging channel", { taskId, error: String(err) });
     }
   }
-
-  // Set up worktree
-  const branchName = generateBranchName(task.id, task.title);
-  updateTaskBranch(task.id, branchName);
 
   let workDir: string;
   try {

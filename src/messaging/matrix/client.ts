@@ -137,8 +137,15 @@ export class MatrixProvider implements MessagingProvider {
       room_alias_name: alias,
       topic: `Hoto task: ${taskId}`,
       preset: sdk.Preset.PublicChat,
-      visibility: sdk.Visibility.Private,
+      visibility: sdk.Visibility.Public,
     });
+
+    // Explicitly publish to room directory
+    try {
+      await this.client.setRoomDirectoryVisibility(result.room_id, sdk.Visibility.Public);
+    } catch (err) {
+      logger.warn("Failed to publish task channel to directory", { taskId, error: String(err) });
+    }
 
     return result.room_id;
   }
@@ -149,6 +156,15 @@ export class MatrixProvider implements MessagingProvider {
       await this.client.setRoomTopic(channelId, topic);
     } catch (err) {
       logger.warn("Failed to set channel topic", { channelId, error: String(err) });
+    }
+  }
+
+  async inviteUser(channelId: string, userId: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      await this.client.invite(channelId, userId);
+    } catch (err) {
+      logger.warn("Failed to invite user", { channelId, userId, error: String(err) });
     }
   }
 

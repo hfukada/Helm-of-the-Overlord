@@ -79,6 +79,7 @@ const COMMAND_HELP: Record<string, string> = {
 export class MessagingManager {
   private provider: MessagingProvider;
   private mainChannelId: string | null = null;
+  private taskCreators = new Map<string, string>(); // taskId -> Matrix userId
 
   constructor(provider: MessagingProvider) {
     this.provider = provider;
@@ -274,7 +275,7 @@ export class MessagingManager {
     }
   }
 
-  async createTaskChannel(task: Task): Promise<string | null> {
+  async createTaskChannel(task: Task, branchName?: string): Promise<string | null> {
     try {
       const channelId = await this.provider.createTaskChannel(task.id, task.title);
 
@@ -284,13 +285,34 @@ export class MessagingManager {
         [task.id, channelId, "matrix"]
       );
 
+      const shortId = task.id.slice(0, 8).toLowerCase();
+      const channelAlias = `#hoto-task-${shortId}:localhost`;
+
       // Announce in main channel
       if (this.mainChannelId) {
-        await this.provider.sendMessage(
-          this.mainChannelId,
-          `New task: "${task.title}" (${task.id.slice(0, 8)}) -- see task channel`
-        );
+        const lines = [
+          `New task: "${task.title}"`,
+          `  ID: ${task.id}`,
+          `  Branch: ${branchName ?? "pending"}`,
+          `  Channel: ${channelAlias}`,
+        ];
+        await this.provider.sendMessage(this.mainChannelId, lines.join("\n"));
       }
+
+      // Invite the task creator if known
+      const creatorId = this.taskCreators.get(task.id);
+      if (creatorId) {
+        await this.provider.inviteUser(channelId, creatorId);
+        this.taskCreators.delete(task.id);
+      }
+
+      // Post summary in the task channel itself
+      const lines = [
+        `Task: ${task.title}`,
+        `ID: ${task.id}`,
+        `Branch: ${branchName ?? "pending"}`,
+      ];
+      await this.provider.sendMessage(channelId, lines.join("\n"));
 
       return channelId;
     } catch (err) {
@@ -331,6 +353,7 @@ export class MessagingManager {
 
     if (res.ok) {
       const data = await res.json() as { id: string; title: string };
+      this.taskCreators.set(data.id, cmd.senderId);
       await this.provider.sendMessage(cmd.channelId, `Task created: ${data.title} (${data.id.slice(0, 8)})`);
     } else {
       const err = await res.json() as { error: string };
