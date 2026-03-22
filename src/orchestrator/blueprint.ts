@@ -41,7 +41,7 @@ const NODES: BlueprintNode[] = [
     type: "human",
     transitions: {
       accept: "commit",
-      revise: "implement",
+      revise: "plan",
       cancel: "review",
     },
   },

@@ -1,8 +1,12 @@
 import * as sdk from "matrix-js-sdk";
+import { logger as matrixLogger } from "matrix-js-sdk/lib/logger";
 import type { MessagingProvider, CommandEvent, MessageEvent } from "../interface";
 import { getDb } from "../../knowledge/db";
 import { config } from "../../shared/config";
 import { logger } from "../../shared/logger";
+
+// Silence matrix-js-sdk's verbose internal logging (fetchHttpApi, etc.)
+matrixLogger.setLevel("warn");
 
 export class MatrixProvider implements MessagingProvider {
   private client: sdk.MatrixClient | null = null;

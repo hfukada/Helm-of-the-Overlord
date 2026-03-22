@@ -206,7 +206,7 @@ export class MessagingManager {
 
     // Check for Gitea PR URL
     const prRow = db.query("SELECT gitea_pr_url FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_url: string | null } | null;
-    const reviewUrl = prRow?.gitea_pr_url ?? `http://${config.daemonHost}:${config.daemonPort}/tasks/${task.id}`;
+    const reviewUrl = prRow?.gitea_pr_url ?? null;
 
     const statusMessages: Record<string, string> = {
       planning: "Planning started...",
@@ -215,7 +215,7 @@ export class MessagingManager {
       fix_linting: "Fixing lint errors...",
       ci_running: "Running CI/tests...",
       ci_fixing: "Fixing CI failures...",
-      review: `Task ready for review: ${reviewUrl}`,
+      review: reviewUrl ? `Task ready for review: ${reviewUrl}` : "Task ready for review.",
       waiting_for_input: "Task is waiting for human input (see question above).",
       accepted: "Task accepted.",
       committed: "Task committed and pushed.",
@@ -228,7 +228,7 @@ export class MessagingManager {
       await this.provider.sendMessage(channelRow.channel_id, `[${newStatus}] ${message}`);
     }
 
-    if (newStatus === "review") {
+    if (newStatus === "review" && reviewUrl) {
       await this.provider.setChannelTopic(
         channelRow.channel_id,
         `Review: ${reviewUrl}`
@@ -253,11 +253,11 @@ export class MessagingManager {
     if (this.mainChannelId) {
       const db = getDb();
       const prRow = db.query("SELECT gitea_pr_url FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_url: string | null } | null;
-      const url = prRow?.gitea_pr_url ?? `http://${config.daemonHost}:${config.daemonPort}/tasks/${task.id}`;
-      await this.provider.sendMessage(
-        this.mainChannelId,
-        `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review: ${url}`
-      );
+      const url = prRow?.gitea_pr_url;
+      const msg = url
+        ? `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review: ${url}`
+        : `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review.`;
+      await this.provider.sendMessage(this.mainChannelId, msg);
     }
   }
 

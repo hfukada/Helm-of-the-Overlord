@@ -17,6 +17,7 @@ import { setupTaskContainer, teardownTaskContainer } from "../workspace/docker-e
 import { discoverSecrets } from "../workspace/secret-discovery";
 import { renderTemplate } from "../prompts/loader";
 import { getMessagingManager } from "../messaging/manager";
+import { config } from "../shared/config";
 import { indexTaskChatHistory } from "../messaging/indexer";
 import { isGiteaConfigured, createPullRequest, commentOnPullRequest } from "../gitea/client";
 import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
@@ -453,6 +454,11 @@ export async function runTask(taskId: string): Promise<void> {
   // === REVIEW ===
   logger.info("Task ready for review", { taskId: task.id });
 
+  const notifyError = (msg: string) => {
+    logger.error(msg, { taskId: task.id });
+    if (manager) manager.notifyAgentOutput(task.id, `[error] ${msg}`).catch(() => {});
+  };
+
   // 1. Commit all changes
   try {
     await $`git -C ${workDir} add -A`.quiet();
@@ -462,7 +468,7 @@ export async function runTask(taskId: string): Promise<void> {
       logger.info("Committed implementation changes", { taskId: task.id });
     }
   } catch (err) {
-    logger.warn("Failed to commit changes", { taskId: task.id, error: String(err) });
+    notifyError(`Failed to commit changes: ${err}`);
   }
 
   // 2. Push to Gitea and create PR (before setting review status, so the URL is available)
@@ -506,8 +512,10 @@ export async function runTask(taskId: string): Promise<void> {
       // Start polling for review events
       startReviewPoller(task.id, repo.name, repo.path, branchName, pr.number);
     } catch (err) {
-      logger.error("Gitea PR creation failed", { taskId: task.id, error: String(err) });
+      notifyError(`Gitea push/PR failed: ${err}`);
     }
+  } else {
+    notifyError(`Gitea not configured (GITEA_URL=${config.giteaUrl ?? "unset"}, bot token=${isGiteaConfigured() ? "ok" : "missing"}). Branch not pushed.`);
   }
 
   // 3. Now set review status -- notifyTaskStatusChange will read the PR URL from DB
@@ -561,22 +569,51 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   let state: BlueprintState = JSON.parse(taskRow.blueprint_state);
 
-  // Advance from review -> implement via "revise"
+  const manager = getMessagingManager();
+  const notifyError = (msg: string) => {
+    logger.error(msg, { taskId: task.id });
+    if (manager) manager.notifyAgentOutput(task.id, `[error] ${msg}`).catch(() => {});
+  };
+
+  // Advance from review -> plan via "revise"
   state = advanceState(state, "revise");
 
-  // === IMPLEMENT (revision) ===
-  updateTaskStatus(task.id, "implementing", state);
-  logger.info("Starting revision implement phase", { taskId: task.id });
+  // === PLAN (revision) ===
+  updateTaskStatus(task.id, "planning", state);
+  logger.info("Starting revision plan phase", { taskId: task.id });
 
-  // Build a revision prompt that includes the feedback
+  // Build revision context: feedback + chat history
   const { getChatContext } = await import("./context-builder");
   const chatContext = await getChatContext(task.id);
-  const revisionPlan = await renderTemplate("revise", {
+  const revisionContext = await renderTemplate("revise", {
     feedback,
     chatContext: chatContext || undefined,
   });
 
-  const implResult = await executeImplement(task, repo, workDir, revisionPlan, mcpConfigPath);
+  // Append revision context to the task description for planning
+  const revisedTask = {
+    ...task,
+    description: `${task.description}\n\n---\nRevision feedback:\n${revisionContext}`,
+  };
+
+  const planResult = await executePlan(revisedTask, repo, workDir, mcpConfigPath);
+
+  if (planResult.error) {
+    if (isTaskCancelled(task.id)) return;
+    logger.error("Revision planning failed", { taskId: task.id, error: planResult.error });
+    state = advanceState(state, "error");
+    updateTaskStatus(task.id, "review", state);
+    return;
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === IMPLEMENT (revision) ===
+  state = advanceState(state, "done");
+  updateTaskStatus(task.id, "implementing", state);
+  logger.info("Starting revision implement phase", { taskId: task.id });
+
+  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath);
 
   if (implResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -686,10 +723,9 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   }
 
   // === REVIEW ===
-  updateTaskStatus(task.id, "review", state);
   logger.info("Revision ready for review", { taskId: task.id });
 
-  // Commit revision changes
+  // 1. Commit revision changes
   try {
     await $`git -C ${workDir} add -A`.quiet();
     const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
@@ -698,23 +734,32 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       logger.info("Committed revision changes", { taskId: task.id });
     }
   } catch (err) {
-    logger.warn("Failed to commit revision changes", { taskId: task.id, error: String(err) });
+    notifyError(`Failed to commit revision changes: ${err}`);
   }
 
-  // Re-push to Gitea and restart poller if we have a PR
+  // 2. Push to Gitea (before setting review status, so URL is available)
   if (isGiteaConfigured()) {
-    const db = getDb();
     const prRow = db.query("SELECT gitea_pr_number FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_number: number | null } | null;
     if (prRow?.gitea_pr_number) {
       try {
         const branchName = task.branch_name!;
         await pushBranchToGitea(workDir, repo.path, repo.name, branchName, true);
-        await commentOnPullRequest(repo.name, prRow.gitea_pr_number, "Revision complete. Please re-review.");
-        startReviewPoller(task.id, repo.name, repo.path, branchName, prRow.gitea_pr_number);
       } catch (err) {
-        logger.warn("Gitea push after revision failed", { taskId: task.id, error: String(err) });
+        notifyError(`Gitea push after revision failed: ${err}`);
       }
+    } else {
+      notifyError("No existing Gitea PR found for revision push.");
     }
+  } else {
+    notifyError(`Gitea not configured (GITEA_URL=${config.giteaUrl ?? "unset"}). Revision not pushed.`);
+  }
+
+  // 3. Set review status
+  updateTaskStatus(task.id, "review", state);
+
+  // 4. Announce in main channel
+  if (manager) {
+    manager.notifyReviewReady(task).catch(() => {});
   }
 
   // Index chat history

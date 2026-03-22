@@ -46,13 +46,16 @@ export async function startDaemon(): Promise<void> {
   });
 
   // Initialize Gitea if configured
+  // Auth failures in initGiteaClient call process.exit(1) directly.
+  // We only catch connectivity issues (e.g. Gitea not reachable yet).
   if (config.giteaUrl) {
     try {
       await initGiteaClient();
       restartPollersForReviewTasks();
       logger.info("Gitea integration initialized");
     } catch (err) {
-      logger.warn("Gitea initialization failed, continuing without it", { error: String(err) });
+      logger.error("Gitea initialization failed", { error: String(err) });
+      process.exit(1);
     }
   }
 

@@ -39,13 +39,14 @@ export async function initGiteaClient(): Promise<void> {
   // Wait for Gitea to be ready
   await waitForGitea();
 
-  // Check DB for existing token
+  const username = config.giteaBotUser;
+  const password = config.giteaBotPassword;
+
+  // 1. Try stored token
   const db = getDb();
   const stored = db.query("SELECT value FROM messaging_config WHERE key = 'gitea_bot_token'").get() as { value: string } | null;
-
   if (stored) {
     _botToken = stored.value;
-    // Verify token works
     try {
       const res = await giteaFetch("/api/v1/user");
       if (res.ok) {
@@ -54,13 +55,28 @@ export async function initGiteaClient(): Promise<void> {
         return;
       }
     } catch {}
-    // Token invalid, re-create
     _botToken = null;
   }
 
-  // Create bot user and get token
-  await createBotUser();
-  await ensureOrg();
+  // 2. Try logging in with configured credentials
+  if (await loginAndCreateToken(username, password)) {
+    logger.info("Gitea client initialized via login", { username });
+    await ensureOrg();
+    return;
+  }
+
+  // 3. Login failed -- create the user via admin token, then login
+  logger.info("Gitea login failed, creating bot user via admin API", { username });
+  await createBotUser(username, password);
+  if (await loginAndCreateToken(username, password)) {
+    logger.info("Gitea client initialized after user creation", { username });
+    await ensureOrg();
+    return;
+  }
+
+  // If we still can't auth, something is fundamentally wrong
+  logger.error("Gitea authentication failed after user creation, exiting");
+  process.exit(1);
 }
 
 async function waitForGitea(): Promise<void> {
@@ -94,35 +110,7 @@ async function getAdminToken(): Promise<string> {
   );
 }
 
-async function createBotUser(): Promise<void> {
-  const adminToken = await getAdminToken();
-
-  const username = config.giteaBotUser;
-  const password = config.giteaBotPassword;
-
-  // Try to create the user
-  const createRes = await giteaFetch("/api/v1/admin/users", {
-    method: "POST",
-    body: JSON.stringify({
-      username,
-      password,
-      email: `${username}@localhost`,
-      must_change_password: false,
-      visibility: "public",
-    }),
-  }, adminToken);
-
-  if (createRes.ok) {
-    logger.info("Gitea bot user created", { username });
-  } else if (createRes.status === 422) {
-    // User already exists
-    logger.info("Gitea bot user already exists", { username });
-  } else {
-    const body = await createRes.text();
-    throw new Error(`Failed to create Gitea bot user: ${createRes.status} ${body}`);
-  }
-
-  // Create an API token for the bot using basic auth
+async function loginAndCreateToken(username: string, password: string): Promise<boolean> {
   const basicAuth = Buffer.from(`${username}:${password}`).toString("base64");
   const tokenRes = await fetch(giteaUrl(`/api/v1/users/${username}/tokens`), {
     method: "POST",
@@ -137,42 +125,111 @@ async function createBotUser(): Promise<void> {
   });
 
   if (!tokenRes.ok) {
-    const body = await tokenRes.text();
-    throw new Error(`Failed to create Gitea bot token: ${tokenRes.status} ${body}`);
+    logger.warn("Gitea basic auth token creation failed", { username, status: tokenRes.status });
+    return false;
   }
 
   const tokenData = await tokenRes.json() as { sha1: string };
   _botToken = tokenData.sha1;
 
-  // Store token in DB
   const db = getDb();
   db.run(
     "INSERT OR REPLACE INTO messaging_config (key, value) VALUES ('gitea_bot_token', ?)",
     [_botToken]
   );
 
-  logger.info("Gitea bot token created and stored");
+  logger.info("Gitea bot token created and stored", { username });
+  return true;
+}
+
+async function createBotUser(username: string, password: string): Promise<void> {
+  const adminToken = await getAdminToken();
+
+  // Check if user already exists
+  const checkRes = await giteaFetch(`/api/v1/users/${username}`, {}, adminToken);
+
+  if (checkRes.ok) {
+    // User exists -- reset password so we can auth
+    logger.info("Gitea bot user already exists, resetting password", { username });
+    const patchRes = await giteaFetch(`/api/v1/admin/users/${username}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        password,
+        must_change_password: false,
+        login_name: username,
+        source_id: 0,
+      }),
+    }, adminToken);
+    if (!patchRes.ok) {
+      const body = await patchRes.text();
+      logger.error("Failed to reset bot user password", { status: patchRes.status, body });
+      process.exit(1);
+    }
+    return;
+  }
+
+  // User doesn't exist -- create it
+  const createRes = await giteaFetch("/api/v1/admin/users", {
+    method: "POST",
+    body: JSON.stringify({
+      username,
+      password,
+      email: `${username}@hoto.local`,
+      must_change_password: false,
+      visibility: "public",
+    }),
+  }, adminToken);
+
+  if (createRes.ok) {
+    logger.info("Gitea bot user created", { username });
+    return;
+  }
+
+  const body = await createRes.text();
+  logger.error("Failed to create Gitea bot user", { status: createRes.status, body });
+  process.exit(1);
 }
 
 async function ensureOrg(): Promise<void> {
   const org = config.giteaOrg;
+  const username = config.giteaBotUser;
+
   const res = await giteaFetch(`/api/v1/orgs/${org}`);
-  if (res.ok) return;
+  if (!res.ok) {
+    const createRes = await giteaFetch("/api/v1/orgs", {
+      method: "POST",
+      body: JSON.stringify({
+        username: org,
+        visibility: "public",
+        full_name: "Hoto Tasks",
+      }),
+    });
 
-  const createRes = await giteaFetch("/api/v1/orgs", {
-    method: "POST",
-    body: JSON.stringify({
-      username: org,
-      visibility: "public",
-      full_name: "Hoto Tasks",
-    }),
-  });
+    if (!createRes.ok && createRes.status !== 422) {
+      const body = await createRes.text();
+      logger.error("Failed to create Gitea org", { org, status: createRes.status, body });
+      process.exit(1);
+    }
+    logger.info("Gitea org created", { org });
+  }
 
-  if (createRes.ok || createRes.status === 422) {
-    logger.info("Gitea org ready", { org });
-  } else {
-    const body = await createRes.text();
-    logger.warn("Failed to create Gitea org", { org, status: createRes.status, body });
+  // Ensure bot user is an owner of the org
+  const memberRes = await giteaFetch(`/api/v1/orgs/${org}/members/${username}`);
+  if (!memberRes.ok) {
+    const addRes = await giteaFetch(`/api/v1/orgs/${org}/teams`, {
+      method: "GET",
+    });
+    // Find the Owners team and add the bot user
+    if (addRes.ok) {
+      const teams = await addRes.json() as Array<{ id: number; name: string }>;
+      const owners = teams.find((t) => t.name === "Owners");
+      if (owners) {
+        await giteaFetch(`/api/v1/teams/${owners.id}/members/${username}`, {
+          method: "PUT",
+        });
+        logger.info("Added bot user to org Owners team", { org, username });
+      }
+    }
   }
 }
 

@@ -98,57 +98,66 @@ async function pollPR(state: PollerState): Promise<void> {
     return;
   }
 
-  // Check for new reviews requesting changes
+  // Check for new reviews
   const reviews = await listPullRequestReviews(repoName, prNumber);
   const newReviews = reviews.filter((r) => r.id > state.lastReviewId);
 
   if (newReviews.length > 0) {
     state.lastReviewId = Math.max(...newReviews.map((r) => r.id));
+    logger.info("New reviews detected", {
+      taskId,
+      count: newReviews.length,
+      states: newReviews.map((r) => r.state),
+    });
   }
 
+  // Gitea uses "REQUEST_CHANGES" but normalize to lowercase for safety
   const changeRequests = newReviews.filter(
-    (r) => r.state === "REQUEST_CHANGES" || r.state === "request_changes"
+    (r) => r.state.toLowerCase() === "request_changes" || r.state.toLowerCase() === "rejected"
   );
 
   if (changeRequests.length > 0) {
-    const feedback = changeRequests
-      .map((r) => r.body)
-      .filter(Boolean)
-      .join("\n\n");
+    // Collect feedback from reviews + any new PR comments
+    const reviewBodies = changeRequests.map((r) => r.body).filter(Boolean);
 
-    if (feedback.trim()) {
-      logger.info("Review changes requested, starting revision", { taskId, prNumber });
-      stopReviewPoller(taskId);
-
-      // Run revision then re-push and restart poller
-      try {
-        await reviseTask(taskId, feedback);
-
-        // After revision, push updated branch
-        const workDir = worktreeDir(taskId, repoName);
-        await pushBranchToGitea(workDir, state.repoPath, repoName, state.branchName, true);
-
-        await commentOnPullRequest(repoName, prNumber, "Revision complete based on review feedback. Please re-review.");
-
-        // Restart poller
-        startReviewPoller(taskId, repoName, state.repoPath, state.branchName, prNumber);
-      } catch (err) {
-        logger.error("Revision after review failed", { taskId, error: String(err) });
-        await commentOnPullRequest(repoName, prNumber, `Revision failed: ${err}`).catch(() => {});
-        // Restart poller to keep watching
-        startReviewPoller(taskId, repoName, state.repoPath, state.branchName, prNumber);
-      }
-      return;
+    const comments = await listPullRequestComments(repoName, prNumber);
+    const botUser = config.giteaBotUser;
+    const newComments = comments.filter(
+      (c) => c.id > state.lastCommentId && c.user.login !== botUser
+    );
+    if (newComments.length > 0) {
+      state.lastCommentId = Math.max(...newComments.map((c) => c.id));
     }
+    const commentBodies = newComments.map((c) => c.body).filter(Boolean);
+
+    const feedback = [...reviewBodies, ...commentBodies].join("\n\n").trim()
+      || "Changes requested (no specific feedback provided).";
+
+    logger.info("Review changes requested, starting revision", { taskId, prNumber, feedback });
+    stopReviewPoller(taskId);
+
+    try {
+      // reviseTask handles commit, push, and status update internally
+      await reviseTask(taskId, feedback);
+
+      await commentOnPullRequest(repoName, prNumber, "Revision complete based on review feedback. Please re-review.");
+
+      // Restart poller
+      startReviewPoller(taskId, repoName, state.repoPath, state.branchName, prNumber);
+    } catch (err) {
+      logger.error("Revision after review failed", { taskId, error: String(err) });
+      await commentOnPullRequest(repoName, prNumber, `Revision failed: ${err}`).catch(() => {});
+      startReviewPoller(taskId, repoName, state.repoPath, state.branchName, prNumber);
+    }
+    return;
   }
 
-  // Check for new general comments (not from the bot) that might indicate feedback
+  // Track comment IDs even when no rejection, so we don't miss them on next rejection
   const comments = await listPullRequestComments(repoName, prNumber);
   const botUser = config.giteaBotUser;
   const newComments = comments.filter(
     (c) => c.id > state.lastCommentId && c.user.login !== botUser
   );
-
   if (newComments.length > 0) {
     state.lastCommentId = Math.max(...newComments.map((c) => c.id));
   }
