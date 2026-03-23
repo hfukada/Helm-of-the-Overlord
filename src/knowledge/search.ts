@@ -1,5 +1,5 @@
 import { getDb } from "./db";
-import { isChromaAvailable, queryDocuments } from "./chromadb";
+import { queryDocuments } from "./chromadb";
 import { logger } from "../shared/logger";
 
 export interface SearchResult {
@@ -24,14 +24,9 @@ export interface SearchOptions {
 export async function search(opts: SearchOptions): Promise<SearchResult[]> {
   const limit = opts.limit ?? 10;
 
-  // Run keyword and vector search in parallel where possible
+  // Run keyword and vector search in parallel
   const keywordResults = keywordSearch(opts);
-  const chromaReady = await isChromaAvailable();
-
-  let vectorResults: SearchResult[] = [];
-  if (chromaReady) {
-    vectorResults = await vectorSearch(opts);
-  }
+  const vectorResults = await vectorSearch(opts);
 
   // Merge results with score fusion
   return mergeResults(keywordResults, vectorResults, limit);

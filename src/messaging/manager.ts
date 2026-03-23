@@ -36,11 +36,14 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\n"),
   "repo": [
     "!repo add <git-url> [--name <name>]",
-    "Clone a git repo and register it. Auto-detects language, framework, and commands.",
-    "Indexes the repo into the knowledge base after cloning.",
+    "!repo remove <name>",
+    "Add or remove a repo.",
+    "  add: Clone a git repo and register it. Auto-detects language, framework, and commands.",
+    "  remove: Untrack a repo (removes from DB, does not delete files).",
     "Examples:",
     "  !repo add https://github.com/org/project.git",
     "  !repo add git@github.com:org/project.git --name my-project",
+    "  !repo remove my-project",
   ].join("\n"),
   reindex: [
     "!reindex <repo>",
@@ -78,6 +81,25 @@ const COMMAND_HELP: Record<string, string> = {
     "Examples:",
     "  !delete-task 01JA3B",
     "  !delete-task  (from inside the task's channel)",
+  ].join("\n"),
+  relate: [
+    "!relate <repo-a> <repo-b> <description>",
+    "Define a relationship between two repos. The description explains how they relate.",
+    "This context is used by the planner when building cross-repo tasks.",
+    "Examples:",
+    "  !relate my-api my-frontend frontend consumes the API",
+    "  !relate shared-lib my-api shared-lib is a dependency of my-api",
+  ].join("\n"),
+  unrelate: [
+    "!unrelate <repo-a> <repo-b> <relationship-type>",
+    "Remove a relationship between two repos.",
+    "Example: !unrelate my-api my-frontend depends_on",
+  ].join("\n"),
+  relationships: [
+    "!relationships [repo]",
+    "List repo relationships. If a repo name is given, shows only that repo's relationships.",
+    "Otherwise shows all relationships.",
+    "Example: !relationships my-api",
   ].join("\n"),
   help: [
     "!help [command]",
@@ -164,6 +186,15 @@ export class MessagingManager {
       case "delete-task":
         await this.cmdDeleteTask(cmd);
         break;
+      case "relate":
+        await this.cmdRelate(cmd);
+        break;
+      case "unrelate":
+        await this.cmdUnrelate(cmd);
+        break;
+      case "relationships":
+        await this.cmdRelationships(cmd);
+        break;
       case "help":
         await this.cmdHelp(cmd);
         break;
@@ -222,6 +253,7 @@ export class MessagingManager {
     const reviewUrl = prRow?.gitea_pr_url ?? null;
 
     const statusMessages: Record<string, string> = {
+      scoping: "Determining which repos are affected...",
       planning: "Planning started...",
       implementing: "Implementation started...",
       linting: "Running lint checks...",
@@ -352,13 +384,13 @@ export class MessagingManager {
   // Command handlers
 
   private async cmdRun(cmd: CommandEvent): Promise<void> {
-    // Parse: !run <description> [-r repo]
-    let repoName: string | undefined;
+    // Parse: !run <description> [-r repo [-r repo2]]
+    const repoNames: string[] = [];
     const descParts: string[] = [];
 
     for (let i = 0; i < cmd.args.length; i++) {
       if (cmd.args[i] === "-r" && cmd.args[i + 1]) {
-        repoName = cmd.args[++i];
+        repoNames.push(cmd.args[++i]);
       } else {
         descParts.push(cmd.args[i]);
       }
@@ -366,12 +398,16 @@ export class MessagingManager {
 
     const description = descParts.join(" ");
     if (!description) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !run <description> [-r repo]\nType !help run for details.");
+      await this.provider.sendMessage(cmd.channelId, "Usage: !run <description> [-r repo [-r repo2]]\nType !help run for details.");
       return;
     }
 
-    const body: Record<string, string> = { description, source: "matrix" };
-    if (repoName) body.repo_name = repoName;
+    const body: Record<string, unknown> = { description, source: "matrix" };
+    if (repoNames.length > 1) {
+      body.repo_names = repoNames;
+    } else if (repoNames.length === 1) {
+      body.repo_name = repoNames[0];
+    }
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks`, {
       method: "POST",
@@ -391,8 +427,34 @@ export class MessagingManager {
 
   private async cmdRepo(cmd: CommandEvent): Promise<void> {
     const sub = cmd.args[0];
+
+    if (sub === "remove" || sub === "delete") {
+      const name = cmd.args[1];
+      if (!name) {
+        await this.provider.sendMessage(cmd.channelId, "Usage: !repo remove <name>");
+        return;
+      }
+
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/${name}`, {
+        method: "DELETE",
+      });
+
+      if (res.ok) {
+        await this.provider.sendMessage(cmd.channelId, `Repo archived: ${name}`);
+      } else {
+        const body = await res.text();
+        try {
+          const err = JSON.parse(body) as { error: string };
+          await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+        } catch {
+          await this.provider.sendMessage(cmd.channelId, `Failed: ${body}`);
+        }
+      }
+      return;
+    }
+
     if (sub !== "add" || !cmd.args[1]) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !repo add <git-url> [--name <name>]\nType !help repo for details.");
+      await this.provider.sendMessage(cmd.channelId, "Usage: !repo add <git-url> [--name <name>] | !repo remove <name>\nType !help repo for details.");
       return;
     }
 
@@ -489,7 +551,7 @@ export class MessagingManager {
 
   private async cmdRepos(cmd: CommandEvent): Promise<void> {
     const db = getDb();
-    const repos = db.query("SELECT name, language, framework FROM repos ORDER BY name").all() as Array<{
+    const repos = db.query("SELECT name, language, framework FROM repos WHERE archived = 0 ORDER BY name").all() as Array<{
       name: string;
       language: string | null;
       framework: string | null;
@@ -700,6 +762,93 @@ export class MessagingManager {
     }
   }
 
+  private async cmdRelate(cmd: CommandEvent): Promise<void> {
+    // !relate <repo-a> <repo-b> <description...>
+    if (cmd.args.length < 3) {
+      await this.provider.sendMessage(cmd.channelId, "Usage: !relate <repo-a> <repo-b> <description>\nType !help relate for details.");
+      return;
+    }
+
+    const [repoA, repoB, ...descParts] = cmd.args;
+    const description = descParts.join(" ");
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/${repoA}/relationships`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_repo: repoB,
+        relationship: "related",
+        description,
+      }),
+    });
+
+    if (res.ok) {
+      await this.provider.sendMessage(cmd.channelId, `Relationship added: ${repoA} <-> ${repoB}: ${description}`);
+    } else {
+      const err = await res.json() as { error: string };
+      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    }
+  }
+
+  private async cmdUnrelate(cmd: CommandEvent): Promise<void> {
+    // !unrelate <repo-a> <repo-b> [relationship-type]
+    if (cmd.args.length < 2) {
+      await this.provider.sendMessage(cmd.channelId, "Usage: !unrelate <repo-a> <repo-b> [relationship-type]\nType !help unrelate for details.");
+      return;
+    }
+
+    const [repoA, repoB] = cmd.args;
+    const relationship = cmd.args[2] ?? "related";
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/${repoA}/relationships`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        target_repo: repoB,
+        relationship,
+      }),
+    });
+
+    if (res.ok) {
+      await this.provider.sendMessage(cmd.channelId, `Relationship removed: ${repoA} <-> ${repoB}`);
+    } else {
+      const err = await res.json() as { error: string };
+      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    }
+  }
+
+  private async cmdRelationships(cmd: CommandEvent): Promise<void> {
+    const repoName = cmd.args[0];
+    const url = repoName
+      ? `http://127.0.0.1:${config.daemonPort}/repos/${repoName}/relationships`
+      : `http://127.0.0.1:${config.daemonPort}/repos/relationships`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json() as { error: string };
+      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      return;
+    }
+
+    const data = await res.json() as Array<{
+      source_name: string;
+      target_name: string;
+      relationship: string;
+      description: string | null;
+    }>;
+
+    if (data.length === 0) {
+      await this.provider.sendMessage(cmd.channelId, repoName ? `No relationships for ${repoName}.` : "No repo relationships defined.");
+      return;
+    }
+
+    const lines = data.map((r) => {
+      const desc = r.description ? ` -- ${r.description}` : "";
+      return `${r.source_name} -> ${r.target_name} (${r.relationship})${desc}`;
+    });
+    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+  }
+
   private async cmdHelp(cmd: CommandEvent): Promise<void> {
     const topic = cmd.args[0];
 
@@ -727,6 +876,9 @@ export class MessagingManager {
       "  !reindex <repo>           Reindex a repo's knowledge base (docs, code, config)",
       "  !tokens                   Show today's token usage and cost per model",
       "  !ask <question>           Query the knowledge base using AI",
+      "  !relate <a> <b> <desc>   Define a relationship between two repos",
+      "  !unrelate <a> <b> [type] Remove a repo relationship",
+      "  !relationships [repo]    List repo relationships",
       "  !help [command]           Show this help, or details for a specific command",
       "",
       "In task channels:",

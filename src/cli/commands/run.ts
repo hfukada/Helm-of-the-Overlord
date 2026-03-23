@@ -3,13 +3,13 @@ import { daemonUrl } from "../../shared/config";
 
 export async function runCommand(args: string[]): Promise<void> {
   let description: string | null = null;
-  let repoName: string | null = null;
+  const repoNames: string[] = [];
   let file: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "-r" || arg === "--repo") {
-      repoName = args[++i];
+      repoNames.push(args[++i]);
     } else if (arg === "-f" || arg === "--file") {
       file = args[++i];
     } else if (!description && !arg.startsWith("-")) {
@@ -22,19 +22,23 @@ export async function runCommand(args: string[]): Promise<void> {
   }
 
   if (!description) {
-    console.log("Usage: hoto run \"task description\" [-r repo] [-f file]");
+    console.log("Usage: hoto run \"task description\" [-r repo [-r repo2]] [-f file]");
     process.exit(1);
+  }
+
+  // Build request body -- use repo_names for multi, repo_name for single (backward compat)
+  const reqBody: Record<string, unknown> = { description, source: "cli" };
+  if (repoNames.length > 1) {
+    reqBody.repo_names = repoNames;
+  } else if (repoNames.length === 1) {
+    reqBody.repo_name = repoNames[0];
   }
 
   try {
     const res = await fetch(daemonUrl("/tasks"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        description,
-        repo_name: repoName ?? undefined,
-        source: "cli",
-      }),
+      body: JSON.stringify(reqBody),
     });
 
     if (!res.ok) {

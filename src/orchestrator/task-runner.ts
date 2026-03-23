@@ -220,15 +220,79 @@ function loadTaskAndRepo(taskId: string): { task: Task; repo: Repo } | null {
   return { task, repo };
 }
 
+function parseRepoRow(row: Record<string, unknown>): Repo {
+  return {
+    id: row.id as number,
+    name: row.name as string,
+    path: row.path as string,
+    description: row.description as string | null,
+    build_cmd: row.build_cmd as string | null,
+    test_cmd: row.test_cmd as string | null,
+    run_cmd: row.run_cmd as string | null,
+    lint_cmd: row.lint_cmd as string | null,
+    language: row.language as string | null,
+    framework: row.framework as string | null,
+    docker_compose_path: row.docker_compose_path as string | null,
+    metadata: null,
+  };
+}
+
+function parseTaskRow(row: Record<string, unknown>): Task {
+  return {
+    id: row.id as string,
+    title: row.title as string,
+    description: row.description as string,
+    repo_id: row.repo_id as number | null,
+    status: row.status as TaskStatus,
+    blueprint_state: null,
+    branch_name: row.branch_name as string | null,
+    source: row.source as "cli" | "web",
+    use_full_copy: !!(row.use_full_copy as number),
+    created_at: row.created_at as string,
+    updated_at: row.updated_at as string,
+  };
+}
+
+export function loadTaskAndRepos(taskId: string): { task: Task; repos: Repo[] } | null {
+  const db = getDb();
+
+  const taskRow = db.query("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | null;
+  if (!taskRow) return null;
+
+  const task = parseTaskRow(taskRow);
+
+  // Try task_repos junction table first
+  const repoRows = db.query(
+    `SELECT r.* FROM repos r
+     JOIN task_repos tr ON tr.repo_id = r.id
+     WHERE tr.task_id = ? AND tr.role = 'target'
+     ORDER BY r.name`
+  ).all(taskId) as Array<Record<string, unknown>>;
+
+  if (repoRows.length > 0) {
+    return { task, repos: repoRows.map(parseRepoRow) };
+  }
+
+  // Fallback: legacy single-repo via tasks.repo_id
+  if (taskRow.repo_id) {
+    const repoRow = db.query("SELECT * FROM repos WHERE id = ?").get(taskRow.repo_id as number) as Record<string, unknown> | null;
+    if (repoRow) {
+      return { task, repos: [parseRepoRow(repoRow)] };
+    }
+  }
+
+  return null;
+}
+
 export async function runTask(taskId: string): Promise<void> {
-  const loaded = loadTaskAndRepo(taskId);
+  const loaded = loadTaskAndRepos(taskId);
   if (!loaded) {
     logger.error("Task or repo not found", { taskId });
     updateTaskStatus(taskId, "failed");
     return;
   }
 
-  const { task, repo } = loaded;
+  let { task, repos } = loaded;
 
   // Set up branch name first so we can announce it
   const branchName = generateBranchName(task.id, task.title);
@@ -243,6 +307,56 @@ export async function runTask(taskId: string): Promise<void> {
       logger.warn("Failed to create messaging channel", { taskId, error: String(err) });
     }
   }
+
+  // === PRE-PLAN (scope repos) ===
+  // If multiple repos are assigned, run pre-plan to determine which ones actually need changes
+  if (repos.length > 1) {
+    updateTaskStatus(task.id, "scoping");
+    logger.info("Running pre-plan to scope repos", { taskId, repoCount: repos.length });
+
+    const { executePrePlan } = await import("./nodes/agentic/pre-plan");
+    const prePlanResult = await executePrePlan(task);
+
+    if (prePlanResult.error) {
+      if (isTaskCancelled(task.id)) return;
+      logger.error("Pre-plan failed", { taskId, error: prePlanResult.error });
+      updateTaskStatus(task.id, "failed");
+      return;
+    }
+
+    // Narrow repos to the ones pre-plan identified
+    const targetNames = new Set(prePlanResult.repoNames);
+    const narrowed = repos.filter((r) => targetNames.has(r.name));
+
+    if (narrowed.length === 0) {
+      logger.error("Pre-plan identified no valid repos", { taskId, suggested: prePlanResult.repoNames });
+      updateTaskStatus(task.id, "failed");
+      return;
+    }
+
+    logger.info("Pre-plan scoped repos", { taskId, repos: narrowed.map((r) => r.name) });
+
+    // Notify channel of scoping result
+    if (manager) {
+      const repoList = narrowed.map((r) => r.name).join(", ");
+      manager.notifyAgentOutput(task.id, `Repos to modify: ${repoList}`).catch(() => {});
+    }
+
+    // Update task_repos to reflect the narrowed scope
+    const db = getDb();
+    db.run("DELETE FROM task_repos WHERE task_id = ?", [task.id]);
+    for (const r of narrowed) {
+      db.run("INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')", [task.id, r.id]);
+    }
+    // Update legacy repo_id to first narrowed repo
+    db.run("UPDATE tasks SET repo_id = ? WHERE id = ?", [narrowed[0].id, task.id]);
+
+    repos = narrowed;
+  }
+
+  // For now, use the first (or only) repo for the single-repo pipeline
+  // TODO (B2): full multi-repo plan/implement/lint/ci loop
+  const repo = repos[0];
 
   let workDir: string;
   try {

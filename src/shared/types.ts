@@ -1,6 +1,7 @@
 export type TaskStatus =
   | "pending"
   | "indexing"
+  | "scoping"
   | "planning"
   | "implementing"
   | "linting"
@@ -80,7 +81,7 @@ export interface AgentStreamEvent {
   timestamp: string;
 }
 
-export type BlueprintNodeType = "index" | "plan" | "implement" | "lint" | "push" | "ci" | "fix_lint" | "fix_ci" | "review" | "revise" | "commit";
+export type BlueprintNodeType = "index" | "pre_plan" | "plan" | "implement" | "lint" | "push" | "ci" | "fix_lint" | "fix_ci" | "review" | "revise" | "commit";
 
 export interface BlueprintNode {
   name: BlueprintNodeType;
@@ -105,6 +106,23 @@ export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
   cost_usd: number;
+}
+
+export interface TaskRepo {
+  task_id: string;
+  repo_id: number;
+  role: "target" | "context";
+}
+
+export interface TaskPR {
+  id: number;
+  task_id: string;
+  repo_id: number;
+  pr_number: number;
+  pr_url: string;
+  last_review_id: number;
+  last_comment_id: number;
+  status: "open" | "merged" | "closed";
 }
 
 export interface ContainerSecret {

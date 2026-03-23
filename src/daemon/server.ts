@@ -8,6 +8,7 @@ import { knowledge } from "./routes/knowledge";
 import { comments } from "./routes/comments";
 import { commits } from "./routes/commits";
 import { secrets } from "./routes/secrets";
+import { relationships } from "./routes/relationships";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
@@ -32,6 +33,7 @@ app.route("/tasks", commits); // /tasks/:id/accept, /tasks/:id/commit
 app.route("/", comments);
 app.route("/repos", repos);
 app.route("/repos", secrets); // /repos/:name/secrets
+app.route("/repos", relationships); // /repos/:name/relationships + /repos/relationships
 app.route("/tokens", tokens);
 app.route("/knowledge", knowledge);
 
@@ -44,6 +46,15 @@ export async function startDaemon(): Promise<void> {
     hostname: config.daemonHost,
     fetch: app.fetch,
   });
+
+  // Verify ChromaDB is available (required for vector search)
+  const { isChromaAvailable } = await import("../knowledge/chromadb");
+  const chromaReady = await isChromaAvailable();
+  if (!chromaReady) {
+    logger.error("ChromaDB not available, exiting", { url: config.chromaUrl });
+    process.exit(1);
+  }
+  logger.info("ChromaDB ready", { url: config.chromaUrl });
 
   // Initialize Gitea if configured
   // Auth failures in initGiteaClient call process.exit(1) directly.

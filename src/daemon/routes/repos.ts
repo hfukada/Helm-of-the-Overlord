@@ -7,12 +7,13 @@ import { config } from "../../shared/config";
 import { parseRepo } from "../../knowledge/repo-parser";
 import { indexRepo } from "../../knowledge/indexer";
 import type { Repo } from "../../shared/types";
+import { embedGiteaCredentials } from "../../gitea/client";
 
 const repos = new Hono();
 
 repos.get("/", (c) => {
   const db = getDb();
-  const rows = db.query("SELECT * FROM repos ORDER BY name").all();
+  const rows = db.query("SELECT * FROM repos WHERE archived = 0 ORDER BY name").all();
   return c.json(rows);
 });
 
@@ -46,15 +47,27 @@ repos.post("/", async (c) => {
     repoPath = join(reposDir, name);
 
     const db = getDb();
-    const existing = db.query("SELECT id FROM repos WHERE name = ?").get(name);
+    const existing = db.query("SELECT id, archived FROM repos WHERE name = ?").get(name) as { id: number; archived: number } | null;
     if (existing) {
+      if (existing.archived) {
+        // Unarchive the existing repo instead of re-cloning
+        db.run("UPDATE repos SET archived = 0 WHERE id = ?", [existing.id]);
+        logger.info("Repo unarchived", { name });
+        return c.json({ id: existing.id, name, unarchived: true }, 200);
+      }
       return c.json({ error: `Repo '${name}' already exists` }, 409);
     }
 
     try {
       await $`mkdir -p ${reposDir}`.quiet();
+      const cloneUrl = embedGiteaCredentials(body.url);
       logger.info("Cloning repo", { url: body.url, dest: repoPath });
-      await $`git clone ${body.url} ${repoPath}`.quiet();
+      const result = await $`git clone ${cloneUrl} ${repoPath}`.nothrow().quiet();
+      if (result.exitCode !== 0) {
+        const stderr = result.stderr.toString().trim();
+        logger.error("Clone failed", { url: body.url, exitCode: result.exitCode, stderr });
+        return c.json({ error: `Clone failed: ${stderr || `exit code ${result.exitCode}`}` }, 500);
+      }
     } catch (err) {
       logger.error("Clone failed", { url: body.url, error: String(err) });
       return c.json({ error: `Clone failed: ${String(err)}` }, 500);
@@ -126,12 +139,14 @@ repos.post("/", async (c) => {
 repos.delete("/:name", (c) => {
   const name = c.req.param("name");
   const db = getDb();
-  const result = db.run("DELETE FROM repos WHERE name = ?", [name]);
+
+  const result = db.run("UPDATE repos SET archived = 1 WHERE name = ? AND archived = 0", [name]);
   if (result.changes === 0) {
-    return c.json({ error: "Repo not found" }, 404);
+    return c.json({ error: "Repo not found or already archived" }, 404);
   }
-  logger.info("Repo removed", { name });
-  return c.json({ removed: name });
+
+  logger.info("Repo archived", { name });
+  return c.json({ archived: name });
 });
 
 export { repos };

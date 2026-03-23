@@ -44,6 +44,10 @@ Per-line comments (formatted as `[file:line]`) are specific, targeted requests -
 ```
 {{/if}}
 {{/if}}
+{{#if relationshipContext}}
+
+{{relationshipContext}}
+{{/if}}
 {{#if knowledgeContext}}
 
 {{knowledgeContext}}

@@ -14,40 +14,59 @@ tasks.post("/", async (c) => {
     description: string;
     title?: string;
     repo_name?: string;
+    repo_names?: string[];
     source?: string;
   }>();
 
   const db = getDb();
 
-  let repoId: number | null = null;
-  if (body.repo_name) {
-    const repo = db.query("SELECT id FROM repos WHERE name = ?").get(body.repo_name) as { id: number } | null;
+  // Resolve repo IDs -- support both single and multi-repo
+  const repoIds: number[] = [];
+
+  if (body.repo_names && body.repo_names.length > 0) {
+    for (const name of body.repo_names) {
+      const repo = db.query("SELECT id FROM repos WHERE name = ? AND archived = 0").get(name) as { id: number } | null;
+      if (!repo) {
+        return c.json({ error: `Repo '${name}' not found` }, 404);
+      }
+      repoIds.push(repo.id);
+    }
+  } else if (body.repo_name) {
+    const repo = db.query("SELECT id FROM repos WHERE name = ? AND archived = 0").get(body.repo_name) as { id: number } | null;
     if (!repo) {
       return c.json({ error: `Repo '${body.repo_name}' not found` }, 404);
     }
-    repoId = repo.id;
+    repoIds.push(repo.id);
   } else {
-    // Use the only repo if there's exactly one
-    const repos = db.query("SELECT id FROM repos").all() as Array<{ id: number }>;
-    if (repos.length === 1) {
-      repoId = repos[0].id;
-    } else if (repos.length === 0) {
+    // No repo specified -- assign all active repos, let pre-plan narrow it down
+    const repos = db.query("SELECT id FROM repos WHERE archived = 0").all() as Array<{ id: number }>;
+    if (repos.length === 0) {
       return c.json({ error: "No repos registered. Use 'hoto repos add' first." }, 400);
-    } else {
-      return c.json({ error: "Multiple repos registered. Specify one with -r." }, 400);
+    }
+    for (const r of repos) {
+      repoIds.push(r.id);
     }
   }
 
   const id = ulid();
   const title = body.title ?? body.description.slice(0, 80);
 
+  // Insert task with first repo as primary (legacy compat)
   db.run(
     `INSERT INTO tasks (id, title, description, repo_id, source)
      VALUES (?, ?, ?, ?, ?)`,
-    [id, title, body.description, repoId, body.source ?? "cli"]
+    [id, title, body.description, repoIds[0], body.source ?? "cli"]
   );
 
-  logger.info("Task created", { taskId: id, title });
+  // Insert task_repos junction rows
+  for (const repoId of repoIds) {
+    db.run(
+      "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')",
+      [id, repoId]
+    );
+  }
+
+  logger.info("Task created", { taskId: id, title, repoCount: repoIds.length });
 
   // Fire and forget -- run task in background
   runTask(id).catch((err) => {
@@ -56,7 +75,7 @@ tasks.post("/", async (c) => {
     db.run("UPDATE tasks SET status = 'failed', updated_at = datetime('now') WHERE id = ?", [id]);
   });
 
-  return c.json({ id, title, status: "pending" }, 201);
+  return c.json({ id, title, status: "pending", repo_count: repoIds.length }, 201);
 });
 
 tasks.get("/", (c) => {

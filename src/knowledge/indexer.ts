@@ -3,7 +3,7 @@ import { join, } from "node:path";
 import { existsSync } from "node:fs";
 import { $ } from "bun";
 import { getDb } from "./db";
-import { isChromaAvailable, upsertDocuments, deleteCollectionItems } from "./chromadb";
+import { upsertDocuments, deleteCollectionItems } from "./chromadb";
 import { logger } from "../shared/logger";
 import type { Repo } from "../shared/types";
 
@@ -103,11 +103,8 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
       deleteTx(changed);
 
       // Also delete from ChromaDB for changed files
-      const chromaReady = await isChromaAvailable();
-      if (chromaReady) {
-        const chromaIds = changed.map((f) => `${repo.id}-${f}`);
-        await deleteCollectionItems(repo.name, chromaIds);
-      }
+      const chromaIds = changed.map((f) => `${repo.id}-${f}`);
+      await deleteCollectionItems(repo.name, chromaIds);
     } else {
       logger.info("Stored commit hash invalid, full reindex", { repo: repo.name, storedHash });
       db.run("DELETE FROM knowledge_chunks WHERE repo_id = ?", [repo.id]);
@@ -219,15 +216,8 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
   insertTx(chunks);
   logger.info("Indexed chunks", { repo: repo.name, count: chunks.length });
 
-  // Upsert into ChromaDB if available
-  let embeddingCount = 0;
-  const chromaReady = await isChromaAvailable();
-
-  if (chromaReady) {
-    embeddingCount = await upsertToChroma(repo, chunks);
-  } else {
-    logger.warn("ChromaDB not available, skipping vector indexing", { repo: repo.name });
-  }
+  // Upsert into ChromaDB
+  const embeddingCount = await upsertToChroma(repo, chunks);
 
   // Update stored commit hash
   if (currentHash) {
@@ -281,10 +271,7 @@ export async function indexChatHistory(
     [repo.id, chunk.source_file, chunk.chunk_type, chunk.title, chunk.content, JSON.stringify(chunk.metadata)]
   );
 
-  const chromaReady = await isChromaAvailable();
-  if (chromaReady) {
-    await upsertToChroma(repo, [chunk]);
-  }
+  await upsertToChroma(repo, [chunk]);
 }
 
 function splitIntoChunks(

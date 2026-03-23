@@ -271,6 +271,27 @@ export async function ensureGiteaRepo(repoName: string): Promise<void> {
   }
 }
 
+/**
+ * If a URL points at the configured Gitea instance, rewrite it to embed bot credentials.
+ * Matches on port since Gitea runs on a dedicated port and the hostname may vary
+ * (0.0.0.0, localhost, gitea, etc.).
+ */
+export function embedGiteaCredentials(url: string): string {
+  if (!config.giteaUrl || !_botToken) return url;
+  try {
+    const giteaBase = new URL(config.giteaUrl);
+    const parsed = new URL(url);
+    const giteaPort = giteaBase.port || (giteaBase.protocol === "https:" ? "443" : "80");
+    const urlPort = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+    if (giteaPort === urlPort) {
+      parsed.username = config.giteaBotUser;
+      parsed.password = _botToken;
+      return parsed.toString();
+    }
+  } catch {}
+  return url;
+}
+
 export function getGiteaRemoteUrl(repoName: string): string {
   const org = config.giteaOrg;
   const username = config.giteaBotUser;

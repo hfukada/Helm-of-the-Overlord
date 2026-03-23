@@ -172,6 +172,27 @@ const MIGRATIONS_V2 = [
   )`,
 ];
 
+const MIGRATIONS_V3 = [
+  `CREATE TABLE IF NOT EXISTS task_repos (
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    role TEXT NOT NULL DEFAULT 'target',
+    PRIMARY KEY (task_id, repo_id)
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS task_prs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+    pr_number INTEGER NOT NULL,
+    pr_url TEXT NOT NULL,
+    last_review_id INTEGER NOT NULL DEFAULT 0,
+    last_comment_id INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'open',
+    UNIQUE(task_id, repo_id)
+  )`,
+];
+
 const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
   "ALTER TABLE tasks ADD COLUMN lint_output TEXT",
@@ -183,6 +204,7 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN gitea_pr_url TEXT",
   "ALTER TABLE tasks ADD COLUMN gitea_last_review_id INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE tasks ADD COLUMN gitea_last_comment_id INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE repos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
 ];
 
 export function runMigrations(db: Database): void {
@@ -197,6 +219,10 @@ export function runMigrations(db: Database): void {
     db.exec(sql);
   }
 
+  for (const sql of MIGRATIONS_V3) {
+    db.exec(sql);
+  }
+
   for (const sql of ALTER_MIGRATIONS) {
     try {
       db.exec(sql);
@@ -204,4 +230,20 @@ export function runMigrations(db: Database): void {
       // Column already exists, ignore
     }
   }
+
+  // Backfill task_repos from existing tasks.repo_id (only where the repo still exists)
+  db.exec(
+    `INSERT OR IGNORE INTO task_repos (task_id, repo_id, role)
+     SELECT t.id, t.repo_id, 'target'
+     FROM tasks t JOIN repos r ON r.id = t.repo_id
+     WHERE t.repo_id IS NOT NULL`
+  );
+
+  // Backfill task_prs from existing tasks with gitea_pr_number
+  db.exec(
+    `INSERT OR IGNORE INTO task_prs (task_id, repo_id, pr_number, pr_url, last_review_id, last_comment_id)
+     SELECT t.id, t.repo_id, t.gitea_pr_number, COALESCE(t.gitea_pr_url, ''), t.gitea_last_review_id, t.gitea_last_comment_id
+     FROM tasks t JOIN repos r ON r.id = t.repo_id
+     WHERE t.gitea_pr_number IS NOT NULL AND t.repo_id IS NOT NULL`
+  );
 }

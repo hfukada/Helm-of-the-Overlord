@@ -12,6 +12,9 @@ Path: {{repoPath}}
 ## Task
 Title: {{taskTitle}}
 Description: {{taskDescription}}
+{{#if relationshipContext}}
+{{relationshipContext}}
+{{/if}}
 {{#if knowledgeContext}}
 {{knowledgeContext}}
 {{/if}}
