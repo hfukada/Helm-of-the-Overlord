@@ -1,0 +1,18 @@
+FROM oven/bun:1
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package.json bun.lock bunfig.toml ./
+RUN bun install
+
+COPY src/ src/
+COPY tests/ tests/
+COPY tsconfig.json biome.json ./
+
+ENV HOTO_WORKSPACE=/tmp/hoto-test
+ENV HOTO_LOG_LEVEL=warn
+
+CMD ["bun", "test"]

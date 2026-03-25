@@ -16,6 +16,33 @@ if [ ! -f /data/homeserver.yaml ]; then
 
 enable_registration: true
 enable_registration_without_verification: true
+
+rc_message:
+  per_second: 1000
+  burst_count: 1000
+rc_registration:
+  per_second: 1000
+  burst_count: 1000
+rc_login:
+  address:
+    per_second: 1000
+    burst_count: 1000
+  account:
+    per_second: 1000
+    burst_count: 1000
+  failed_attempts:
+    per_second: 1000
+    burst_count: 1000
+rc_joins:
+  local:
+    per_second: 1000
+    burst_count: 1000
+  remote:
+    per_second: 1000
+    burst_count: 1000
+
+room_list_publication_rules:
+  - action: allow
 EOF
 fi
 

@@ -16,6 +16,7 @@ export interface MessageEvent {
 export interface MessagingProvider {
   connect(): Promise<void>;
   disconnect(): Promise<void>;
+  getMainChannelId(): string | null;
   createTaskChannel(taskId: string, title: string): Promise<string>;
   setChannelTopic(channelId: string, topic: string): Promise<void>;
   archiveChannel(channelId: string): Promise<void>;

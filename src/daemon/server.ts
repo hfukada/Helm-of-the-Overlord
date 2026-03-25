@@ -77,7 +77,11 @@ export async function startDaemon(): Promise<void> {
       const manager = new MessagingManager(provider);
       setMessagingManager(manager);
       await manager.start();
-      logger.info("Matrix messaging initialized");
+      const mainChannelId = provider.getMainChannelId();
+      if (mainChannelId) {
+        manager.setMainChannel(mainChannelId);
+      }
+      logger.info("Matrix messaging initialized", { mainChannel: mainChannelId });
     } catch (err) {
       logger.warn("Matrix messaging failed to initialize, continuing without it", { error: String(err) });
     }

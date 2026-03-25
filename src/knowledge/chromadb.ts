@@ -3,12 +3,21 @@ import { logger } from "../shared/logger";
 
 // Direct REST client for ChromaDB -- avoids the JS client's requirement
 // for a local embedding function. The ChromaDB server handles embedding
-// with its built-in model (all-MiniLM-L6-v2).
+// with its built-in model.
 
 const collectionIds = new Map<string, string>();
 
+let _apiVersion: "v1" | "v2" | null = null;
+
 function chromaUrl(path: string): string {
   return `${config.chromaUrl}${path}`;
+}
+
+function apiPrefix(): string {
+  if (_apiVersion === "v2") {
+    return "/api/v2/tenants/default_tenant/databases/default_database";
+  }
+  return "/api/v1";
 }
 
 async function chromaFetch(path: string, opts: RequestInit = {}): Promise<Response> {
@@ -19,12 +28,26 @@ async function chromaFetch(path: string, opts: RequestInit = {}): Promise<Respon
 }
 
 export async function isChromaAvailable(): Promise<boolean> {
+  // Try v2 first (ChromaDB >= 1.0), fall back to v1
   try {
-    const res = await chromaFetch("/api/v1/heartbeat", { signal: AbortSignal.timeout(2000) });
-    return res.ok;
-  } catch {
-    return false;
-  }
+    const v2 = await chromaFetch("/api/v2/heartbeat", { signal: AbortSignal.timeout(2000) });
+    if (v2.ok) {
+      _apiVersion = "v2";
+      logger.info("ChromaDB using v2 API");
+      return true;
+    }
+  } catch {}
+
+  try {
+    const v1 = await chromaFetch("/api/v1/heartbeat", { signal: AbortSignal.timeout(2000) });
+    if (v1.ok) {
+      _apiVersion = "v1";
+      logger.info("ChromaDB using v1 API");
+      return true;
+    }
+  } catch {}
+
+  return false;
 }
 
 async function getOrCreateCollectionId(repoName: string): Promise<string> {
@@ -34,7 +57,7 @@ async function getOrCreateCollectionId(repoName: string): Promise<string> {
   const collectionName = `hoto-${repoName}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 63);
 
   // Try to get existing
-  const getRes = await chromaFetch(`/api/v1/collections/${collectionName}`);
+  const getRes = await chromaFetch(`${apiPrefix()}/collections/${collectionName}`);
   if (getRes.ok) {
     const data = await getRes.json() as { id: string };
     collectionIds.set(repoName, data.id);
@@ -42,7 +65,7 @@ async function getOrCreateCollectionId(repoName: string): Promise<string> {
   }
 
   // Create new
-  const createRes = await chromaFetch("/api/v1/collections", {
+  const createRes = await chromaFetch(`${apiPrefix()}/collections`, {
     method: "POST",
     body: JSON.stringify({
       name: collectionName,
@@ -72,7 +95,7 @@ export async function upsertDocuments(
 
   const BATCH = 100;
   for (let i = 0; i < ids.length; i += BATCH) {
-    const res = await chromaFetch(`/api/v1/collections/${collectionId}/upsert`, {
+    const res = await chromaFetch(`${apiPrefix()}/collections/${collectionId}/upsert`, {
       method: "POST",
       body: JSON.stringify({
         ids: ids.slice(i, i + BATCH),
@@ -111,7 +134,7 @@ export async function queryDocuments(
     body.where = where;
   }
 
-  const res = await chromaFetch(`/api/v1/collections/${collectionId}/query`, {
+  const res = await chromaFetch(`${apiPrefix()}/collections/${collectionId}/query`, {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -148,7 +171,7 @@ export async function deleteCollectionItems(
     const collectionId = await getOrCreateCollectionId(repoName);
     const BATCH = 5000;
     for (let i = 0; i < ids.length; i += BATCH) {
-      await chromaFetch(`/api/v1/collections/${collectionId}/delete`, {
+      await chromaFetch(`${apiPrefix()}/collections/${collectionId}/delete`, {
         method: "POST",
         body: JSON.stringify({ ids: ids.slice(i, i + BATCH) }),
       });

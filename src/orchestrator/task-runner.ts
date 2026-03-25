@@ -400,7 +400,11 @@ export async function runTask(taskId: string): Promise<void> {
   logger.info("Starting index phase", { taskId: task.id });
 
   try {
-    await indexRepo(repo);
+    const indexResult = await indexRepo(repo);
+    logger.info("Finished indexing", { repo: repo.name, chunks: indexResult.chunks });
+    if (manager) {
+      manager.notifyAgentOutput(task.id, `Finished indexing ${repo.name}: ${indexResult.chunks} chunks`).catch(() => {});
+    }
     state = advanceState(state, "done");
   } catch (err) {
     logger.warn("Repo reindex failed, continuing", { error: String(err) });

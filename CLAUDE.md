@@ -27,6 +27,22 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `bun run src/index.ts "task description"` - Submit task
 - `bun run src/index.ts status` - List tasks
 
+## Testing
+
+Tests run in a Docker container to isolate them from the local workspace and DB.
+
+```
+bun run test                # Run all tests in a container (default)
+bun run test:local          # Run tests locally (uses bun test directly -- avoid, leaks test data into ~/.hoto-workspace)
+bun run typecheck           # Type-check without emitting
+bun run lint                # Lint with Biome
+```
+
+- `bun run test` builds `Dockerfile.test` via `docker-compose.test.yml` and runs `bun test` inside a container with a tmpfs workspace at `/tmp/hoto-test`.
+- Tests that require the `claude` CLI (integration tests calling the actual Claude API) are auto-skipped when `claude` is not installed in the container.
+- Tests that use the DB set `process.env.HOTO_WORKSPACE` to a `/tmp/` path before any imports, giving each test file its own isolated SQLite DB.
+- **Never run `bun test` directly** on a machine with a live daemon -- test data (fake repos, tasks) will leak into the production DB.
+
 ## Docker
 
 Hoto runs as a container via `Dockerfile` (multi-stage: deps, web-build, runtime).

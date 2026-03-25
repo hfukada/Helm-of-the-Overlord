@@ -13,6 +13,7 @@ export class MatrixProvider implements MessagingProvider {
   private commandHandlers: Array<(cmd: CommandEvent) => Promise<void>> = [];
   private messageHandlers: Array<(msg: MessageEvent) => Promise<void>> = [];
   private userId: string = "";
+  private mainChannelId: string | null = null;
 
   async connect(): Promise<void> {
     const homeserverUrl = config.matrixHomeserverUrl;
@@ -117,9 +118,13 @@ export class MatrixProvider implements MessagingProvider {
     });
 
     // Ensure main channel exists
-    await this.ensureMainChannel();
+    this.mainChannelId = await this.ensureMainChannel();
 
     logger.info("Matrix client connected", { userId: botUser, homeserver: homeserverUrl });
+  }
+
+  getMainChannelId(): string | null {
+    return this.mainChannelId;
   }
 
   async disconnect(): Promise<void> {
@@ -253,25 +258,22 @@ export class MatrixProvider implements MessagingProvider {
     const db = getDb();
     const stored = db.query("SELECT value FROM messaging_config WHERE key = 'main_channel_id'").get() as { value: string } | null;
 
-    if (stored) {
-      // Verify room still exists
-      try {
-        await this.client.getRoom(stored.value);
-        return stored.value;
-      } catch {
-        // Room gone, recreate
-      }
-    }
-
-    // Try to resolve alias
+    // Try to resolve the alias on the server (authoritative check)
     try {
       const resolved = await this.client.getRoomIdForAlias(alias);
       if (resolved?.room_id) {
+        // Join the room if not already joined
+        try { await this.client.joinRoom(resolved.room_id); } catch {}
         db.run("INSERT OR REPLACE INTO messaging_config (key, value) VALUES ('main_channel_id', ?)", [resolved.room_id]);
+        await this.client.setRoomDirectoryVisibility(resolved.room_id, sdk.Visibility.Public).catch(() => {});
+        logger.info("Main channel found via alias", { roomId: resolved.room_id });
         return resolved.room_id;
       }
     } catch {
-      // Alias doesn't exist, create room
+      // Alias doesn't exist -- clear stale stored ID if any
+      if (stored) {
+        db.run("DELETE FROM messaging_config WHERE key = 'main_channel_id'");
+      }
     }
 
     const result = await this.client.createRoom({
@@ -283,6 +285,13 @@ export class MatrixProvider implements MessagingProvider {
     });
 
     db.run("INSERT OR REPLACE INTO messaging_config (key, value) VALUES ('main_channel_id', ?)", [result.room_id]);
+
+    try {
+      await this.client.setRoomDirectoryVisibility(result.room_id, sdk.Visibility.Public);
+    } catch (err) {
+      logger.warn("Failed to publish main channel to directory", { error: String(err) });
+    }
+
     logger.info("Created main Matrix channel", { roomId: result.room_id });
 
     return result.room_id;

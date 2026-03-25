@@ -1,0 +1,10 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      HOTO_WORKSPACE: /tmp/hoto-test
+      HOTO_LOG_LEVEL: warn
+    tmpfs:
+      - /tmp/hoto-test

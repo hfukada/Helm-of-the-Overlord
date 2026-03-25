@@ -28,9 +28,20 @@ async function isDaemonUp(): Promise<boolean> {
 
 // ---------------------------------------------------------------------------
 // 1. Claude CLI integration (claudeText / claudeBatch used by ask)
+//    Skipped when `claude` CLI is not installed (e.g. in test containers)
 // ---------------------------------------------------------------------------
 
-describe("claude-cli: claudeText (used by non-streaming ask)", () => {
+const hasClaude = await (async () => {
+  try {
+    const p = Bun.spawn(["claude", "--version"], { stdout: "pipe", stderr: "pipe" });
+    await p.exited;
+    return p.exitCode === 0;
+  } catch { return false; }
+})();
+
+const describeWithClaude = hasClaude ? describe : describe.skip;
+
+describeWithClaude("claude-cli: claudeText (used by non-streaming ask)", () => {
   test("returns text for a simple prompt", async () => {
     const text = await claudeText({
       prompt: "Reply with exactly: PONG",
@@ -49,7 +60,7 @@ describe("claude-cli: claudeText (used by non-streaming ask)", () => {
   }, 30_000);
 });
 
-describe("claude-cli: claudeBatch (used by streaming ask)", () => {
+describeWithClaude("claude-cli: claudeBatch (used by streaming ask)", () => {
   test("fires text events and returns result", async () => {
     const events: ClaudeEvent[] = [];
     const result = await claudeBatch(
@@ -182,7 +193,7 @@ describe("daemon poll resilience", () => {
 // 4. Subprocess integration (runClaude wrapper)
 // ---------------------------------------------------------------------------
 
-describe("subprocess runClaude", () => {
+describeWithClaude("subprocess runClaude", () => {
   // This requires DB to be initialized, so only run if daemon is up
   test("maps claudeBatch result to SubprocessResult format", async () => {
     // Test the claudeBatch -> SubprocessResult mapping logic directly

@@ -9,12 +9,13 @@
   "scripts": {
     "dev": "bun run src/index.ts",
     "daemon": "bun run src/index.ts daemon start",
-    "test": "bun test",
+    "test": "docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test",
+    "test:local": "bun test",
     "lint": "bunx biome lint ./src/",
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "chromadb": "^1.9.2",
+    "chromadb": "1.9.2",
     "hono": "^4.7.0",
     "matrix-js-sdk": "^34.0.0",
     "ulid": "^2.3.0"

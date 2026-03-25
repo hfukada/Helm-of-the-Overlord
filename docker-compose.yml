@@ -1,29 +1,29 @@
 services:
-  hoto:
-    build: .
-    ports:
-      - "7777:7777"
-    volumes:
-      - hoto-data:/data
-      - gitea-data:/gitea-data:ro
-      # Mount host credentials for Claude Code
-      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
-    env_file:
-      - .env
-    environment:
-      HOTO_HOST: "0.0.0.0"
-      HOTO_PORT: "7777"
-      HOTO_WORKSPACE: /data
-      CHROMA_URL: http://chromadb:8000
-      MATRIX_HOMESERVER_URL: http://synapse:8008
-      GITEA_URL: http://gitea:3000
-    depends_on:
-      - chromadb
-      - synapse
-      - gitea
+  #hoto:
+  #  build: .
+  #  ports:
+  #    - "7777:7777"
+  #  volumes:
+  #    - hoto-data:/data
+  #    - gitea-data:/gitea-data:ro
+  #    # Mount host credentials for Claude Code
+  #    - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+  #  env_file:
+  #    - .env
+  #  environment:
+  #    HOTO_HOST: "0.0.0.0"
+  #    HOTO_PORT: "7777"
+  #    HOTO_WORKSPACE: /data
+  #    CHROMA_URL: http://chromadb:8000
+  #    MATRIX_HOMESERVER_URL: http://synapse:8008
+  #    GITEA_URL: http://gitea:3000
+  #  depends_on:
+  #    - chromadb
+  #    - synapse
+  #    - gitea
 
   chromadb:
-    image: ghcr.io/chroma-core/chroma:latest
+    image: ghcr.io/chroma-core/chroma:1.5.5
     ports:
       - "8000:8000"
     volumes:
@@ -32,7 +32,7 @@ services:
       - IS_PERSISTENT=TRUE
 
   synapse:
-    image: matrixdotorg/synapse:latest
+    image: matrixdotorg/synapse:v1.149.1
     entrypoint: ["/bin/bash", "/scripts/synapse-init.sh"]
     ports:
       - "8008:8008"
@@ -41,7 +41,7 @@ services:
       - ./scripts/synapse-init.sh:/scripts/synapse-init.sh:ro
 
   gitea:
-    image: gitea/gitea:latest
+    image: gitea/gitea:1.25.5
     entrypoint: ["/bin/sh", "/hoto-scripts/gitea-init.sh"]
     ports:
       - "3000:3000"

@@ -3,4 +3,3 @@ src/web/dist
 src/web/node_modules
 .git
 .claude
-tests/

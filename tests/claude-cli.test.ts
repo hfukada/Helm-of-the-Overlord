@@ -281,9 +281,20 @@ describe("parseStreamLine", () => {
 
 // ---------------------------------------------------------------------------
 // Integration tests: actual Claude CLI invocation
+// Skipped when `claude` CLI is not installed (e.g. in test containers)
 // ---------------------------------------------------------------------------
 
-describe("claudeText (integration)", () => {
+const hasClaude = await (async () => {
+  try {
+    const p = Bun.spawn(["claude", "--version"], { stdout: "pipe", stderr: "pipe" });
+    await p.exited;
+    return p.exitCode === 0;
+  } catch { return false; }
+})();
+
+const describeIntegration = hasClaude ? describe : describe.skip;
+
+describeIntegration("claudeText (integration)", () => {
   test("returns a text response", async () => {
     const result = await claudeText({
       prompt: "Reply with exactly: PONG",
@@ -293,7 +304,7 @@ describe("claudeText (integration)", () => {
   }, 30_000);
 });
 
-describe("claudeJSON (integration)", () => {
+describeIntegration("claudeJSON (integration)", () => {
   test("returns result with usage", async () => {
     const result = await claudeJSON({
       prompt: "Reply with exactly: PONG",
@@ -306,7 +317,7 @@ describe("claudeJSON (integration)", () => {
   }, 30_000);
 });
 
-describe("claudeBatch (integration)", () => {
+describeIntegration("claudeBatch (integration)", () => {
   test("returns result and fires events", async () => {
     const events: ClaudeEvent[] = [];
     const result = await claudeBatch(
@@ -321,7 +332,7 @@ describe("claudeBatch (integration)", () => {
   }, 30_000);
 });
 
-describe("claudeStream (integration)", () => {
+describeIntegration("claudeStream (integration)", () => {
   test("streams incremental deltas and returns result", async () => {
     const events: ClaudeEvent[] = [];
     const result = await claudeStream(
