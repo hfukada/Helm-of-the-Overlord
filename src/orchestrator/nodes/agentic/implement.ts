@@ -1,20 +1,25 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
 import { runClaude } from "../../subprocess";
-import { buildImplementPrompt, buildSystemPrompt } from "../../context-builder";
+import { buildImplementPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 
 export async function executeImplement(
   task: Task,
-  repo: Repo,
+  repos: Repo[],
   workDir: string,
   plan: string,
   mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void
+  onEvent?: (type: string, content: string) => void,
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
-  const prompt = await buildImplementPrompt(task, repo, plan);
+
+  const prompt = await buildImplementPrompt(task, repos, plan);
+
+  const repoNames = repos.map((r) => r.name).join(", ");
+  const systemPrompt = `You are working on: ${repoNames}. Each repo is a subdirectory of your working directory. You have access to Read, Write, Edit, Glob, Grep, and Bash tools. Do not run destructive commands. Do not push to git.`;
+
   const model = config.defaultModel;
 
   const db = getDb();
@@ -30,7 +35,7 @@ export async function executeImplement(
 
   const result = await runClaude({
     prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
+    systemPrompt,
     workDir,
     model,
     maxTurns: 20,

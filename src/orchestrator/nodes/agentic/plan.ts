@@ -33,7 +33,7 @@ export async function executePlan(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 10,
+    maxTurns: 7,
     allowedTools,
     mcpConfigPath,
     agentRunId,

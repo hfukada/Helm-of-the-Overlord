@@ -550,42 +550,39 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // === PER-REPO: IMPLEMENT -> LINT -> CI ===
-  const repoPlans = parseMultiRepoPlan(planResult.plan, repos.map((r) => r.name));
+  // === IMPLEMENT (once, across all repos) ===
+  updateTaskStatus(task.id, "implementing", state);
+  logger.info("Starting implement phase", { taskId: task.id, repoCount: repos.length });
+
+  if (manager && repos.length > 1) {
+    manager.notifyAgentOutput(task.id, `Implementing across ${repos.length} repos: ${repos.map((r) => r.name).join(", ")}`).catch(() => {});
+  }
+
+  // For multi-repo, run from task dir so agent sees all repos as subdirs
+  // For single-repo, run from the repo's workDir directly
+  const implWorkDir = repos.length > 1 ? taskDir(task.id) : workDirs.get(repos[0].name)!;
+
+  const implResult = await executeImplement(
+    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking
+  );
+
+  if (implResult.error) {
+    if (isTaskCancelled(task.id)) return;
+    logger.error("Implementation failed", { taskId: task.id, error: implResult.error });
+    state = advanceState(state, "error");
+    updateTaskStatus(task.id, "review", state);
+    return;
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === PER-REPO: CI -> LINT ===
+  state = advanceState(state, "done");
 
   for (const repo of repos) {
     const workDir = workDirs.get(repo.name)!;
-    const repoPlan = repoPlans.get(repo.name) ?? planResult.plan;
 
-    logger.info("Processing repo", { taskId: task.id, repo: repo.name });
-    if (manager) {
-      manager.notifyAgentOutput(task.id, `Implementing: ${repo.name}`).catch(() => {});
-    }
-
-    // --- Implement ---
-    updateTaskStatus(task.id, "implementing", state);
-
-    // Generate per-repo MCP config
-    let repoMcpConfigPath: string | undefined;
-    try {
-      repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
-    } catch {}
-
-    const implResult = await executeImplement(task, repo, workDir, repoPlan, repoMcpConfigPath, onThinking);
-
-    if (implResult.error) {
-      if (isTaskCancelled(task.id)) return;
-      logger.error("Implementation failed", { taskId: task.id, repo: repo.name, error: implResult.error });
-      state = advanceState(state, "error");
-      updateTaskStatus(task.id, "review", state);
-      return;
-    }
-
-    if (isTaskCancelled(task.id)) return;
-
-    // --- Lint (with fix loop) ---
-    state = advanceState(state, "done");
-    updateTaskStatus(task.id, "linting", state);
+    logger.info("Running CI/lint for repo", { taskId: task.id, repo: repo.name });
 
     // Set up Docker container per repo if applicable
     let containerName: string | null = null;
@@ -593,7 +590,50 @@ export async function runTask(taskId: string): Promise<void> {
       containerName = await setupTaskContainer(repo, workDir, task.id);
     } catch {}
 
+    let repoMcpConfigPath: string | undefined;
+    try {
+      repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+    } catch {}
+
+    // --- CI (test/build with fix loop) ---
+    if (repo.test_cmd || repo.build_cmd) {
+      updateTaskStatus(task.id, "ci_running", state);
+
+      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+        logger.info("Running CI", { taskId: task.id, repo: repo.name, round });
+
+        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+          saveNodeOutput(task.id, "ci", accumulated, false);
+        });
+        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+        if (ciResult.success) break;
+
+        if (containerName) discoverSecrets(repo.id, ciResult.output);
+        if (round >= MAX_CI_ROUNDS - 1) break;
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "fail");
+        updateTaskStatus(task.id, "ci_fixing", state);
+
+        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+        if (fixResult.error) {
+          if (isTaskCancelled(task.id)) return;
+          break;
+        }
+
+        state = advanceState(state, "done");
+        state.ci_rounds++;
+        updateTaskStatus(task.id, "ci_running", state);
+      }
+    }
+
+    if (isTaskCancelled(task.id)) return;
+
+    // --- Lint (with fix loop) ---
     if (repo.lint_cmd) {
+      updateTaskStatus(task.id, "linting", state);
+
       for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
         logger.info("Running lint", { taskId: task.id, repo: repo.name, round });
 
@@ -621,53 +661,6 @@ export async function runTask(taskId: string): Promise<void> {
         state.lint_rounds++;
         updateTaskStatus(task.id, "linting", state);
       }
-    }
-
-    if (isTaskCancelled(task.id)) return;
-
-    // --- CI (test/build with fix loop) ---
-    if (repo.test_cmd || repo.build_cmd) {
-      state = advanceState(state, "clean");
-      updateTaskStatus(task.id, "ci_running", state);
-
-      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-        logger.info("Running CI", { taskId: task.id, repo: repo.name, round });
-
-        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
-          saveNodeOutput(task.id, "ci", accumulated, false);
-        });
-        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-        if (ciResult.success) {
-          state = advanceState(state, "pass");
-          break;
-        }
-
-        if (containerName) discoverSecrets(repo.id, ciResult.output);
-        if (round >= MAX_CI_ROUNDS - 1) {
-          state = advanceState(state, "pass");
-          break;
-        }
-        if (isTaskCancelled(task.id)) return;
-
-        state = advanceState(state, "fail");
-        updateTaskStatus(task.id, "ci_fixing", state);
-
-        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
-        if (fixResult.error) {
-          if (isTaskCancelled(task.id)) return;
-          state = advanceState(state, "error");
-          break;
-        }
-
-        state = advanceState(state, "done");
-        state.ci_rounds++;
-        updateTaskStatus(task.id, "ci_running", state);
-      }
-    } else if (repos.indexOf(repo) === repos.length - 1) {
-      // Last repo with no CI -- advance to review
-      state = advanceState(state, "clean");
-      state = advanceState(state, "pass");
     }
 
     // Tear down Docker container
@@ -905,48 +898,71 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   if (isTaskCancelled(task.id)) return;
 
-  // === PER-REPO: IMPLEMENT -> LINT -> CI ===
-  const repoPlans = parseMultiRepoPlan(planResult.plan, repos.map((r) => r.name));
+  // === IMPLEMENT (once, across all repos) ===
+  updateTaskStatus(task.id, "implementing", state);
+  logger.info("Starting revision implement phase", { taskId: task.id, repoCount: repos.length });
+
+  const implWorkDir = repos.length > 1 ? taskDir(task.id) : workDirs.get(repos[0].name)!;
+
+  const implResult = await executeImplement(
+    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking
+  );
+
+  if (implResult.error) {
+    if (isTaskCancelled(task.id)) return;
+    logger.error("Revision implementation failed", { taskId: task.id, error: implResult.error });
+    state = advanceState(state, "error");
+    updateTaskStatus(task.id, "review", state);
+    return;
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === PER-REPO: CI -> LINT ===
+  state = advanceState(state, "done");
 
   for (const repo of repos) {
     const workDir = workDirs.get(repo.name)!;
-    const repoPlan = repoPlans.get(repo.name) ?? planResult.plan;
 
-    logger.info("Revising repo", { taskId: task.id, repo: repo.name });
-    if (manager) {
-      manager.notifyAgentOutput(task.id, `Revising: ${repo.name}`).catch(() => {});
-    }
-
-    // --- Implement ---
-    updateTaskStatus(task.id, "implementing", state);
+    let containerName: string | null = null;
+    try { containerName = await setupTaskContainer(repo, workDir, task.id); } catch {}
 
     let repoMcpConfigPath: string | undefined;
-    try {
-      repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
-    } catch {}
+    try { repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name); } catch {}
 
-    const implResult = await executeImplement(task, repo, workDir, repoPlan, repoMcpConfigPath, onThinking);
+    // --- CI ---
+    if (repo.test_cmd || repo.build_cmd) {
+      updateTaskStatus(task.id, "ci_running", state);
 
-    if (implResult.error) {
-      if (isTaskCancelled(task.id)) return;
-      logger.error("Revision implementation failed", { taskId: task.id, repo: repo.name, error: implResult.error });
-      state = advanceState(state, "error");
-      updateTaskStatus(task.id, "review", state);
-      return;
+      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+          saveNodeOutput(task.id, "ci", accumulated, false);
+        });
+        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+        if (ciResult.success) break;
+        if (containerName) discoverSecrets(repo.id, ciResult.output);
+        if (round >= MAX_CI_ROUNDS - 1) break;
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "fail");
+        updateTaskStatus(task.id, "ci_fixing", state);
+
+        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+        if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
+
+        state = advanceState(state, "done");
+        state.ci_rounds++;
+        updateTaskStatus(task.id, "ci_running", state);
+      }
     }
 
     if (isTaskCancelled(task.id)) return;
 
     // --- Lint ---
-    state = advanceState(state, "done");
-    updateTaskStatus(task.id, "linting", state);
-
-    let containerName: string | null = null;
-    try {
-      containerName = await setupTaskContainer(repo, workDir, task.id);
-    } catch {}
-
     if (repo.lint_cmd) {
+      updateTaskStatus(task.id, "linting", state);
+
       for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
         const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
           saveNodeOutput(task.id, "lint", accumulated, false);
@@ -968,39 +984,6 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
         state.lint_rounds++;
         updateTaskStatus(task.id, "linting", state);
       }
-    }
-
-    if (isTaskCancelled(task.id)) return;
-
-    // --- CI ---
-    if (repo.test_cmd || repo.build_cmd) {
-      state = advanceState(state, "clean");
-      updateTaskStatus(task.id, "ci_running", state);
-
-      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
-          saveNodeOutput(task.id, "ci", accumulated, false);
-        });
-        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-        if (ciResult.success) { state = advanceState(state, "pass"); break; }
-        if (containerName) discoverSecrets(repo.id, ciResult.output);
-        if (round >= MAX_CI_ROUNDS - 1) { state = advanceState(state, "pass"); break; }
-        if (isTaskCancelled(task.id)) return;
-
-        state = advanceState(state, "fail");
-        updateTaskStatus(task.id, "ci_fixing", state);
-
-        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
-        if (fixResult.error) { if (isTaskCancelled(task.id)) return; state = advanceState(state, "error"); break; }
-
-        state = advanceState(state, "done");
-        state.ci_rounds++;
-        updateTaskStatus(task.id, "ci_running", state);
-      }
-    } else if (repos.indexOf(repo) === repos.length - 1) {
-      state = advanceState(state, "clean");
-      state = advanceState(state, "pass");
     }
 
     if (containerName) {

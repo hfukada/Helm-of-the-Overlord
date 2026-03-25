@@ -303,20 +303,36 @@ export async function buildRevisionPlanPrompt(
 
 export async function buildImplementPrompt(
   task: Task,
-  repo: Repo,
+  repos: Repo[],
   plan: string
 ): Promise<string> {
+  const repoLines = repos.map((r) => {
+    let line = `- **./${r.name}/** -- ${r.language ?? "unknown"}`;
+    if (r.framework) line += ` (${r.framework})`;
+    return line;
+  });
+  const repoList = repoLines.join("\n");
+
+  const knowledgeSections: string[] = [];
+  for (const repo of repos) {
+    if (!repo.id) continue;
+    try {
+      const results = await search({ query: task.description, repo_id: repo.id, limit: 5 });
+      for (const r of results) {
+        knowledgeSections.push(`### [${r.repo_name}] ${r.source_file} (${r.chunk_type})\n${r.content}`);
+      }
+    } catch {}
+  }
+
   let knowledgeContext = "";
-  if (repo.id) {
-    knowledgeContext = await getKnowledgeContext(task.description, repo.id, 5);
+  if (knowledgeSections.length > 0) {
+    knowledgeContext = ["## Repository Knowledge Base", ...knowledgeSections].join("\n");
   }
 
   const chatContext = await getChatContext(task.id);
 
   return renderTemplate("implement", {
-    repoName: repo.name,
-    language: repo.language ?? undefined,
-    framework: repo.framework ?? undefined,
+    repoList,
     taskTitle: task.title,
     taskDescription: task.description,
     knowledgeContext: knowledgeContext || undefined,

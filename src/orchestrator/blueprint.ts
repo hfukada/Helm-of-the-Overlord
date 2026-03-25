@@ -34,27 +34,32 @@ const NODES: BlueprintNode[] = [
   {
     name: "implement",
     type: "agentic",
+    transitions: { done: "ci", error: "review" },
+  },
+  {
+    name: "ci",
+    type: "deterministic",
+    transitions: { pass: "lint", fail: "fix_ci" },
+  },
+  {
+    name: "fix_ci",
+    type: "agentic",
+    transitions: { done: "ci_try_2", error: "review" },
+  },
+  {
+    name: "ci_try_2",
+    type: "agentic",
     transitions: { done: "lint", error: "review" },
   },
   {
     name: "lint",
     type: "deterministic",
-    transitions: { clean: "ci", errors: "fix_lint" },
+    transitions: { clean: "review", errors: "fix_lint" },
   },
   {
     name: "fix_lint",
     type: "agentic",
     transitions: { done: "lint", error: "review" },
-  },
-  {
-    name: "ci",
-    type: "deterministic",
-    transitions: { pass: "review", fail: "fix_ci" },
-  },
-  {
-    name: "fix_ci",
-    type: "agentic",
-    transitions: { done: "ci", error: "review" },
   },
   {
     name: "review",
