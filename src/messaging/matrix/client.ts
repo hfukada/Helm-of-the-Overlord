@@ -112,7 +112,7 @@ export class MatrixProvider implements MessagingProvider {
 
     // Wait for initial sync
     await new Promise<void>((resolve) => {
-      this.client!.once(sdk.ClientEvent.Sync, (state) => {
+      this.client?.once(sdk.ClientEvent.Sync, (state) => {
         if (state === "PREPARED") resolve();
       });
     });
@@ -186,6 +186,25 @@ export class MatrixProvider implements MessagingProvider {
     }
   }
 
+  async kickAllMembers(channelId: string): Promise<void> {
+    if (!this.client) return;
+    try {
+      const room = this.client.getRoom(channelId);
+      if (!room) return;
+      const members = room.getJoinedMembers();
+      for (const member of members) {
+        if (member.userId === this.userId) continue;
+        try {
+          await this.client.kick(channelId, member.userId, "Task cleaned up");
+        } catch (err) {
+          logger.warn("Failed to kick member from channel", { channelId, userId: member.userId, error: String(err) });
+        }
+      }
+    } catch (err) {
+      logger.warn("Failed to kick members from channel", { channelId, error: String(err) });
+    }
+  }
+
   async sendMessage(channelId: string, text: string): Promise<void> {
     if (!this.client) return;
     try {
@@ -223,7 +242,7 @@ export class MatrixProvider implements MessagingProvider {
     // Try to register first
     try {
       const registerResult = await tempClient.register(localpart, password, null, { type: "m.login.dummy" });
-      accessToken = registerResult.access_token!;
+      accessToken = registerResult.access_token ?? "";
       logger.info("Matrix bot registered", { user: botUser });
     } catch {
       // Registration failed, try login

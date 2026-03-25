@@ -24,7 +24,7 @@ export async function ensureRepoOnGitea(repoPath: string, repoName: string): Pro
 
 export async function pushBranchToGitea(
   workDir: string,
-  repoPath: string,
+  _repoPath: string,
   repoName: string,
   branchName: string,
   force?: boolean

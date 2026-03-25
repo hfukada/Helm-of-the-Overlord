@@ -208,6 +208,49 @@ tasks.post("/:id/cancel", async (c) => {
   return c.json({ id, status: "cancelled" });
 });
 
+tasks.delete("/done", async (c) => {
+  const db = getDb();
+
+  const FINISHED_STATUSES = ["committed", "cancelled", "failed"];
+  const doneTasks = db.query(
+    `SELECT id FROM tasks WHERE status IN (${FINISHED_STATUSES.map(() => "?").join(",")})`
+  ).all(...FINISHED_STATUSES) as Array<{ id: string }>;
+
+  const deleted: string[] = [];
+  const errors: Array<{ id: string; error: string }> = [];
+
+  for (const task of doneTasks) {
+    try {
+      // Archive (and kick members from) the messaging channel
+      await getMessagingManager()?.kickAndArchiveTaskChannel(task.id);
+
+      const agentRunIds = db
+        .query("SELECT id FROM agent_runs WHERE task_id = ?")
+        .all(task.id) as Array<{ id: string }>;
+
+      for (const run of agentRunIds) {
+        db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
+      }
+      db.run("DELETE FROM agent_runs WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM diff_comments WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM task_input_requests WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM task_messages WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM task_repos WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM task_prs WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM messaging_channels WHERE task_id = ?", [task.id]);
+      db.run("DELETE FROM tasks WHERE id = ?", [task.id]);
+
+      deleted.push(task.id);
+      logger.info("Finished task deleted via clean-done", { taskId: task.id });
+    } catch (err) {
+      logger.error("Failed to delete finished task", { taskId: task.id, error: String(err) });
+      errors.push({ id: task.id, error: String(err) });
+    }
+  }
+
+  return c.json({ deleted, errors });
+});
+
 tasks.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const db = getDb();

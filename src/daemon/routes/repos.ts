@@ -75,7 +75,7 @@ repos.post("/", async (c) => {
   } else {
     // Legacy local path mode
     const { resolve } = await import("node:path");
-    repoPath = resolve(body.path!);
+    repoPath = resolve(body.path ?? "");
     name = body.name ?? repoPath.split("/").pop() ?? "unknown";
   }
 

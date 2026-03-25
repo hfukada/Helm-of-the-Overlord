@@ -83,6 +83,12 @@ const COMMAND_HELP: Record<string, string> = {
     "  !delete-task 01JA3B",
     "  !delete-task  (from inside the task's channel)",
   ].join("\n"),
+  "clean-done": [
+    "!clean-done",
+    "Delete all finished tasks (status: committed, cancelled, failed).",
+    "Kicks all users from each task's Matrix channel, then removes the task and all related DB rows.",
+    "Example: !clean-done",
+  ].join("\n"),
   relate: [
     "!relate <repo-a> <repo-b> <description>",
     "Define a relationship between two repos. The description explains how they relate.",
@@ -186,6 +192,9 @@ export class MessagingManager {
         break;
       case "delete-task":
         await this.cmdDeleteTask(cmd);
+        break;
+      case "clean-done":
+        await this.cmdCleanDone(cmd);
         break;
       case "relate":
         await this.cmdRelate(cmd);
@@ -411,6 +420,27 @@ export class MessagingManager {
     ).get(taskId) as { channel_id: string } | null;
 
     if (!channelRow) return;
+
+    try {
+      await this.provider.archiveChannel(channelRow.channel_id);
+    } catch (err) {
+      logger.warn("Failed to archive task channel", { taskId, error: String(err) });
+    }
+  }
+
+  async kickAndArchiveTaskChannel(taskId: string): Promise<void> {
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT channel_id FROM messaging_channels WHERE task_id = ?"
+    ).get(taskId) as { channel_id: string } | null;
+
+    if (!channelRow) return;
+
+    try {
+      await this.provider.kickAllMembers(channelRow.channel_id);
+    } catch (err) {
+      logger.warn("Failed to kick members from task channel", { taskId, error: String(err) });
+    }
 
     try {
       await this.provider.archiveChannel(channelRow.channel_id);
@@ -800,6 +830,38 @@ export class MessagingManager {
     }
   }
 
+  private async cmdCleanDone(cmd: CommandEvent): Promise<void> {
+    await this.provider.sendMessage(cmd.channelId, "Cleaning up finished tasks...");
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/done`, {
+      method: "DELETE",
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      await this.provider.sendMessage(cmd.channelId, `Failed to clean done tasks: ${body}`);
+      return;
+    }
+
+    const data = await res.json() as { deleted: string[]; errors: Array<{ id: string; error: string }> };
+    const lines: string[] = [];
+
+    if (data.deleted.length === 0) {
+      lines.push("No finished tasks to clean up.");
+    } else {
+      lines.push(`Deleted ${data.deleted.length} finished task(s).`);
+    }
+
+    if (data.errors.length > 0) {
+      lines.push(`${data.errors.length} error(s):`);
+      for (const e of data.errors) {
+        lines.push(`  ${e.id.slice(0, 8)}: ${e.error}`);
+      }
+    }
+
+    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+  }
+
   private async cmdRelate(cmd: CommandEvent): Promise<void> {
     // !relate <repo-a> <repo-b> <description...>
     if (cmd.args.length < 3) {
@@ -908,6 +970,7 @@ export class MessagingManager {
       "  !status <id>              Show task details (status, branch, timestamps)",
       "  !cancel <id>              Cancel a running task and clean up its worktree",
       "  !delete-task <id>         Delete a task and remove all associated data",
+      "  !clean-done               Delete all finished tasks (committed, cancelled, failed)",
       "  !run <description>        Submit a new task",
       "  !repos                    List all registered repos with language/framework",
       "  !repo add <url> [--name]  Clone and register a repo from a git URL",
