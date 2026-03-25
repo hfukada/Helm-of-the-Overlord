@@ -332,10 +332,14 @@ export async function buildImplementPrompt(
 
   const chatContext = await getChatContext(task.id);
 
+  const primaryRepo = reposArray[0];
   return renderTemplate("implement", {
     repoList,
     taskTitle: task.title,
     taskDescription: task.description,
+    repoName: primaryRepo?.name ?? "",
+    repoLanguage: primaryRepo?.language ?? undefined,
+    repoFramework: primaryRepo?.framework ?? undefined,
     knowledgeContext: knowledgeContext || undefined,
     plan,
     chatContext: chatContext || undefined,

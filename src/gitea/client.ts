@@ -356,6 +356,26 @@ export async function createPullRequest(
   return res.json() as Promise<GiteaPR>;
 }
 
+export async function updatePullRequest(
+  repoName: string,
+  prNumber: number,
+  title: string,
+  body: string
+): Promise<GiteaPR> {
+  const org = config.giteaOrg;
+  const res = await giteaFetch(`/api/v1/repos/${org}/${repoName}/pulls/${prNumber}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title, body }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to update PR: ${res.status} ${text}`);
+  }
+
+  return res.json() as Promise<GiteaPR>;
+}
+
 export async function getPullRequest(repoName: string, prNumber: number): Promise<GiteaPR> {
   const org = config.giteaOrg;
   const res = await giteaFetch(`/api/v1/repos/${org}/${repoName}/pulls/${prNumber}`);
