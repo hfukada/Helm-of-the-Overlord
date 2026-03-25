@@ -532,15 +532,20 @@ export async function runTask(taskId: string): Promise<void> {
           task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
         );
 
-        if (!finalPlan.error) {
+        if (!finalPlan.error && finalPlan.plan.length > 200) {
           planResult.plan = finalPlan.plan;
         } else {
-          logger.warn("Finalize failed, using revised plan", { taskId: task.id });
+          logger.warn("Finalize output too short or failed, using revised plan", { taskId: task.id, len: finalPlan.plan?.length });
           planResult.plan = planAgainResult.plan;
         }
         state = advanceState(state, "done");
       }
     }
+  }
+
+  // Sanity check: if the best plan is too short, fall back up the chain
+  if (planResult.plan.length < 200) {
+    logger.warn("Plan output suspiciously short, task may produce poor results", { taskId: task.id, len: planResult.plan.length });
   }
 
   if (isTaskCancelled(task.id)) return;
@@ -885,7 +890,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
           task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
         );
 
-        planResult.plan = !finalPlan.error ? finalPlan.plan : planAgainResult.plan;
+        planResult.plan = (!finalPlan.error && finalPlan.plan.length > 200) ? finalPlan.plan : planAgainResult.plan;
         state = advanceState(state, "done");
       } else {
         planResult.plan = planAgainResult.plan;
