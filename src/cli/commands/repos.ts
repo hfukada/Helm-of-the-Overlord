@@ -91,7 +91,7 @@ async function addRepo(args: string[]): Promise<void> {
   if (repo.language) info.push(`(${repo.language})`);
   if (repo.framework) info.push(`[${repo.framework}]`);
   console.log(`Repo added: ${info.join(" ")} -> ${repo.path}`);
-  console.log("Indexing in background...");
+  await reindexSingle(repo.name);
 }
 
 async function removeRepo(name: string | undefined): Promise<void> {
