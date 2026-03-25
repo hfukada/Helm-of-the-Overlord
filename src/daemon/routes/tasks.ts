@@ -125,12 +125,28 @@ tasks.get("/:id", async (c) => {
     } catch {}
   }
 
+  // Include repos from task_repos
+  const taskRepos = db.query(
+    `SELECT r.id, r.name, r.language, r.framework, tr.role
+     FROM task_repos tr JOIN repos r ON r.id = tr.repo_id
+     WHERE tr.task_id = ? ORDER BY r.name`
+  ).all(id);
+
+  // Include PRs from task_prs
+  const taskPrs = db.query(
+    `SELECT tp.repo_id, tp.pr_number, tp.pr_url, tp.status, r.name as repo_name
+     FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
+     WHERE tp.task_id = ? ORDER BY r.name`
+  ).all(id);
+
   return c.json({
     ...task,
     blueprint_state: blueprintState,
     diff,
     diff_summary: diffSummary,
     agent_runs: agentRuns,
+    repos: taskRepos,
+    prs: taskPrs,
   });
 });
 

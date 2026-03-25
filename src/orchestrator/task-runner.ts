@@ -780,29 +780,30 @@ export async function runTask(taskId: string): Promise<void> {
 }
 
 export async function reviseTask(taskId: string, feedback: string): Promise<void> {
-  const loaded = loadTaskAndRepo(taskId);
+  const loaded = loadTaskAndRepos(taskId);
   if (!loaded) {
     logger.error("Task or repo not found for revision", { taskId });
     return;
   }
 
-  const { task, repo } = loaded;
-  const workDir = worktreeDir(taskId, repo.name);
+  const { task, repos } = loaded;
+  const branchName = task.branch_name!;
+
+  // Build workDir map from existing clones
+  const workDirs = new Map<string, string>();
+  for (const repo of repos) {
+    workDirs.set(repo.name, worktreeDir(taskId, repo.name));
+  }
+
+  const primaryRepo = repos[0];
+  const primaryWorkDir = workDirs.get(primaryRepo.name)!;
 
   // Restore MCP config
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+    mcpConfigPath = await generateMcpConfig(task.id, primaryWorkDir, primaryRepo.name);
   } catch (err) {
     logger.warn("Failed to generate MCP config for revision", { error: String(err) });
-  }
-
-  // Restore Docker container
-  let containerName: string | null = null;
-  try {
-    containerName = await setupTaskContainer(repo, workDir, task.id);
-  } catch (err) {
-    logger.warn("Docker setup failed for revision, running locally", { error: String(err) });
   }
 
   // Load current blueprint state
@@ -824,26 +825,24 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   const onThinking = makeThinkingForwarder(task.id, manager);
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
+  const { parseMultiRepoPlan } = await import("./plan-parser");
 
   // Advance from review -> plan via "revise"
   state = advanceState(state, "revise");
 
   // === PLAN (revision) ===
   updateTaskStatus(task.id, "planning", state);
-  logger.info("Starting revision plan phase", { taskId: task.id });
+  logger.info("Starting revision plan phase", { taskId: task.id, repoCount: repos.length });
 
-  // Fetch the previous plan output
   const previousPlanRow = db.query(
     "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('plan', 'plan_again', 'finalize_plan') ORDER BY finished_at DESC LIMIT 1"
   ).get(task.id) as { output: string } | null;
   const previousPlan = previousPlanRow?.output ?? "(no previous plan found)";
 
-  // Build revision-specific plan prompt
   const { buildRevisionPlanPrompt } = await import("./context-builder");
-  const revisionPlanPrompt = await buildRevisionPlanPrompt(task, repo, feedback, previousPlan);
+  const revisionPlanPrompt = await buildRevisionPlanPrompt(task, primaryRepo, feedback, previousPlan);
 
-  // Run plan with the revision-specific prompt
-  const planResult = await executePlan(task, repo, workDir, mcpConfigPath, onThinking, revisionPlanPrompt);
+  const planResult = await executePlan(task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, revisionPlanPrompt);
 
   if (planResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -855,46 +854,38 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   if (isTaskCancelled(task.id)) return;
 
-  // --- Scrutinize (revision round 1) ---
+  // --- Scrutinize loop (same as runTask) ---
   state = advanceState(state, "done");
   updateTaskStatus(task.id, "scrutinizing", state);
-  logger.info("Scrutinizing revision plan", { taskId: task.id });
 
-  const scrutiny1 = await executeScrutinize(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
+  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking);
 
   if (!scrutiny1.error) {
     if (isTaskCancelled(task.id)) return;
-
     state = advanceState(state, "done");
     updateTaskStatus(task.id, "replanning", state);
 
     const planAgainResult = await executePlanAgain(
-      task, repo, workDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
     );
 
     if (!planAgainResult.error) {
       if (isTaskCancelled(task.id)) return;
-
       state = advanceState(state, "done");
       updateTaskStatus(task.id, "scrutinizing", state);
 
-      const scrutiny2 = await executeScrutinize(task, repo, workDir, planAgainResult.plan, mcpConfigPath, onThinking);
+      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking);
 
       if (!scrutiny2.error) {
         if (isTaskCancelled(task.id)) return;
-
         state = advanceState(state, "done");
         updateTaskStatus(task.id, "finalizing_plan", state);
 
         const finalPlan = await executeFinalizePlan(
-          task, repo, workDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
         );
 
-        if (!finalPlan.error) {
-          planResult.plan = finalPlan.plan;
-        } else {
-          planResult.plan = planAgainResult.plan;
-        }
+        planResult.plan = !finalPlan.error ? finalPlan.plan : planAgainResult.plan;
         state = advanceState(state, "done");
       } else {
         planResult.plan = planAgainResult.plan;
@@ -909,155 +900,147 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   if (isTaskCancelled(task.id)) return;
 
-  // === IMPLEMENT (revision) ===
-  updateTaskStatus(task.id, "implementing", state);
-  logger.info("Starting revision implement phase", { taskId: task.id });
+  // === PER-REPO: IMPLEMENT -> LINT -> CI ===
+  const repoPlans = parseMultiRepoPlan(planResult.plan, repos.map((r) => r.name));
 
-  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
+  for (const repo of repos) {
+    const workDir = workDirs.get(repo.name)!;
+    const repoPlan = repoPlans.get(repo.name) ?? planResult.plan;
 
-  if (implResult.error) {
-    if (isTaskCancelled(task.id)) return;
-    logger.error("Revision implementation failed", { taskId: task.id, error: implResult.error });
-    state = advanceState(state, "error");
-    updateTaskStatus(task.id, "review", state);
-    return;
-  }
-
-  if (isTaskCancelled(task.id)) return;
-
-  // === LINT (with fix loop) ===
-  state = advanceState(state, "done");
-  updateTaskStatus(task.id, "linting", state);
-
-  if (repo.lint_cmd) {
-    for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-      const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
-        saveNodeOutput(task.id, "lint", accumulated, false);
-      });
-      saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
-
-      if (lintResult.success) break;
-
-      if (containerName) {
-        discoverSecrets(repo.id, lintResult.output);
-      }
-
-      if (round >= MAX_LINT_ROUNDS) break;
-      if (isTaskCancelled(task.id)) return;
-
-      state = advanceState(state, "errors");
-      updateTaskStatus(task.id, "fix_linting", state);
-
-      const fixResult = await executeFixLint(
-        task, repo, workDir,
-        lintResult.output, lintResult.command, mcpConfigPath
-      );
-
-      if (fixResult.error) {
-        if (isTaskCancelled(task.id)) return;
-        break;
-      }
-
-      state = advanceState(state, "done");
-      state.lint_rounds++;
-      updateTaskStatus(task.id, "linting", state);
+    logger.info("Revising repo", { taskId: task.id, repo: repo.name });
+    if (manager) {
+      manager.notifyAgentOutput(task.id, `Revising: ${repo.name}`).catch(() => {});
     }
-  }
 
-  if (isTaskCancelled(task.id)) return;
+    // --- Implement ---
+    updateTaskStatus(task.id, "implementing", state);
 
-  // === CI ===
-  if (repo.test_cmd || repo.build_cmd) {
-    state = advanceState(state, "clean");
-    updateTaskStatus(task.id, "ci_running", state);
-
-    for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-      const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
-        saveNodeOutput(task.id, "ci", accumulated, false);
-      });
-      saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-      if (ciResult.success) {
-        state = advanceState(state, "pass");
-        break;
-      }
-
-      if (containerName) {
-        discoverSecrets(repo.id, ciResult.output);
-      }
-
-      if (round >= MAX_CI_ROUNDS - 1) {
-        state = advanceState(state, "pass");
-        break;
-      }
-
-      if (isTaskCancelled(task.id)) return;
-
-      state = advanceState(state, "fail");
-      updateTaskStatus(task.id, "ci_fixing", state);
-
-      const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, mcpConfigPath);
-
-      if (fixResult.error) {
-        if (isTaskCancelled(task.id)) return;
-        state = advanceState(state, "error");
-        break;
-      }
-
-      state = advanceState(state, "done");
-      state.ci_rounds++;
-      updateTaskStatus(task.id, "ci_running", state);
-    }
-  } else {
-    state = advanceState(state, "clean"); // lint -> ci
-    state = advanceState(state, "pass");  // ci -> review
-  }
-
-  // Tear down Docker container
-  if (containerName) {
+    let repoMcpConfigPath: string | undefined;
     try {
-      await teardownTaskContainer(task.id);
-    } catch (err) {
-      logger.warn("Docker teardown failed", { taskId: task.id, error: String(err) });
+      repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+    } catch {}
+
+    const implResult = await executeImplement(task, repo, workDir, repoPlan, repoMcpConfigPath, onThinking);
+
+    if (implResult.error) {
+      if (isTaskCancelled(task.id)) return;
+      logger.error("Revision implementation failed", { taskId: task.id, repo: repo.name, error: implResult.error });
+      state = advanceState(state, "error");
+      updateTaskStatus(task.id, "review", state);
+      return;
+    }
+
+    if (isTaskCancelled(task.id)) return;
+
+    // --- Lint ---
+    state = advanceState(state, "done");
+    updateTaskStatus(task.id, "linting", state);
+
+    let containerName: string | null = null;
+    try {
+      containerName = await setupTaskContainer(repo, workDir, task.id);
+    } catch {}
+
+    if (repo.lint_cmd) {
+      for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
+        const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+          saveNodeOutput(task.id, "lint", accumulated, false);
+        });
+        saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
+
+        if (lintResult.success) break;
+        if (containerName) discoverSecrets(repo.id, lintResult.output);
+        if (round >= MAX_LINT_ROUNDS) break;
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "errors");
+        updateTaskStatus(task.id, "fix_linting", state);
+
+        const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
+        if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
+
+        state = advanceState(state, "done");
+        state.lint_rounds++;
+        updateTaskStatus(task.id, "linting", state);
+      }
+    }
+
+    if (isTaskCancelled(task.id)) return;
+
+    // --- CI ---
+    if (repo.test_cmd || repo.build_cmd) {
+      state = advanceState(state, "clean");
+      updateTaskStatus(task.id, "ci_running", state);
+
+      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+          saveNodeOutput(task.id, "ci", accumulated, false);
+        });
+        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+        if (ciResult.success) { state = advanceState(state, "pass"); break; }
+        if (containerName) discoverSecrets(repo.id, ciResult.output);
+        if (round >= MAX_CI_ROUNDS - 1) { state = advanceState(state, "pass"); break; }
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "fail");
+        updateTaskStatus(task.id, "ci_fixing", state);
+
+        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+        if (fixResult.error) { if (isTaskCancelled(task.id)) return; state = advanceState(state, "error"); break; }
+
+        state = advanceState(state, "done");
+        state.ci_rounds++;
+        updateTaskStatus(task.id, "ci_running", state);
+      }
+    } else if (repos.indexOf(repo) === repos.length - 1) {
+      state = advanceState(state, "clean");
+      state = advanceState(state, "pass");
+    }
+
+    if (containerName) {
+      try { await teardownTaskContainer(task.id); } catch {}
     }
   }
 
-  // === REVIEW ===
+  if (isTaskCancelled(task.id)) return;
+
+  // === REVIEW: COMMIT + PUSH PER REPO ===
   logger.info("Revision ready for review", { taskId: task.id });
 
-  // 1. Commit revision changes
-  try {
-    await $`git -C ${workDir} add -A`.quiet();
-    const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
-    if (hasChanges.exitCode !== 0) {
-      await $`git -C ${workDir} commit -m ${"hoto: revision for " + task.title}`.quiet();
-      logger.info("Committed revision changes", { taskId: task.id });
-    }
-  } catch (err) {
-    notifyError(`Failed to commit revision changes: ${err}`);
-  }
+  for (const repo of repos) {
+    const workDir = workDirs.get(repo.name)!;
 
-  // 2. Push to Gitea (before setting review status, so URL is available)
-  if (isGiteaConfigured()) {
-    const prRow = db.query("SELECT gitea_pr_number FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_number: number | null } | null;
-    if (prRow?.gitea_pr_number) {
-      try {
-        const branchName = task.branch_name!;
-        await pushBranchToGitea(workDir, repo.path, repo.name, branchName, true);
-      } catch (err) {
-        notifyError(`Gitea push after revision failed: ${err}`);
+    // Commit
+    try {
+      await $`git -C ${workDir} add -A`.quiet();
+      const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
+      if (hasChanges.exitCode !== 0) {
+        await $`git -C ${workDir} commit -m ${"hoto: revision for " + task.title}`.quiet();
+        logger.info("Committed revision changes", { taskId: task.id, repo: repo.name });
+      } else {
+        continue;
       }
-    } else {
-      notifyError("No existing Gitea PR found for revision push.");
+    } catch (err) {
+      notifyError(`Failed to commit revision for ${repo.name}: ${err}`);
+      continue;
     }
-  } else {
-    notifyError(`Gitea not configured (GITEA_URL=${config.giteaUrl ?? "unset"}). Revision not pushed.`);
+
+    // Push (force, since we're updating existing PRs)
+    if (isGiteaConfigured()) {
+      try {
+        await pushBranchToGitea(workDir, repo.path, repo.name, branchName, true);
+        logger.info("Pushed revision", { taskId: task.id, repo: repo.name });
+      } catch (err) {
+        notifyError(`Gitea push after revision failed for ${repo.name}: ${err}`);
+      }
+    }
   }
 
-  // 3. Set review status
+  // Set review status
   updateTaskStatus(task.id, "review", state);
 
-  // 4. Announce in main channel
+  // Announce in main channel
   if (manager) {
     manager.notifyReviewReady(task).catch(() => {});
   }

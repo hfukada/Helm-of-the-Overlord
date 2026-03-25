@@ -43,6 +43,39 @@ bun run lint                # Lint with Biome
 - Tests that use the DB set `process.env.HOTO_WORKSPACE` to a `/tmp/` path before any imports, giving each test file its own isolated SQLite DB.
 - **Never run `bun test` directly** on a machine with a live daemon -- test data (fake repos, tasks) will leak into the production DB.
 
+## Blueprint Flow
+
+Tasks follow this pipeline:
+
+```
+pre-plan (scope repos) -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+```
+
+- **Pre-plan**: Runs only when multiple repos are registered. Determines which repos need changes via knowledge base search.
+- **Plan**: Produces an implementation plan. Uses `plan-multi.md` template for multi-repo tasks.
+- **Scrutinize**: Reviews the plan against a 10-point checklist (DRY, error handling, testability, scope discipline, etc.).
+- **Plan-again**: Revises the plan based on scrutiny feedback.
+- **Finalize-plan**: Produces the definitive plan with exact file/function/signature detail.
+- **Implement**: Follows the plan mechanically. Runs per-repo for multi-repo tasks.
+- **Lint/CI**: Per-repo with fix loops (max 1 lint, max 2 CI rounds).
+- **Review**: Creates one PR per repo on Gitea. Pollers watch for approvals/rejections.
+- **Revision**: On rejection, aggregates feedback from ALL PRs, re-runs the full plan-scrutinize-implement pipeline.
+
+## Multi-Repo Tasks
+
+Tasks can span multiple repositories. When no `-r` flag is specified, all registered repos are assigned and the pre-plan phase narrows them.
+
+- **Task creation**: `hoto run "desc" -r repo1 -r repo2` or `!run desc -r repo1 -r repo2`
+- **Data model**: `task_repos` junction table tracks which repos a task targets. `task_prs` tracks one PR per repo.
+- **Execution**: Plan runs once across all repos. Implement/lint/CI run per-repo sequentially.
+- **PRs**: One PR per repo, all with the same branch name. Review pollers track each independently.
+- **Revision**: Rejection on any PR triggers revision across all repos. Feedback is aggregated from all PRs.
+- **Completion**: Task marked "committed" only when ALL PRs are merged.
+
+## Repo Relationships
+
+Repos can be related via `POST /repos/:name/relationships` or `!relate <a> <b> <description>`. Relationships are included in plan context so the agent understands cross-repo dependencies.
+
 ## Docker
 
 Hoto runs as a container via `Dockerfile` (multi-stage: deps, web-build, runtime).
