@@ -76,6 +76,13 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
 
   logger.info("Indexing repo", { name: repo.name, path: repoPath });
 
+  // Pull latest from remote before diffing
+  try {
+    await $`git -C ${repoPath} pull --ff-only`.quiet();
+  } catch (err) {
+    logger.warn("Git pull failed, indexing from local state", { repo: repo.name, error: String(err) });
+  }
+
   const currentHash = await getHeadCommit(repoPath);
   const storedHash = (db.query("SELECT index_commit_hash FROM repos WHERE id = ?").get(repo.id) as { index_commit_hash: string | null } | null)?.index_commit_hash;
 
