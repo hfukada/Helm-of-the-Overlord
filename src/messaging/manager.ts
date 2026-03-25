@@ -262,9 +262,22 @@ export class MessagingManager {
 
     if (!channelRow) return;
 
-    // Check for Gitea PR URL
-    const prRow = db.query("SELECT gitea_pr_url FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_url: string | null } | null;
-    const reviewUrl = prRow?.gitea_pr_url ?? null;
+    // Check for Gitea PR URLs (from task_prs)
+    const prs = db.query(
+      `SELECT tp.pr_url, r.name as repo_name FROM task_prs tp
+       JOIN repos r ON r.id = tp.repo_id
+       WHERE tp.task_id = ? AND tp.status = 'open' ORDER BY r.name`
+    ).all(task.id) as Array<{ pr_url: string; repo_name: string }>;
+
+    let reviewMsg: string;
+    if (prs.length > 1) {
+      const prList = prs.map((p) => `  ${p.repo_name}: ${p.pr_url}`).join("\n");
+      reviewMsg = `Task ready for review:\n${prList}`;
+    } else if (prs.length === 1) {
+      reviewMsg = `Task ready for review: ${prs[0].pr_url}`;
+    } else {
+      reviewMsg = "Task ready for review.";
+    }
 
     const statusMessages: Record<string, string> = {
       scoping: "Determining which repos are affected...",
@@ -277,7 +290,7 @@ export class MessagingManager {
       fix_linting: "Fixing lint errors...",
       ci_running: "Running CI/tests...",
       ci_fixing: "Fixing CI failures...",
-      review: reviewUrl ? `Task ready for review: ${reviewUrl}` : "Task ready for review.",
+      review: reviewMsg,
       waiting_for_input: "Task is waiting for human input (see question above).",
       accepted: "Task accepted.",
       committed: "Task committed and pushed.",
@@ -290,11 +303,9 @@ export class MessagingManager {
       await this.provider.sendMessage(channelRow.channel_id, `[${newStatus}] ${message}`);
     }
 
-    if (newStatus === "review" && reviewUrl) {
-      await this.provider.setChannelTopic(
-        channelRow.channel_id,
-        `Review: ${reviewUrl}`
-      );
+    if (newStatus === "review" && prs.length > 0) {
+      const topic = prs.map((p) => p.pr_url).join(" | ");
+      await this.provider.setChannelTopic(channelRow.channel_id, `Review: ${topic}`);
     }
   }
 
@@ -314,11 +325,21 @@ export class MessagingManager {
   async notifyReviewReady(task: Task): Promise<void> {
     if (this.mainChannelId) {
       const db = getDb();
-      const prRow = db.query("SELECT gitea_pr_url FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_url: string | null } | null;
-      const url = prRow?.gitea_pr_url;
-      const msg = url
-        ? `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review: ${url}`
-        : `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review.`;
+      const prs = db.query(
+        `SELECT tp.pr_url, r.name as repo_name FROM task_prs tp
+         JOIN repos r ON r.id = tp.repo_id
+         WHERE tp.task_id = ? AND tp.status = 'open' ORDER BY r.name`
+      ).all(task.id) as Array<{ pr_url: string; repo_name: string }>;
+
+      let msg: string;
+      if (prs.length > 1) {
+        const prList = prs.map((p) => `  ${p.repo_name}: ${p.pr_url}`).join("\n");
+        msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review:\n${prList}`;
+      } else if (prs.length === 1) {
+        msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review: ${prs[0].pr_url}`;
+      } else {
+        msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review.`;
+      }
       await this.provider.sendMessage(this.mainChannelId, msg);
     }
   }
