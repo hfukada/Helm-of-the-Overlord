@@ -296,7 +296,7 @@ export function getGiteaRemoteUrl(repoName: string): string {
   const org = config.giteaOrg;
   const username = config.giteaBotUser;
   // Parse giteaUrl to embed credentials
-  const url = new URL(config.giteaUrl!);
+  const url = new URL(config.giteaUrl ?? "");
   return `${url.protocol}//${username}:${_botToken}@${url.host}/${org}/${repoName}.git`;
 }
 

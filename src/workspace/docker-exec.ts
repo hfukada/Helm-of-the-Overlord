@@ -85,7 +85,7 @@ export async function setupTaskContainer(
     for (const s of secrets) {
       if (s.secret_type === "env_var") {
         if (s.value_source === "host_env" && process.env[s.key]) {
-          env[s.key] = process.env[s.key]!;
+          env[s.key] = process.env[s.key] ?? "";
         } else if (s.value_source === "host_file" && s.host_path) {
           try {
             env[s.key] = readFileSync(s.host_path, "utf-8").trim();

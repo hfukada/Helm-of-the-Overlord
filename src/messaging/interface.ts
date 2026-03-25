@@ -23,6 +23,7 @@ export interface MessagingProvider {
   sendMessage(channelId: string, text: string): Promise<void>;
   sendFormattedMessage(channelId: string, html: string, plaintext: string): Promise<void>;
   inviteUser(channelId: string, userId: string): Promise<void>;
+  kickAllMembers(channelId: string): Promise<void>;
   onCommand(handler: (cmd: CommandEvent) => Promise<void>): void;
   onMessage(handler: (msg: MessageEvent) => Promise<void>): void;
 }
