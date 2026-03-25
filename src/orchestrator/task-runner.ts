@@ -29,6 +29,20 @@ const MAX_CI_ROUNDS = 2;
 const INPUT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INPUT_POLL_INTERVAL_MS = 2000;
 
+import type { MessagingManager } from "../messaging/manager";
+
+/** Create an onEvent callback that forwards thinking to the task chat. */
+function makeThinkingForwarder(
+  taskId: string,
+  manager: MessagingManager | null
+): (type: string, content: string) => void {
+  return (type, content) => {
+    if (type === "thinking" && content.trim() && manager) {
+      manager.notifyAgentOutput(taskId, content).catch(() => {});
+    }
+  };
+}
+
 function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
   const db = getDb();
   const now = new Date().toISOString();
@@ -413,11 +427,16 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // === PLAN ===
+  // === PLAN -> SCRUTINIZE -> PLAN AGAIN -> SCRUTINIZE -> FINALIZE -> IMPLEMENT ===
+  const onThinking = makeThinkingForwarder(task.id, manager);
+
+  const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
+
+  // --- Plan (round 1) ---
   updateTaskStatus(task.id, "planning", state);
   logger.info("Starting plan phase", { taskId: task.id });
 
-  const planResult = await executePlan(task, repo, workDir, mcpConfigPath);
+  const planResult = await executePlan(task, repo, workDir, mcpConfigPath, onThinking);
 
   if (planResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -429,12 +448,82 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // === IMPLEMENT ===
+  // --- Scrutinize (round 1) ---
   state = advanceState(state, "done");
+  updateTaskStatus(task.id, "scrutinizing", state);
+  logger.info("Scrutinizing plan (round 1)", { taskId: task.id });
+
+  const scrutiny1 = await executeScrutinize(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
+
+  if (scrutiny1.error) {
+    if (isTaskCancelled(task.id)) return;
+    logger.warn("Scrutiny failed, proceeding with original plan", { taskId: task.id, error: scrutiny1.error });
+    // Skip scrutiny loop, go straight to implement with original plan
+    state = advanceState(state, "error");
+  } else {
+    if (isTaskCancelled(task.id)) return;
+
+    // --- Plan again (round 2) ---
+    state = advanceState(state, "done");
+    updateTaskStatus(task.id, "replanning", state);
+    logger.info("Revising plan based on scrutiny", { taskId: task.id });
+
+    const planAgainResult = await executePlanAgain(
+      task, repo, workDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+    );
+
+    if (planAgainResult.error) {
+      if (isTaskCancelled(task.id)) return;
+      logger.warn("Plan-again failed, using original plan", { taskId: task.id, error: planAgainResult.error });
+      state = advanceState(state, "error");
+    } else {
+      if (isTaskCancelled(task.id)) return;
+
+      // --- Scrutinize (round 2 / final) ---
+      state = advanceState(state, "done");
+      updateTaskStatus(task.id, "scrutinizing", state);
+      logger.info("Scrutinizing plan (round 2)", { taskId: task.id });
+
+      const scrutiny2 = await executeScrutinize(task, repo, workDir, planAgainResult.plan, mcpConfigPath, onThinking);
+
+      if (scrutiny2.error) {
+        if (isTaskCancelled(task.id)) return;
+        logger.warn("Final scrutiny failed, proceeding with revised plan", { taskId: task.id });
+        state = advanceState(state, "error");
+      } else {
+        if (isTaskCancelled(task.id)) return;
+
+        // --- Finalize plan ---
+        state = advanceState(state, "done");
+        updateTaskStatus(task.id, "finalizing_plan", state);
+        logger.info("Finalizing plan", { taskId: task.id });
+
+        const finalPlan = await executeFinalizePlan(
+          task, repo, workDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+        );
+
+        if (!finalPlan.error) {
+          // Use the finalized plan for implementation
+          planResult.plan = finalPlan.plan;
+        } else {
+          logger.warn("Finalize failed, using revised plan", { taskId: task.id });
+          // Fall back to the plan-again output
+          planResult.plan = planAgainResult.plan;
+        }
+
+        state = advanceState(state, "done");
+      }
+    }
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === IMPLEMENT ===
+  // At this point planResult.plan holds the best plan we have (finalized > revised > original)
   updateTaskStatus(task.id, "implementing", state);
   logger.info("Starting implement phase", { taskId: task.id });
 
-  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath);
+  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
 
   if (implResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -695,6 +784,9 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     if (manager) manager.notifyAgentOutput(task.id, `[error] ${msg}`).catch(() => {});
   };
 
+  const onThinking = makeThinkingForwarder(task.id, manager);
+  const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
+
   // Advance from review -> plan via "revise"
   state = advanceState(state, "revise");
 
@@ -704,7 +796,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   // Fetch the previous plan output
   const previousPlanRow = db.query(
-    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name = 'plan' ORDER BY finished_at DESC LIMIT 1"
+    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('plan', 'plan_again', 'finalize_plan') ORDER BY finished_at DESC LIMIT 1"
   ).get(task.id) as { output: string } | null;
   const previousPlan = previousPlanRow?.output ?? "(no previous plan found)";
 
@@ -713,7 +805,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   const revisionPlanPrompt = await buildRevisionPlanPrompt(task, repo, feedback, previousPlan);
 
   // Run plan with the revision-specific prompt
-  const planResult = await executePlan(task, repo, workDir, mcpConfigPath, undefined, revisionPlanPrompt);
+  const planResult = await executePlan(task, repo, workDir, mcpConfigPath, onThinking, revisionPlanPrompt);
 
   if (planResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -725,12 +817,65 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   if (isTaskCancelled(task.id)) return;
 
-  // === IMPLEMENT (revision) ===
+  // --- Scrutinize (revision round 1) ---
   state = advanceState(state, "done");
+  updateTaskStatus(task.id, "scrutinizing", state);
+  logger.info("Scrutinizing revision plan", { taskId: task.id });
+
+  const scrutiny1 = await executeScrutinize(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
+
+  if (!scrutiny1.error) {
+    if (isTaskCancelled(task.id)) return;
+
+    state = advanceState(state, "done");
+    updateTaskStatus(task.id, "replanning", state);
+
+    const planAgainResult = await executePlanAgain(
+      task, repo, workDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+    );
+
+    if (!planAgainResult.error) {
+      if (isTaskCancelled(task.id)) return;
+
+      state = advanceState(state, "done");
+      updateTaskStatus(task.id, "scrutinizing", state);
+
+      const scrutiny2 = await executeScrutinize(task, repo, workDir, planAgainResult.plan, mcpConfigPath, onThinking);
+
+      if (!scrutiny2.error) {
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "done");
+        updateTaskStatus(task.id, "finalizing_plan", state);
+
+        const finalPlan = await executeFinalizePlan(
+          task, repo, workDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+        );
+
+        if (!finalPlan.error) {
+          planResult.plan = finalPlan.plan;
+        } else {
+          planResult.plan = planAgainResult.plan;
+        }
+        state = advanceState(state, "done");
+      } else {
+        planResult.plan = planAgainResult.plan;
+        state = advanceState(state, "error");
+      }
+    } else {
+      state = advanceState(state, "error");
+    }
+  } else {
+    state = advanceState(state, "error");
+  }
+
+  if (isTaskCancelled(task.id)) return;
+
+  // === IMPLEMENT (revision) ===
   updateTaskStatus(task.id, "implementing", state);
   logger.info("Starting revision implement phase", { taskId: task.id });
 
-  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath);
+  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
 
   if (implResult.error) {
     if (isTaskCancelled(task.id)) return;

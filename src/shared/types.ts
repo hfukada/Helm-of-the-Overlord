@@ -3,6 +3,9 @@ export type TaskStatus =
   | "indexing"
   | "scoping"
   | "planning"
+  | "scrutinizing"
+  | "replanning"
+  | "finalizing_plan"
   | "implementing"
   | "linting"
   | "fix_linting"
@@ -81,7 +84,7 @@ export interface AgentStreamEvent {
   timestamp: string;
 }
 
-export type BlueprintNodeType = "index" | "pre_plan" | "plan" | "implement" | "lint" | "push" | "ci" | "fix_lint" | "fix_ci" | "review" | "revise" | "commit";
+export type BlueprintNodeType = "index" | "pre_plan" | "plan" | "scrutinize" | "plan_again" | "scrutinize_final" | "finalize_plan" | "implement" | "lint" | "push" | "ci" | "fix_lint" | "fix_ci" | "review" | "revise" | "commit";
 
 export interface BlueprintNode {
   name: BlueprintNodeType;

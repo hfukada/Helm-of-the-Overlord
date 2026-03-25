@@ -9,6 +9,26 @@ const NODES: BlueprintNode[] = [
   {
     name: "plan",
     type: "agentic",
+    transitions: { done: "scrutinize", error: "review" },
+  },
+  {
+    name: "scrutinize",
+    type: "agentic",
+    transitions: { done: "plan_again", error: "review" },
+  },
+  {
+    name: "plan_again",
+    type: "agentic",
+    transitions: { done: "scrutinize_final", error: "review" },
+  },
+  {
+    name: "scrutinize_final",
+    type: "agentic",
+    transitions: { done: "finalize_plan", error: "review" },
+  },
+  {
+    name: "finalize_plan",
+    type: "agentic",
     transitions: { done: "implement", error: "review" },
   },
   {

@@ -255,6 +255,9 @@ export class MessagingManager {
     const statusMessages: Record<string, string> = {
       scoping: "Determining which repos are affected...",
       planning: "Planning started...",
+      scrutinizing: "Scrutinizing plan...",
+      replanning: "Revising plan based on scrutiny...",
+      finalizing_plan: "Finalizing plan...",
       implementing: "Implementation started...",
       linting: "Running lint checks...",
       fix_linting: "Fixing lint errors...",
