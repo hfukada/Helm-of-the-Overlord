@@ -59,6 +59,7 @@ const COMMAND_HELP: Record<string, string> = {
   ask: [
     "!ask <question>",
     "Query the knowledge base. Searches indexed repos and uses AI to synthesize an answer.",
+    "Plain messages in the main channel also trigger this.",
     "Example: !ask How does authentication work in my-api?",
   ].join("\n"),
   approve: [
@@ -204,6 +205,19 @@ export class MessagingManager {
   }
 
   private async handleMessage(msg: MessageEvent): Promise<void> {
+    // Plain-text messages in the main channel are treated as !ask queries
+    if (this.mainChannelId && msg.channelId === this.mainChannelId && !msg.text.startsWith("!")) {
+      const askEvent: CommandEvent = {
+        command: "ask",
+        args: msg.text.split(" "),
+        rawText: msg.text,
+        channelId: msg.channelId,
+        senderId: msg.senderId,
+      };
+      await this.cmdAsk(askEvent);
+      return;
+    }
+
     // Non-command messages in task channels become human input
     const db = getDb();
     const channelRow = db.query(
@@ -878,7 +892,7 @@ export class MessagingManager {
       "  !repo add <url> [--name]  Clone and register a repo from a git URL",
       "  !reindex <repo>           Reindex a repo's knowledge base (docs, code, config)",
       "  !tokens                   Show today's token usage and cost per model",
-      "  !ask <question>           Query the knowledge base using AI",
+      "  !ask <question>           Query the knowledge base using AI (or just type in the main channel)",
       "  !relate <a> <b> <desc>   Define a relationship between two repos",
       "  !unrelate <a> <b> [type] Remove a repo relationship",
       "  !relationships [repo]    List repo relationships",
