@@ -161,6 +161,63 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
   });
 }
 
+export async function buildMultiRepoPlanPrompt(task: Task, repos: Repo[]): Promise<string> {
+  // Build repo list with metadata
+  const repoLines = repos.map((r) => {
+    const parts = [`- **${r.name}** (path: ${r.path})`];
+    if (r.language) parts.push(`Language: ${r.language}`);
+    if (r.framework) parts.push(`Framework: ${r.framework}`);
+    if (r.build_cmd) parts.push(`Build: ${r.build_cmd}`);
+    if (r.test_cmd) parts.push(`Test: ${r.test_cmd}`);
+    if (r.lint_cmd) parts.push(`Lint: ${r.lint_cmd}`);
+    if (r.description) parts.push(`-- ${r.description}`);
+    return parts.join("\n  ");
+  });
+  const repoList = repoLines.join("\n\n");
+
+  // Aggregate knowledge from all repos
+  const knowledgeSections: string[] = [];
+  for (const repo of repos) {
+    if (!repo.id) continue;
+    try {
+      const results = await search({ query: task.description, repo_id: repo.id, limit: 5 });
+      for (const r of results) {
+        knowledgeSections.push(`### [${r.repo_name}] ${r.source_file} (${r.chunk_type})\n${r.content}`);
+      }
+    } catch {}
+  }
+
+  let knowledgeContext = "";
+  if (knowledgeSections.length > 0) {
+    knowledgeContext = [
+      "## Repository Knowledge Base",
+      "The following indexed content from target repos is relevant:",
+      "",
+      ...knowledgeSections,
+    ].join("\n");
+  }
+
+  // Aggregate relationships
+  const relSections: string[] = [];
+  for (const repo of repos) {
+    if (!repo.id) continue;
+    const ctx = getRelationshipContext(repo.id);
+    if (ctx) relSections.push(ctx);
+  }
+  // Deduplicate (relationships appear from both sides)
+  const relationshipContext = relSections.length > 0
+    ? [...new Set(relSections)].join("\n")
+    : "";
+
+  return renderTemplate("plan-multi", {
+    repoList,
+    taskTitle: task.title,
+    taskDescription: task.description,
+    knowledgeContext: knowledgeContext || undefined,
+    relationshipContext: relationshipContext || undefined,
+  });
+}
+
 export async function buildPlanPrompt(task: Task, repo: Repo): Promise<string> {
   let knowledgeContext = "";
   if (repo.id) {

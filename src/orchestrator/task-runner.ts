@@ -31,14 +31,44 @@ const INPUT_POLL_INTERVAL_MS = 2000;
 
 import type { MessagingManager } from "../messaging/manager";
 
-/** Create an onEvent callback that forwards thinking to the task chat. */
+/**
+ * Create an onEvent callback that buffers text/thinking deltas and
+ * flushes them to the task chat periodically (avoids flooding with per-token messages).
+ */
 function makeThinkingForwarder(
   taskId: string,
   manager: MessagingManager | null
 ): (type: string, content: string) => void {
+  if (!manager) return () => {};
+
+  let buffer = "";
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const FLUSH_INTERVAL_MS = 2000;
+
+  const flush = () => {
+    if (buffer.trim()) {
+      const msg = buffer;
+      buffer = "";
+      manager.notifyAgentOutput(taskId, msg).catch(() => {});
+    }
+    flushTimer = null;
+  };
+
   return (type, content) => {
-    if (type === "thinking" && content.trim() && manager) {
-      manager.notifyAgentOutput(taskId, content).catch(() => {});
+    if (!content) return;
+    if (type === "thinking" || type === "text") {
+      buffer += content;
+      if (!flushTimer) {
+        flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
+      }
+    }
+    // Flush on tool boundaries so the user sees reasoning before a tool call
+    if (type === "tool_use" || type === "tool_result") {
+      if (flushTimer) {
+        clearTimeout(flushTimer);
+        flushTimer = null;
+      }
+      flush();
     }
   };
 }
@@ -368,37 +398,31 @@ export async function runTask(taskId: string): Promise<void> {
     repos = narrowed;
   }
 
-  // For now, use the first (or only) repo for the single-repo pipeline
-  // TODO (B2): full multi-repo plan/implement/lint/ci loop
-  const repo = repos[0];
+  // === CLONE ALL REPOS ===
+  await ensureTaskDir(task.id);
+  const workDirs = new Map<string, string>(); // repoName -> workDir
 
-  let workDir: string;
-  try {
-    await ensureTaskDir(task.id);
-    workDir = await createTaskClone(repo.path, task.id, repo.name, branchName);
-  } catch (err) {
-    logger.error("Failed to clone repo for task", { error: String(err) });
-    updateTaskStatus(task.id, "failed");
-    return;
+  for (const repo of repos) {
+    try {
+      const wd = await createTaskClone(repo.path, task.id, repo.name, branchName);
+      workDirs.set(repo.name, wd);
+    } catch (err) {
+      logger.error("Failed to clone repo for task", { repo: repo.name, error: String(err) });
+      updateTaskStatus(task.id, "failed");
+      return;
+    }
   }
 
-  // Generate MCP config for agent nodes
+  // Use first repo's workDir for plan-phase tools (plan agent can read all repos via sibling dirs)
+  const primaryRepo = repos[0];
+  const primaryWorkDir = workDirs.get(primaryRepo.name)!;
+
+  // Generate MCP config for agent nodes (using primary repo)
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+    mcpConfigPath = await generateMcpConfig(task.id, primaryWorkDir, primaryRepo.name);
   } catch (err) {
     logger.warn("Failed to generate MCP config, agents will use direct tools", { error: String(err) });
-  }
-
-  // Set up Docker container if applicable
-  let containerName: string | null = null;
-  try {
-    containerName = await setupTaskContainer(repo, workDir, task.id);
-    if (containerName) {
-      logger.info("Docker container ready", { taskId: task.id, containerName });
-    }
-  } catch (err) {
-    logger.warn("Docker setup failed, running locally", { error: String(err) });
   }
 
   let state = createInitialState();
@@ -409,34 +433,44 @@ export async function runTask(taskId: string): Promise<void> {
     result: null,
   });
 
-  // === INDEX ===
+  // === INDEX ALL REPOS ===
   updateTaskStatus(task.id, "indexing", state);
-  logger.info("Starting index phase", { taskId: task.id });
+  logger.info("Starting index phase", { taskId: task.id, repoCount: repos.length });
 
-  try {
-    const indexResult = await indexRepo(repo);
-    logger.info("Finished indexing", { repo: repo.name, chunks: indexResult.chunks });
-    if (manager) {
-      manager.notifyAgentOutput(task.id, `Finished indexing ${repo.name}: ${indexResult.chunks} chunks`).catch(() => {});
+  for (const repo of repos) {
+    try {
+      const indexResult = await indexRepo(repo);
+      logger.info("Finished indexing", { repo: repo.name, chunks: indexResult.chunks });
+      if (manager) {
+        manager.notifyAgentOutput(task.id, `Finished indexing ${repo.name}: ${indexResult.chunks} chunks`).catch(() => {});
+      }
+    } catch (err) {
+      logger.warn("Repo reindex failed, continuing", { repo: repo.name, error: String(err) });
     }
-    state = advanceState(state, "done");
-  } catch (err) {
-    logger.warn("Repo reindex failed, continuing", { error: String(err) });
-    state = advanceState(state, "error");
   }
+  state = advanceState(state, "done");
 
   if (isTaskCancelled(task.id)) return;
 
-  // === PLAN -> SCRUTINIZE -> PLAN AGAIN -> SCRUTINIZE -> FINALIZE -> IMPLEMENT ===
+  // === PLAN -> SCRUTINIZE -> PLAN AGAIN -> SCRUTINIZE -> FINALIZE ===
   const onThinking = makeThinkingForwarder(task.id, manager);
-
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
+  const { parseMultiRepoPlan } = await import("./plan-parser");
+  const { buildMultiRepoPlanPrompt } = await import("./context-builder");
 
   // --- Plan (round 1) ---
   updateTaskStatus(task.id, "planning", state);
   logger.info("Starting plan phase", { taskId: task.id });
 
-  const planResult = await executePlan(task, repo, workDir, mcpConfigPath, onThinking);
+  // Use multi-repo plan template if >1 repo, otherwise standard single-repo
+  let planPrompt: string | undefined;
+  if (repos.length > 1) {
+    planPrompt = await buildMultiRepoPlanPrompt(task, repos);
+  }
+
+  const planResult = await executePlan(
+    task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt
+  );
 
   if (planResult.error) {
     if (isTaskCancelled(task.id)) return;
@@ -448,43 +482,40 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // --- Scrutinize (round 1) ---
+  // --- Scrutinize/plan-again/finalize loop ---
   state = advanceState(state, "done");
   updateTaskStatus(task.id, "scrutinizing", state);
   logger.info("Scrutinizing plan (round 1)", { taskId: task.id });
 
-  const scrutiny1 = await executeScrutinize(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
+  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking);
 
   if (scrutiny1.error) {
     if (isTaskCancelled(task.id)) return;
-    logger.warn("Scrutiny failed, proceeding with original plan", { taskId: task.id, error: scrutiny1.error });
-    // Skip scrutiny loop, go straight to implement with original plan
+    logger.warn("Scrutiny failed, proceeding with original plan", { taskId: task.id });
     state = advanceState(state, "error");
   } else {
     if (isTaskCancelled(task.id)) return;
 
-    // --- Plan again (round 2) ---
     state = advanceState(state, "done");
     updateTaskStatus(task.id, "replanning", state);
     logger.info("Revising plan based on scrutiny", { taskId: task.id });
 
     const planAgainResult = await executePlanAgain(
-      task, repo, workDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
     );
 
     if (planAgainResult.error) {
       if (isTaskCancelled(task.id)) return;
-      logger.warn("Plan-again failed, using original plan", { taskId: task.id, error: planAgainResult.error });
+      logger.warn("Plan-again failed, using original plan", { taskId: task.id });
       state = advanceState(state, "error");
     } else {
       if (isTaskCancelled(task.id)) return;
 
-      // --- Scrutinize (round 2 / final) ---
       state = advanceState(state, "done");
       updateTaskStatus(task.id, "scrutinizing", state);
       logger.info("Scrutinizing plan (round 2)", { taskId: task.id });
 
-      const scrutiny2 = await executeScrutinize(task, repo, workDir, planAgainResult.plan, mcpConfigPath, onThinking);
+      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking);
 
       if (scrutiny2.error) {
         if (isTaskCancelled(task.id)) return;
@@ -493,24 +524,20 @@ export async function runTask(taskId: string): Promise<void> {
       } else {
         if (isTaskCancelled(task.id)) return;
 
-        // --- Finalize plan ---
         state = advanceState(state, "done");
         updateTaskStatus(task.id, "finalizing_plan", state);
         logger.info("Finalizing plan", { taskId: task.id });
 
         const finalPlan = await executeFinalizePlan(
-          task, repo, workDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
         );
 
         if (!finalPlan.error) {
-          // Use the finalized plan for implementation
           planResult.plan = finalPlan.plan;
         } else {
           logger.warn("Finalize failed, using revised plan", { taskId: task.id });
-          // Fall back to the plan-again output
           planResult.plan = planAgainResult.plan;
         }
-
         state = advanceState(state, "done");
       }
     }
@@ -518,147 +545,135 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // === IMPLEMENT ===
-  // At this point planResult.plan holds the best plan we have (finalized > revised > original)
-  updateTaskStatus(task.id, "implementing", state);
-  logger.info("Starting implement phase", { taskId: task.id });
+  // === PER-REPO: IMPLEMENT -> LINT -> CI ===
+  const repoPlans = parseMultiRepoPlan(planResult.plan, repos.map((r) => r.name));
 
-  const implResult = await executeImplement(task, repo, workDir, planResult.plan, mcpConfigPath, onThinking);
+  for (const repo of repos) {
+    const workDir = workDirs.get(repo.name)!;
+    const repoPlan = repoPlans.get(repo.name) ?? planResult.plan;
 
-  if (implResult.error) {
-    if (isTaskCancelled(task.id)) return;
-    logger.error("Implementation failed", { taskId: task.id, error: implResult.error });
-    state = advanceState(state, "error");
-    updateTaskStatus(task.id, "review", state);
-    return;
-  }
-
-  if (isTaskCancelled(task.id)) return;
-
-  // === LINT (with fix loop) ===
-  state = advanceState(state, "done");
-  updateTaskStatus(task.id, "linting", state);
-
-  if (repo.lint_cmd) {
-    let _lintPassed = false;
-
-    for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-      logger.info("Running lint", { taskId: task.id, round });
-
-      const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
-        saveNodeOutput(task.id, "lint", accumulated, false);
-      });
-      saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
-
-      if (lintResult.success) {
-        _lintPassed = true;
-        break;
-      }
-
-      // Scan lint failure output for missing secrets
-      if (containerName) {
-        discoverSecrets(repo.id, lintResult.output);
-      }
-
-      if (round >= MAX_LINT_ROUNDS) {
-        logger.warn("Lint fix limit reached, proceeding anyway", { taskId: task.id });
-        break;
-      }
-
-      if (isTaskCancelled(task.id)) return;
-
-      // Fix lint errors
-      state = advanceState(state, "errors");
-      updateTaskStatus(task.id, "fix_linting", state);
-      logger.info("Running fix-lint agent", { taskId: task.id, round });
-
-      const fixResult = await executeFixLint(
-        task, repo, workDir,
-        lintResult.output, lintResult.command, mcpConfigPath
-      );
-
-      if (fixResult.error) {
-        if (isTaskCancelled(task.id)) return;
-        logger.warn("Fix-lint failed", { taskId: task.id, error: fixResult.error });
-        break;
-      }
-
-      // Loop back to lint
-      state = advanceState(state, "done");
-      state.lint_rounds++;
-      updateTaskStatus(task.id, "linting", state);
+    logger.info("Processing repo", { taskId: task.id, repo: repo.name });
+    if (manager) {
+      manager.notifyAgentOutput(task.id, `Implementing: ${repo.name}`).catch(() => {});
     }
-  }
 
-  if (isTaskCancelled(task.id)) return;
+    // --- Implement ---
+    updateTaskStatus(task.id, "implementing", state);
 
-  // === CI (test/build with fix loop) ===
-  if (repo.test_cmd || repo.build_cmd) {
-    state = advanceState(state, "clean");
-    updateTaskStatus(task.id, "ci_running", state);
-
-    for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-      logger.info("Running CI", { taskId: task.id, round });
-
-      const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
-        saveNodeOutput(task.id, "ci", accumulated, false);
-      });
-      saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-      if (ciResult.success) {
-        state = advanceState(state, "pass");
-        break;
-      }
-
-      // Scan CI failure output for missing secrets
-      if (containerName) {
-        discoverSecrets(repo.id, ciResult.output);
-      }
-
-      if (round >= MAX_CI_ROUNDS - 1) {
-        logger.warn("CI fix limit reached", { taskId: task.id });
-        state = advanceState(state, "pass"); // proceed to review with failure noted
-        break;
-      }
-
-      if (isTaskCancelled(task.id)) return;
-
-      // Fix CI
-      state = advanceState(state, "fail");
-      updateTaskStatus(task.id, "ci_fixing", state);
-      logger.info("Running fix-ci agent", { taskId: task.id, round });
-
-      const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, mcpConfigPath);
-
-      if (fixResult.error) {
-        if (isTaskCancelled(task.id)) return;
-        logger.warn("Fix-ci failed", { taskId: task.id, error: fixResult.error });
-        state = advanceState(state, "error");
-        break;
-      }
-
-      state = advanceState(state, "done");
-      state.ci_rounds++;
-
-      updateTaskStatus(task.id, "ci_running", state);
-    }
-  } else {
-    // No CI configured, skip to review
-    state = advanceState(state, "clean"); // lint -> ci
-    state = advanceState(state, "pass");  // ci -> review
-  }
-
-  // Tear down Docker container before review (no longer needed)
-  if (containerName) {
+    // Generate per-repo MCP config
+    let repoMcpConfigPath: string | undefined;
     try {
-      await teardownTaskContainer(task.id);
-      logger.info("Docker container torn down after CI", { taskId: task.id });
-    } catch (err) {
-      logger.warn("Docker teardown failed", { taskId: task.id, error: String(err) });
+      repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+    } catch {}
+
+    const implResult = await executeImplement(task, repo, workDir, repoPlan, repoMcpConfigPath, onThinking);
+
+    if (implResult.error) {
+      if (isTaskCancelled(task.id)) return;
+      logger.error("Implementation failed", { taskId: task.id, repo: repo.name, error: implResult.error });
+      state = advanceState(state, "error");
+      updateTaskStatus(task.id, "review", state);
+      return;
+    }
+
+    if (isTaskCancelled(task.id)) return;
+
+    // --- Lint (with fix loop) ---
+    state = advanceState(state, "done");
+    updateTaskStatus(task.id, "linting", state);
+
+    // Set up Docker container per repo if applicable
+    let containerName: string | null = null;
+    try {
+      containerName = await setupTaskContainer(repo, workDir, task.id);
+    } catch {}
+
+    if (repo.lint_cmd) {
+      for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
+        logger.info("Running lint", { taskId: task.id, repo: repo.name, round });
+
+        const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+          saveNodeOutput(task.id, "lint", accumulated, false);
+        });
+        saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
+
+        if (lintResult.success) break;
+
+        if (containerName) discoverSecrets(repo.id, lintResult.output);
+        if (round >= MAX_LINT_ROUNDS) break;
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "errors");
+        updateTaskStatus(task.id, "fix_linting", state);
+
+        const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
+        if (fixResult.error) {
+          if (isTaskCancelled(task.id)) return;
+          break;
+        }
+
+        state = advanceState(state, "done");
+        state.lint_rounds++;
+        updateTaskStatus(task.id, "linting", state);
+      }
+    }
+
+    if (isTaskCancelled(task.id)) return;
+
+    // --- CI (test/build with fix loop) ---
+    if (repo.test_cmd || repo.build_cmd) {
+      state = advanceState(state, "clean");
+      updateTaskStatus(task.id, "ci_running", state);
+
+      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+        logger.info("Running CI", { taskId: task.id, repo: repo.name, round });
+
+        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+          saveNodeOutput(task.id, "ci", accumulated, false);
+        });
+        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+        if (ciResult.success) {
+          state = advanceState(state, "pass");
+          break;
+        }
+
+        if (containerName) discoverSecrets(repo.id, ciResult.output);
+        if (round >= MAX_CI_ROUNDS - 1) {
+          state = advanceState(state, "pass");
+          break;
+        }
+        if (isTaskCancelled(task.id)) return;
+
+        state = advanceState(state, "fail");
+        updateTaskStatus(task.id, "ci_fixing", state);
+
+        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+        if (fixResult.error) {
+          if (isTaskCancelled(task.id)) return;
+          state = advanceState(state, "error");
+          break;
+        }
+
+        state = advanceState(state, "done");
+        state.ci_rounds++;
+        updateTaskStatus(task.id, "ci_running", state);
+      }
+    } else if (repos.indexOf(repo) === repos.length - 1) {
+      // Last repo with no CI -- advance to review
+      state = advanceState(state, "clean");
+      state = advanceState(state, "pass");
+    }
+
+    // Tear down Docker container
+    if (containerName) {
+      try { await teardownTaskContainer(task.id); } catch {}
     }
   }
 
-  // === REVIEW ===
+  if (isTaskCancelled(task.id)) return;
+
+  // === REVIEW: COMMIT + PUSH + CREATE PR PER REPO ===
   logger.info("Task ready for review", { taskId: task.id });
 
   const notifyError = (msg: string) => {
@@ -666,71 +681,94 @@ export async function runTask(taskId: string): Promise<void> {
     if (manager) manager.notifyAgentOutput(task.id, `[error] ${msg}`).catch(() => {});
   };
 
-  // 1. Commit all changes
-  try {
-    await $`git -C ${workDir} add -A`.quiet();
-    const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
-    if (hasChanges.exitCode !== 0) {
-      await $`git -C ${workDir} commit -m ${"hoto: " + task.title}`.quiet();
-      logger.info("Committed implementation changes", { taskId: task.id });
-    }
-  } catch (err) {
-    notifyError(`Failed to commit changes: ${err}`);
-  }
+  const prUrls: string[] = [];
 
-  // 2. Push to Gitea and create PR (before setting review status, so the URL is available)
-  if (isGiteaConfigured()) {
+  for (const repo of repos) {
+    const workDir = workDirs.get(repo.name)!;
+
+    // Commit
     try {
-      await ensureRepoOnGitea(repo.path, repo.name);
-      await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
-
-      const { getDefaultBranch } = await import("../workspace/git");
-      const baseBranch = await getDefaultBranch(repo.path);
-
-      const db = getDb();
-      const lintRow = db.query("SELECT lint_passed FROM tasks WHERE id = ?").get(task.id) as { lint_passed: number | null } | null;
-      const ciRow = db.query("SELECT ci_passed FROM tasks WHERE id = ?").get(task.id) as { ci_passed: number | null } | null;
-
-      const prBody = [
-        `Task ID: \`${task.id}\``,
-        "",
-        task.description,
-        "",
-        "---",
-        `Lint: ${lintRow?.lint_passed ? "passed" : "failed/skipped"}`,
-        `CI: ${ciRow?.ci_passed ? "passed" : "failed/skipped"}`,
-      ].join("\n");
-
-      const pr = await createPullRequest(
-        repo.name,
-        branchName,
-        baseBranch,
-        `hoto: ${task.title}`,
-        prBody
-      );
-
-      const prUrl = rewriteGiteaUrl(pr.html_url);
-      db.run(
-        "UPDATE tasks SET gitea_pr_number = ?, gitea_pr_url = ? WHERE id = ?",
-        [pr.number, prUrl, task.id]
-      );
-
-      logger.info("Created Gitea PR", { taskId: task.id, prNumber: pr.number, url: prUrl });
-
-      // Seed cursors and start polling for review events
-      await seedCursors(task.id, repo.name, pr.number);
-      startReviewPoller(task.id, repo.name, repo.path, branchName, pr.number);
+      await $`git -C ${workDir} add -A`.quiet();
+      const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
+      if (hasChanges.exitCode !== 0) {
+        await $`git -C ${workDir} commit -m ${"hoto: " + task.title}`.quiet();
+        logger.info("Committed changes", { taskId: task.id, repo: repo.name });
+      } else {
+        logger.info("No changes to commit", { taskId: task.id, repo: repo.name });
+        continue; // Skip push/PR for repos with no changes
+      }
     } catch (err) {
-      notifyError(`Gitea push/PR failed: ${err}`);
+      notifyError(`Failed to commit changes for ${repo.name}: ${err}`);
+      continue;
     }
-  } else {
-    notifyError(`Gitea not configured (GITEA_URL=${config.giteaUrl ?? "unset"}, bot token=${isGiteaConfigured() ? "ok" : "missing"}). Branch not pushed.`);
+
+    // Push + create PR
+    if (isGiteaConfigured()) {
+      try {
+        await ensureRepoOnGitea(repo.path, repo.name);
+        await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
+
+        const { getDefaultBranch } = await import("../workspace/git");
+        const baseBranch = await getDefaultBranch(repo.path);
+
+        const db = getDb();
+        const lintRow = db.query("SELECT lint_passed FROM tasks WHERE id = ?").get(task.id) as { lint_passed: number | null } | null;
+        const ciRow = db.query("SELECT ci_passed FROM tasks WHERE id = ?").get(task.id) as { ci_passed: number | null } | null;
+
+        const prBody = [
+          `Task ID: \`${task.id}\``,
+          "",
+          task.description,
+          "",
+          "---",
+          `Lint: ${lintRow?.lint_passed ? "passed" : "failed/skipped"}`,
+          `CI: ${ciRow?.ci_passed ? "passed" : "failed/skipped"}`,
+        ].join("\n");
+
+        const pr = await createPullRequest(
+          repo.name, branchName, baseBranch,
+          `hoto: ${task.title}`, prBody
+        );
+
+        const prUrl = rewriteGiteaUrl(pr.html_url);
+        prUrls.push(prUrl);
+
+        // Store in task_prs
+        db.run(
+          "INSERT OR REPLACE INTO task_prs (task_id, repo_id, pr_number, pr_url) VALUES (?, ?, ?, ?)",
+          [task.id, repo.id, pr.number, prUrl]
+        );
+
+        // Legacy compat: store first PR on tasks table
+        if (prUrls.length === 1) {
+          db.run(
+            "UPDATE tasks SET gitea_pr_number = ?, gitea_pr_url = ? WHERE id = ?",
+            [pr.number, prUrl, task.id]
+          );
+        }
+
+        logger.info("Created Gitea PR", { taskId: task.id, repo: repo.name, prNumber: pr.number, url: prUrl });
+
+        await seedCursors(task.id, repo.name, pr.number);
+        startReviewPoller(task.id, repo.name, repo.path, branchName, pr.number);
+      } catch (err) {
+        notifyError(`Gitea push/PR failed for ${repo.name}: ${err}`);
+      }
+    } else {
+      notifyError(`Gitea not configured. Changes for ${repo.name} not pushed.`);
+    }
   }
 
-  // 3. Now set review status -- notifyTaskStatusChange will read the PR URL from DB
+  // 3. Notify with all PR URLs
+  if (prUrls.length > 0 && manager) {
+    const prList = prUrls.map((url) => `  ${url}`).join("\n");
+    manager.notifyAgentOutput(task.id, `Pull requests created:\n${prList}`).catch(() => {});
+  }
+
+  // 4. Now set review status -- notifyTaskStatusChange will read the PR URL from DB
   updateTaskStatus(task.id, "review", state);
 
-  // 4. Also announce in main channel with PR link
+  // 5. Also announce in main channel with PR link
   if (manager) {
     manager.notifyReviewReady(task).catch(() => {});
   }
