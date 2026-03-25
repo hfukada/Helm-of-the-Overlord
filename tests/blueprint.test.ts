@@ -7,7 +7,7 @@ import {
 import type { BlueprintState } from "../src/shared/types";
 
 // Import the timeline builder from the pure logic module (not the React component)
-import { buildTimelineNodes } from "../src/web/src/components/blueprint-timeline-logic";
+import { buildTimelineNodes } from "../src/orchestrator/timeline";
 
 // Helper: advance through the full plan-scrutinize pipeline
 function advanceThroughPlanPipeline(state: BlueprintState): BlueprintState {

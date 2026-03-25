@@ -4,7 +4,7 @@ import { logger } from "../shared/logger";
 import type { TokenUsage, StreamEventType } from "../shared/types";
 import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
-import { claudeBatch, type ClaudeEvent } from "../shared/claude-cli";
+import { claudeStream, type ClaudeEvent } from "../shared/claude-cli";
 import { taskDir } from "../workspace/manager";
 
 export interface SubprocessOptions {
@@ -52,7 +52,7 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     agentRunId: opts.agentRunId,
   });
 
-  const result = await claudeBatch(
+  const result = await claudeStream(
     {
       prompt: opts.prompt,
       systemPrompt: opts.systemPrompt,
