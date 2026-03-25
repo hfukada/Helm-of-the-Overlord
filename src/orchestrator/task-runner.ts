@@ -19,7 +19,7 @@ import { renderTemplate } from "../prompts/loader";
 import { getMessagingManager } from "../messaging/manager";
 import { config } from "../shared/config";
 import { indexTaskChatHistory } from "../messaging/indexer";
-import { isGiteaConfigured, createPullRequest, commentOnPullRequest, rewriteGiteaUrl } from "../gitea/client";
+import { isGiteaConfigured, createPullRequest, updatePullRequest, commentOnPullRequest, rewriteGiteaUrl } from "../gitea/client";
 import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
 import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
@@ -184,6 +184,62 @@ export async function requestHumanInput(taskId: string, question: string): Promi
   db.run("UPDATE task_input_requests SET status = 'timeout' WHERE id = ?", [requestId]);
   logger.warn("Human input timed out", { taskId, requestId });
   return "No response received. Proceed with your best judgment.";
+}
+
+function generatePrMetadata(
+  task: Task,
+  planOutput: string,
+  diffStat: string,
+  lintPassed: boolean | null,
+  ciPassed: boolean | null
+): { title: string; body: string } {
+  // Derive title: first non-empty line from planOutput that looks like a heading or summary.
+  // Strip leading # markers and whitespace. Fall back to task.title. Trim to 72 chars.
+  let title = task.title;
+  const lines = planOutput.split("\n");
+  for (const line of lines) {
+    const stripped = line.replace(/^#+\s*/, "").trim();
+    if (stripped.length > 0) {
+      title = stripped.length > 72 ? stripped.slice(0, 72) : stripped;
+      break;
+    }
+  }
+
+  // Derive summary: first paragraph or content up to ~500 chars from planOutput.
+  const paragraphs = planOutput.split(/\n\n+/);
+  const summaryRaw = paragraphs[0] ?? "";
+  const summary = summaryRaw.length > 500 ? `${summaryRaw.slice(0, 500)}...` : summaryRaw;
+
+  // Truncate plan to ~3000 chars.
+  const planTruncated = planOutput.length > 3000
+    ? `${planOutput.slice(0, 3000)}\n...(truncated)`
+    : planOutput;
+
+  const lintStatus = lintPassed === null ? "skipped" : lintPassed ? "passed" : "failed";
+  const ciStatus = ciPassed === null ? "skipped" : ciPassed ? "passed" : "failed";
+
+  const bodyParts: string[] = [];
+
+  if (summary) {
+    bodyParts.push(summary);
+    bodyParts.push("");
+  }
+
+  if (diffStat) {
+    bodyParts.push("## Changes");
+    bodyParts.push(diffStat);
+    bodyParts.push("");
+  }
+
+  bodyParts.push("## Plan");
+  bodyParts.push(planTruncated);
+  bodyParts.push("");
+  bodyParts.push("---");
+  bodyParts.push(`Task ID: \`${task.id}\``);
+  bodyParts.push(`Lint: ${lintStatus}`);
+  bodyParts.push(`CI: ${ciStatus}`);
+
+  return { title, body: bodyParts.join("\n") };
 }
 
 function isTaskCancelled(taskId: string): boolean {
@@ -415,7 +471,7 @@ export async function runTask(taskId: string): Promise<void> {
 
   // Use first repo's workDir for plan-phase tools (plan agent can read all repos via sibling dirs)
   const primaryRepo = repos[0];
-  const primaryWorkDir = workDirs.get(primaryRepo.name)!;
+  const primaryWorkDir = workDirs.get(primaryRepo.name) ?? "";
 
   // Generate MCP config for agent nodes (using primary repo)
   let mcpConfigPath: string | undefined;
@@ -689,7 +745,7 @@ export async function runTask(taskId: string): Promise<void> {
       await $`git -C ${workDir} add -A`.quiet();
       const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
       if (hasChanges.exitCode !== 0) {
-        await $`git -C ${workDir} commit -m ${"hoto: " + task.title}`.quiet();
+        await $`git -C ${workDir} commit -m ${`hoto: ${task.title}`}`.quiet();
         logger.info("Committed changes", { taskId: task.id, repo: repo.name });
       } else {
         logger.info("No changes to commit", { taskId: task.id, repo: repo.name });
@@ -713,19 +769,30 @@ export async function runTask(taskId: string): Promise<void> {
         const lintRow = db.query("SELECT lint_passed FROM tasks WHERE id = ?").get(task.id) as { lint_passed: number | null } | null;
         const ciRow = db.query("SELECT ci_passed FROM tasks WHERE id = ?").get(task.id) as { ci_passed: number | null } | null;
 
-        const prBody = [
-          `Task ID: \`${task.id}\``,
-          "",
-          task.description,
-          "",
-          "---",
-          `Lint: ${lintRow?.lint_passed ? "passed" : "failed/skipped"}`,
-          `CI: ${ciRow?.ci_passed ? "passed" : "failed/skipped"}`,
-        ].join("\n");
+        const planRow = db.query(
+          "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('finalize-plan', 'plan') ORDER BY finished_at DESC LIMIT 1"
+        ).get(task.id) as { output: string } | null;
+        const planOutput = planRow?.output ?? "";
+
+        let diffStat = "";
+        try {
+          const diffResult = await $`git -C ${workDir} diff --stat HEAD`.quiet().nothrow();
+          diffStat = diffResult.stdout.toString().trim();
+        } catch (err) {
+          logger.warn("Failed to get diff stat for PR body", { taskId: task.id, error: String(err) });
+        }
+
+        const prMetadata = generatePrMetadata(
+          task,
+          planOutput,
+          diffStat,
+          lintRow?.lint_passed != null ? !!lintRow.lint_passed : null,
+          ciRow?.ci_passed != null ? !!ciRow.ci_passed : null
+        );
 
         const pr = await createPullRequest(
           repo.name, branchName, baseBranch,
-          `hoto: ${task.title}`, prBody
+          prMetadata.title, prMetadata.body
         );
 
         const prUrl = rewriteGiteaUrl(pr.html_url);
@@ -1004,7 +1071,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       await $`git -C ${workDir} add -A`.quiet();
       const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
       if (hasChanges.exitCode !== 0) {
-        await $`git -C ${workDir} commit -m ${"hoto: revision for " + task.title}`.quiet();
+        await $`git -C ${workDir} commit -m ${`hoto: revision for ${task.title}`}`.quiet();
         logger.info("Committed revision changes", { taskId: task.id, repo: repo.name });
       } else {
         continue;
@@ -1021,6 +1088,37 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
         logger.info("Pushed revision", { taskId: task.id, repo: repo.name });
       } catch (err) {
         notifyError(`Gitea push after revision failed for ${repo.name}: ${err}`);
+      }
+
+      const db = getDb();
+      const prRow = db.query(
+        "SELECT pr_number FROM task_prs WHERE task_id = ? AND repo_id = ?"
+      ).get(task.id, repo.id) as { pr_number: number } | null;
+      const prNumber = prRow?.pr_number ?? (
+        db.query("SELECT gitea_pr_number FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_number: number | null } | null
+      )?.gitea_pr_number ?? null;
+
+      if (prNumber) {
+        try {
+          const planRow = db.query(
+            "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('finalize-plan', 'plan') ORDER BY finished_at DESC LIMIT 1"
+          ).get(task.id) as { output: string } | null;
+          const planOutput = planRow?.output ?? "";
+
+          let diffStat = "";
+          try {
+            const diffResult = await $`git -C ${workDir} diff --stat HEAD`.quiet().nothrow();
+            diffStat = diffResult.stdout.toString().trim();
+          } catch (diffErr) {
+            logger.warn("Failed to get diff stat for PR update", { taskId: task.id, error: String(diffErr) });
+          }
+
+          const prMetadata = generatePrMetadata(task, planOutput, diffStat, null, null);
+          await updatePullRequest(repo.name, prNumber, prMetadata.title, prMetadata.body);
+          logger.info("Updated Gitea PR title and body after revision", { taskId: task.id, repo: repo.name, prNumber });
+        } catch (err) {
+          notifyError(`Failed to update PR title/body after revision for ${repo.name}: ${err}`);
+        }
       }
     }
   }

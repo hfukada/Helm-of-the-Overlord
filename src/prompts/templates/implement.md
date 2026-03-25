@@ -7,6 +7,10 @@ Each repo is a subdirectory of your working directory:
 ## Task
 Title: {{taskTitle}}
 Description: {{taskDescription}}
+Repository: {{repoName}}
+{{#if repoLanguage}}Language: {{repoLanguage}}
+{{/if}}{{#if repoFramework}}Framework: {{repoFramework}}
+{{/if}}
 {{#if knowledgeContext}}
 {{knowledgeContext}}
 {{/if}}
