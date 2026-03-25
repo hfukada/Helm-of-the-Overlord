@@ -8,7 +8,7 @@ agents.get("/:taskId/agents", (c) => {
   const db = getDb();
 
   const runs = db.query(
-    `SELECT id, node_name, agent_type, status, token_input, token_output,
+    `SELECT id, node_name, agent_type, status, prompt, output, token_input, token_output,
             cost_usd, model, started_at, finished_at, error
      FROM agent_runs WHERE task_id = ? ORDER BY started_at`
   ).all(taskId);

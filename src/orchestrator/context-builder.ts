@@ -303,10 +303,11 @@ export async function buildRevisionPlanPrompt(
 
 export async function buildImplementPrompt(
   task: Task,
-  repos: Repo[],
+  repos: Repo | Repo[],
   plan: string
 ): Promise<string> {
-  const repoLines = repos.map((r) => {
+  const reposArray = Array.isArray(repos) ? repos : [repos];
+  const repoLines = reposArray.map((r) => {
     let line = `- **./${r.name}/** -- ${r.language ?? "unknown"}`;
     if (r.framework) line += ` (${r.framework})`;
     return line;
@@ -314,7 +315,7 @@ export async function buildImplementPrompt(
   const repoList = repoLines.join("\n");
 
   const knowledgeSections: string[] = [];
-  for (const repo of repos) {
+  for (const repo of reposArray) {
     if (!repo.id) continue;
     try {
       const results = await search({ query: task.description, repo_id: repo.id, limit: 5 });
