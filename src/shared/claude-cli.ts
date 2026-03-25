@@ -93,13 +93,14 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
     args.push("--mcp-config", opts.mcpConfigPath);
   }
 
-  args.push("--", opts.prompt);
+  // Prompt passed via stdin to avoid shell arg length limits
   return args;
 }
 
 function spawnClaude(args: string[], opts: ClaudeOptions) {
   return Bun.spawn(args, {
     cwd: opts.cwd,
+    stdin: new TextEncoder().encode(opts.prompt),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, ...opts.env },
