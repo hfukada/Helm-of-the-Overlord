@@ -307,7 +307,7 @@ export class MessagingManager {
     if (!channelRow) return;
 
     // Truncate long output
-    const truncated = text.length > 2000 ? text.slice(0, 2000) + "\n[truncated]" : text;
+    const truncated = text.length > 2000 ? `${text.slice(0, 2000)}\n[truncated]` : text;
     await this.provider.sendMessage(channelRow.channel_id, truncated);
   }
 

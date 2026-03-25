@@ -114,7 +114,7 @@ tasks.get("/:id", async (c) => {
 
   // Include agent runs
   const agentRuns = db.query(
-    "SELECT id, node_name, agent_type, status, token_input, token_output, cost_usd, model, started_at, finished_at, error FROM agent_runs WHERE task_id = ? ORDER BY started_at"
+    "SELECT id, node_name, agent_type, status, prompt, output, token_input, token_output, cost_usd, model, started_at, finished_at, error FROM agent_runs WHERE task_id = ? ORDER BY started_at"
   ).all(id);
 
   // Parse blueprint_state
@@ -134,7 +134,7 @@ tasks.get("/:id", async (c) => {
 
   // Include PRs from task_prs
   const taskPrs = db.query(
-    `SELECT tp.repo_id, tp.pr_number, tp.pr_url, tp.status, r.name as repo_name
+    `SELECT tp.id, tp.repo_id, tp.pr_number, tp.pr_url, tp.status, r.name as repo_name
      FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
      WHERE tp.task_id = ? ORDER BY r.name`
   ).all(id);
