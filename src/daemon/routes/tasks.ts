@@ -208,6 +208,51 @@ tasks.post("/:id/cancel", async (c) => {
   return c.json({ id, status: "cancelled" });
 });
 
+/**
+ * Delete a task and all related data. Kicks members from the channel,
+ * archives it, cleans up worktree if still running, and removes all DB rows.
+ */
+async function deleteTask(taskId: string): Promise<void> {
+  const db = getDb();
+
+  const task = db.query("SELECT status FROM tasks WHERE id = ?").get(taskId) as { status: string } | null;
+  if (!task) throw new Error("Task not found");
+
+  const terminalStatuses = ["committed", "cancelled", "failed"];
+  if (!terminalStatuses.includes(task.status)) {
+    await cleanupTask(taskId).catch((err) => {
+      logger.warn("Cleanup failed before delete", { taskId, error: String(err) });
+    });
+  }
+
+  // Kick members and archive the messaging channel
+  const manager = getMessagingManager();
+  if (manager) {
+    await manager.kickAndArchiveTaskChannel(taskId).catch((err: unknown) => {
+      logger.warn("Failed to kick/archive channel", { taskId, error: String(err) });
+    });
+  }
+
+  // Delete related rows in dependency order
+  const agentRunIds = db
+    .query("SELECT id FROM agent_runs WHERE task_id = ?")
+    .all(taskId) as Array<{ id: string }>;
+
+  for (const run of agentRunIds) {
+    db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
+  }
+  db.run("DELETE FROM agent_runs WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM diff_comments WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_input_requests WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_messages WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_repos WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_prs WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM messaging_channels WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM tasks WHERE id = ?", [taskId]);
+
+  logger.info("Task deleted", { taskId });
+}
+
 tasks.delete("/done", async (c) => {
   const db = getDb();
 
@@ -221,27 +266,8 @@ tasks.delete("/done", async (c) => {
 
   for (const task of doneTasks) {
     try {
-      // Archive (and kick members from) the messaging channel
-      await getMessagingManager()?.kickAndArchiveTaskChannel(task.id);
-
-      const agentRunIds = db
-        .query("SELECT id FROM agent_runs WHERE task_id = ?")
-        .all(task.id) as Array<{ id: string }>;
-
-      for (const run of agentRunIds) {
-        db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
-      }
-      db.run("DELETE FROM agent_runs WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM diff_comments WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM task_input_requests WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM task_messages WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM task_repos WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM task_prs WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM messaging_channels WHERE task_id = ?", [task.id]);
-      db.run("DELETE FROM tasks WHERE id = ?", [task.id]);
-
+      await deleteTask(task.id);
       deleted.push(task.id);
-      logger.info("Finished task deleted via clean-done", { taskId: task.id });
     } catch (err) {
       logger.error("Failed to delete finished task", { taskId: task.id, error: String(err) });
       errors.push({ id: task.id, error: String(err) });
@@ -255,38 +281,16 @@ tasks.delete("/:id", async (c) => {
   const id = c.req.param("id");
   const db = getDb();
 
-  const task = db.query("SELECT id, status FROM tasks WHERE id = ?").get(id) as { id: string; status: string } | null;
+  const task = db.query("SELECT id FROM tasks WHERE id = ?").get(id) as { id: string } | null;
   if (!task) {
     return c.json({ error: "Task not found" }, 404);
   }
 
-  const terminalStatuses = ["committed", "cancelled", "failed"];
-  if (!terminalStatuses.includes(task.status)) {
-    // Stop any active work and clean up the worktree before deleting
-    await cleanupTask(id).catch((err) => {
-      logger.warn("Cleanup failed before delete", { taskId: id, error: String(err) });
-    });
+  try {
+    await deleteTask(id);
+  } catch (err) {
+    return c.json({ error: String(err) }, 500);
   }
-
-  // Archive the messaging channel before deleting DB rows
-  await getMessagingManager()?.archiveTaskChannel(id);
-
-  // Delete related rows in dependency order to satisfy foreign-key constraints
-  const agentRunIds = db
-    .query("SELECT id FROM agent_runs WHERE task_id = ?")
-    .all(id) as Array<{ id: string }>;
-
-  for (const run of agentRunIds) {
-    db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
-  }
-  db.run("DELETE FROM agent_runs WHERE task_id = ?", [id]);
-  db.run("DELETE FROM diff_comments WHERE task_id = ?", [id]);
-  db.run("DELETE FROM task_input_requests WHERE task_id = ?", [id]);
-  db.run("DELETE FROM task_messages WHERE task_id = ?", [id]);
-  db.run("DELETE FROM messaging_channels WHERE task_id = ?", [id]);
-  db.run("DELETE FROM tasks WHERE id = ?", [id]);
-
-  logger.info("Task deleted", { taskId: id });
 
   return c.json({ id, deleted: true });
 });

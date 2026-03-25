@@ -20,6 +20,7 @@ function makeStubProvider(): MessagingProvider {
     sendMessage: async () => {},
     sendFormattedMessage: async () => {},
     inviteUser: async () => {},
+    kickAllMembers: async () => {},
     onCommand: () => {},
     onMessage: () => {},
   };
