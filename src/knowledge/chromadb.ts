@@ -69,13 +69,17 @@ export async function upsertDocuments(
 ): Promise<void> {
   if (ids.length === 0) return;
 
+  // nomic-embed-text has ~8192 token context. Truncate long documents to stay under limit.
+  const MAX_CHARS = 6000;
+  const truncated = documents.map((d) => d.length > MAX_CHARS ? d.slice(0, MAX_CHARS) : d);
+
   const collection = await getCollection(repoName);
 
   const BATCH = 100;
   for (let i = 0; i < ids.length; i += BATCH) {
     await collection.upsert({
       ids: ids.slice(i, i + BATCH),
-      documents: documents.slice(i, i + BATCH),
+      documents: truncated.slice(i, i + BATCH),
       metadatas: metadatas.slice(i, i + BATCH),
     });
   }

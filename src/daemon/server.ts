@@ -45,6 +45,7 @@ export async function startDaemon(): Promise<void> {
     port: config.daemonPort,
     hostname: config.daemonHost,
     fetch: app.fetch,
+    idleTimeout: 120,
   });
 
   // Verify ChromaDB is available (required for vector search)

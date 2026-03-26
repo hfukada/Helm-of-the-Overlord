@@ -641,20 +641,54 @@ export class MessagingManager {
   }
 
   private async cmdReindex(cmd: CommandEvent): Promise<void> {
-    const repoName = cmd.args[0];
+    let repoName: string | undefined;
+    let force = false;
+
+    for (const arg of cmd.args) {
+      if (arg === "--force" || arg === "-f") {
+        force = true;
+      } else if (!repoName) {
+        repoName = arg;
+      }
+    }
+
     if (!repoName) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !reindex <repo-name>");
+      await this.provider.sendMessage(cmd.channelId, "Usage: !reindex <repo-name> [--force]");
       return;
     }
 
-    await this.provider.sendMessage(cmd.channelId, `Reindexing ${repoName}...`);
-    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/knowledge/repos/${repoName}/reindex`, { method: "POST" });
-    if (res.ok) {
-      const data = await res.json() as { chunks_indexed: number; embeddings_generated: number };
-      await this.provider.sendMessage(cmd.channelId, `Reindexed: ${data.chunks_indexed} chunks, ${data.embeddings_generated} embeddings.`);
-    } else {
-      await this.provider.sendMessage(cmd.channelId, "Reindex failed.");
+    const db = getDb();
+    const repoRow = db.query("SELECT * FROM repos WHERE name = ? AND archived = 0").get(repoName) as Record<string, unknown> | null;
+    if (!repoRow) {
+      await this.provider.sendMessage(cmd.channelId, `Repo '${repoName}' not found.`);
+      return;
     }
+
+    const label = force ? " (force)" : "";
+    await this.provider.sendMessage(cmd.channelId, `Reindexing ${repoName}${label}...`);
+
+    // Run async, report back when done
+    const { indexRepo } = await import("../knowledge/indexer");
+    const repo = {
+      id: repoRow.id as number,
+      name: repoRow.name as string,
+      path: repoRow.path as string,
+      description: repoRow.description as string | null,
+      build_cmd: repoRow.build_cmd as string | null,
+      test_cmd: repoRow.test_cmd as string | null,
+      run_cmd: repoRow.run_cmd as string | null,
+      lint_cmd: repoRow.lint_cmd as string | null,
+      language: repoRow.language as string | null,
+      framework: repoRow.framework as string | null,
+      docker_compose_path: repoRow.docker_compose_path as string | null,
+      metadata: null,
+    };
+
+    indexRepo(repo, { force }).then(async (result) => {
+      await this.provider.sendMessage(cmd.channelId, `Reindexed ${repoName}: ${result.chunks} chunks, ${result.embeddings} embeddings.`);
+    }).catch(async (err) => {
+      await this.provider.sendMessage(cmd.channelId, `Reindex failed: ${err}`);
+    });
   }
 
   private async cmdTokens(cmd: CommandEvent): Promise<void> {

@@ -108,15 +108,21 @@ knowledge.post("/repos/:name/reindex", async (c) => {
     logger.info("Updated repo metadata during reindex", { name, updates: Object.keys(updates) });
   }
 
-  logger.info("Reindexing repo", { name });
-  const result = await indexRepo(repo);
+  const force = c.req.query("force") === "true";
+  logger.info("Reindexing repo (async)", { name, force });
+
+  // Return 202 immediately, run indexing in background
+  indexRepo(repo, { force }).then((result) => {
+    logger.info("Reindex complete", { name, chunks: result.chunks, embeddings: result.embeddings });
+  }).catch((err) => {
+    logger.error("Reindex failed", { name, error: String(err) });
+  });
 
   return c.json({
     repo: name,
-    chunks_indexed: result.chunks,
-    embeddings_generated: result.embeddings,
+    status: "indexing",
     updated_fields: Object.keys(updates),
-  });
+  }, 202);
 });
 
 knowledge.get("/repos/:name/chunks", (c) => {

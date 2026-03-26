@@ -70,11 +70,12 @@ async function getChangedFiles(repoPath: string, fromHash: string, toHash: strin
   }
 }
 
-export async function indexRepo(repo: Repo): Promise<{ chunks: number; embeddings: number }> {
+export async function indexRepo(repo: Repo, opts?: { force?: boolean }): Promise<{ chunks: number; embeddings: number }> {
   const db = getDb();
   const repoPath = repo.path;
+  const force = opts?.force ?? false;
 
-  logger.info("Indexing repo", { name: repo.name, path: repoPath });
+  logger.info("Indexing repo", { name: repo.name, path: repoPath, force });
 
   // Pull latest from remote before diffing
   try {
@@ -83,8 +84,15 @@ export async function indexRepo(repo: Repo): Promise<{ chunks: number; embedding
     logger.warn("Git pull failed, indexing from local state", { repo: repo.name, error: String(err) });
   }
 
+  if (force) {
+    // Clear all existing chunks and reset hash to force full reindex
+    logger.info("Force reindex: clearing existing chunks", { repo: repo.name });
+    db.run("DELETE FROM knowledge_chunks WHERE repo_id = ?", [repo.id]);
+    db.run("UPDATE repos SET index_commit_hash = NULL WHERE id = ?", [repo.id]);
+  }
+
   const currentHash = await getHeadCommit(repoPath);
-  const storedHash = (db.query("SELECT index_commit_hash FROM repos WHERE id = ?").get(repo.id) as { index_commit_hash: string | null } | null)?.index_commit_hash;
+  const storedHash = force ? null : (db.query("SELECT index_commit_hash FROM repos WHERE id = ?").get(repo.id) as { index_commit_hash: string | null } | null)?.index_commit_hash;
 
   let changedFileSet: Set<string> | null = null; // null = full reindex
 
