@@ -523,9 +523,16 @@ export async function runTask(taskId: string): Promise<void> {
     task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt
   );
 
-  if (planResult.error) {
+  if (planResult.error || planResult.plan.length < 200) {
     if (isTaskCancelled(task.id)) return;
-    logger.error("Planning failed", { taskId: task.id, error: planResult.error });
+    logger.error("Planning failed or produced insufficient output", {
+      taskId: task.id,
+      error: planResult.error,
+      outputLen: planResult.plan.length,
+    });
+    if (manager) {
+      manager.notifyAgentOutput(task.id, `[error] Plan output too short (${planResult.plan.length} chars). The planning agent may have run out of turns while exploring.`).catch(() => {});
+    }
     state = advanceState(state, "error");
     updateTaskStatus(task.id, "review", state);
     return;
@@ -904,9 +911,11 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   const planResult = await executePlan(task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, revisionPlanPrompt);
 
-  if (planResult.error) {
+  if (planResult.error || planResult.plan.length < 200) {
     if (isTaskCancelled(task.id)) return;
-    logger.error("Revision planning failed", { taskId: task.id, error: planResult.error });
+    logger.error("Revision planning failed or insufficient output", {
+      taskId: task.id, error: planResult.error, outputLen: planResult.plan.length,
+    });
     state = advanceState(state, "error");
     updateTaskStatus(task.id, "review", state);
     return;
