@@ -15,7 +15,7 @@ Implement the plan below. Follow each step exactly. Do not deviate or add unplan
 
 ## Rules
 - Follow the Execution Plan step by step, in order.
-- Each repo is a subdirectory: `./<repo-name>/path/to/file`.
+- Use RELATIVE paths only (e.g. `./src/foo.ts`, not absolute paths). Your working directory is already set to the correct location.
 - Match each repo's existing code style.
 - Do NOT run lint, test, or build commands -- the orchestrator runs those after you finish.
 - Do NOT commit. Just write files.

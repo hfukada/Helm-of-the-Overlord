@@ -163,7 +163,7 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
 
 export function buildRepoList(repos: Repo[]): string {
   return repos.map((r) => {
-    let line = `- **${r.name}** (${r.path})`;
+    let line = `- **${r.name}**`;
     if (r.language) line += ` | ${r.language}`;
     if (r.framework) line += ` [${r.framework}]`;
     if (r.lint_cmd) line += ` | lint: \`${r.lint_cmd}\``;

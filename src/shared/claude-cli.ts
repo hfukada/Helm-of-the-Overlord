@@ -38,6 +38,7 @@ export interface ClaudeOptions {
   maxTurns?: number;
   allowedTools?: string[];
   mcpConfigPath?: string;
+  addDirs?: string[];
   env?: Record<string, string>;
 }
 
@@ -91,6 +92,12 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
 
   if (opts.mcpConfigPath) {
     args.push("--mcp-config", opts.mcpConfigPath);
+  }
+
+  if (opts.addDirs?.length) {
+    for (const dir of opts.addDirs) {
+      args.push("--add-dir", dir);
+    }
   }
 
   // Prompt passed via stdin to avoid shell arg length limits

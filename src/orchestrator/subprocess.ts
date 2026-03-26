@@ -15,6 +15,7 @@ export interface SubprocessOptions {
   maxTurns?: number;
   allowedTools?: string[];
   mcpConfigPath?: string;
+  addDirs?: string[];
   agentRunId: string;
   taskId?: string;
   onEvent?: (eventType: StreamEventType, content: string) => void;
@@ -61,6 +62,7 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
       maxTurns: opts.maxTurns,
       allowedTools: opts.allowedTools,
       mcpConfigPath: opts.mcpConfigPath,
+      addDirs: opts.addDirs,
     },
     (evt: ClaudeEvent) => {
       storeStreamEvent(opts.agentRunId, evt.type, evt.content);
