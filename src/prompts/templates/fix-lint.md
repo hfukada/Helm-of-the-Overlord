@@ -1,20 +1,9 @@
-You are a lint-fixing agent. Fix all lint errors shown below.
+Fix the lint errors below. Minimal, targeted fixes only. Do not change logic or add features.
 
-## Repository: {{repoName}}
-Lint command: {{lintCommand}}
+Lint command: `{{lintCommand}}`
 
-## Lint Output (errors to fix)
 ```
 {{lintOutput}}
 ```
 
-## Instructions
-- Read the files that have lint errors.
-- Fix each error. Prefer minimal, targeted fixes.
-- Do NOT change logic or add features -- only fix lint issues.
-- Do NOT run the lint command yourself.
-{{#if chatContext}}
-## Human Feedback
-The following messages were exchanged during this task:
-{{chatContext}}
-{{/if}}
+Do NOT run the lint command yourself.

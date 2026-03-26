@@ -510,17 +510,14 @@ export async function runTask(taskId: string): Promise<void> {
   const onThinking = makeThinkingForwarder(task.id, manager);
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
   const { parseMultiRepoPlan } = await import("./plan-parser");
-  const { buildMultiRepoPlanPrompt } = await import("./context-builder");
+  const { buildPlanPrompt } = await import("./context-builder");
 
   // --- Plan (round 1) ---
   updateTaskStatus(task.id, "planning", state);
   logger.info("Starting plan phase", { taskId: task.id });
 
-  // Use multi-repo plan template if >1 repo, otherwise standard single-repo
-  let planPrompt: string | undefined;
-  if (repos.length > 1) {
-    planPrompt = await buildMultiRepoPlanPrompt(task, repos);
-  }
+  // Unified plan prompt works for single or multi-repo
+  const planPrompt = await buildPlanPrompt(task, repos);
 
   const planResult = await executePlan(
     task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt
