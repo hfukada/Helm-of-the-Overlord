@@ -19,7 +19,17 @@ for i in $(seq 1 60); do
 done
 
 if [ ! -f "$MARKER" ]; then
-  echo "[hoto-init] First boot -- creating admin user..."
+  echo "[hoto-init] First boot -- configuring Gitea..."
+
+  # Enable push-create for users and orgs
+  grep -q ENABLE_PUSH_CREATE_ORG /data/gitea/conf/app.ini 2>/dev/null || cat >> /data/gitea/conf/app.ini <<'APPINI'
+
+[repository]
+ENABLE_PUSH_CREATE_USER = true
+ENABLE_PUSH_CREATE_ORG = true
+APPINI
+
+  echo "[hoto-init] Creating admin user..."
 
   OUTPUT=$(gitea admin user create \
     --username hoto-admin \
