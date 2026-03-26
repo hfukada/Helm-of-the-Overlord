@@ -68,7 +68,6 @@ export async function seedCursors(
     return;
   }
 
-  // Save to task_prs
   const db = getDb();
   db.run(
     "UPDATE task_prs SET last_review_id = ?, last_comment_id = ? WHERE task_id = ? AND pr_number = ?",
@@ -85,13 +84,11 @@ export function startReviewPoller(
 ): void {
   const key = pollerKey(taskId, repoName);
 
-  // Stop existing poller for this task+repo
   const existing = activePollers.get(key);
   if (existing?.timer) {
     clearInterval(existing.timer);
   }
 
-  // Look up repo_id from task_prs
   const db = getDb();
   const prRow = db.query(
     "SELECT repo_id FROM task_prs WHERE task_id = ? AND pr_number = ?"
@@ -120,7 +117,6 @@ export function startReviewPoller(
   logger.info("Started review poller", { taskId, repoName, prNumber, lastReviewId, lastCommentId });
 }
 
-/** Stop all pollers for a task. */
 export function stopTaskPollers(taskId: string): void {
   for (const [key, state] of activePollers) {
     if (state.taskId === taskId) {
@@ -130,7 +126,6 @@ export function stopTaskPollers(taskId: string): void {
   }
 }
 
-/** Stop a single poller for a task+repo. */
 export function stopReviewPoller(taskId: string, repoName?: string): void {
   if (repoName) {
     const key = pollerKey(taskId, repoName);
@@ -142,23 +137,34 @@ export function stopReviewPoller(taskId: string, repoName?: string): void {
   }
 }
 
-/** Check if all PRs for a task are merged. */
-function areAllPrsMerged(taskId: string): boolean {
+/** Check PR resolution state for a task. */
+function getPrResolution(taskId: string): { allResolved: boolean; allMerged: boolean; rejected: Array<{ repo_name: string; repo_id: number; pr_number: number }>; merged: Array<{ repo_name: string }> } {
   const db = getDb();
-  const row = db.query(
-    "SELECT COUNT(*) as total, SUM(CASE WHEN status = 'merged' THEN 1 ELSE 0 END) as merged FROM task_prs WHERE task_id = ?"
-  ).get(taskId) as { total: number; merged: number };
-  return row.total > 0 && row.total === row.merged;
+  const prs = db.query(
+    `SELECT tp.status, tp.repo_id, tp.pr_number, r.name as repo_name
+     FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
+     WHERE tp.task_id = ?`
+  ).all(taskId) as Array<{ status: string; repo_id: number; pr_number: number; repo_name: string }>;
+
+  const merged = prs.filter((p) => p.status === "merged");
+  const rejected = prs.filter((p) => p.status === "rejected");
+  const open = prs.filter((p) => p.status === "open");
+
+  return {
+    allResolved: open.length === 0,
+    allMerged: rejected.length === 0 && open.length === 0 && merged.length > 0,
+    rejected,
+    merged,
+  };
 }
 
-/** Aggregate feedback from all PRs for a task that have new rejections. */
-async function aggregateFeedbackForTask(taskId: string): Promise<string> {
+/** Collect feedback from rejected PRs only. */
+async function collectRejectedFeedback(taskId: string): Promise<string> {
   const db = getDb();
   const prs = db.query(
     `SELECT tp.repo_id, tp.pr_number, tp.last_review_id, tp.last_comment_id, r.name as repo_name
-     FROM task_prs tp
-     JOIN repos r ON r.id = tp.repo_id
-     WHERE tp.task_id = ? AND tp.status = 'open'`
+     FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
+     WHERE tp.task_id = ? AND tp.status = 'rejected'`
   ).all(taskId) as Array<{
     repo_id: number;
     pr_number: number;
@@ -167,53 +173,126 @@ async function aggregateFeedbackForTask(taskId: string): Promise<string> {
     repo_name: string;
   }>;
 
+  const { merged } = getPrResolution(taskId);
+
   const feedbackParts: string[] = [];
   const botUser = config.giteaBotUser;
 
-  for (const pr of prs) {
-    const reviews = await listPullRequestReviews(pr.repo_name, pr.pr_number);
-    const newReviews = reviews.filter((r) => r.id > pr.last_review_id);
+  // Context: which repos were accepted
+  if (merged.length > 0) {
+    feedbackParts.push(`## Accepted Repos (no changes needed)`);
+    feedbackParts.push(merged.map((m) => `- ${m.repo_name}: merged/accepted`).join("\n"));
+    feedbackParts.push("");
+  }
 
-    const changeRequests = newReviews.filter(
+  // Feedback from rejected PRs
+  for (const pr of prs) {
+    feedbackParts.push(`## Rejected: ${pr.repo_name} (PR #${pr.pr_number})`);
+    feedbackParts.push(`This repo's PR was rejected. Address the feedback below.`);
+
+    const reviews = await listPullRequestReviews(pr.repo_name, pr.pr_number);
+    const changeRequests = reviews.filter(
       (r) => r.state.toLowerCase() === "request_changes" || r.state.toLowerCase() === "rejected"
     );
 
-    if (changeRequests.length > 0) {
-      feedbackParts.push(`## Feedback for ${pr.repo_name} (PR #${pr.pr_number})`);
-
-      for (const review of changeRequests) {
-        if (review.body?.trim()) {
-          feedbackParts.push(review.body);
-        }
-        const inlineComments = await listReviewComments(pr.repo_name, pr.pr_number, review.id);
-        for (const c of inlineComments) {
-          if (c.body?.trim()) {
-            feedbackParts.push(`[${c.path}:${c.line}] ${c.body}`);
-          }
+    for (const review of changeRequests) {
+      if (review.body?.trim()) {
+        feedbackParts.push(review.body);
+      }
+      const inlineComments = await listReviewComments(pr.repo_name, pr.pr_number, review.id);
+      for (const c of inlineComments) {
+        if (c.body?.trim()) {
+          feedbackParts.push(`[${c.path}:${c.line}] ${c.body}`);
         }
       }
     }
 
-    // General PR comments
+    // General comments
     const comments = await listPullRequestComments(pr.repo_name, pr.pr_number);
-    const newComments = comments.filter(
-      (c) => c.id > pr.last_comment_id && c.user.login !== botUser
-    );
+    const newComments = comments.filter((c) => c.user.login !== botUser);
     for (const c of newComments) {
       if (c.body?.trim()) {
         feedbackParts.push(c.body);
       }
     }
-
-    // Update cursors
-    let maxReviewId = pr.last_review_id;
-    let maxCommentId = pr.last_comment_id;
-    if (newReviews.length > 0) maxReviewId = Math.max(...newReviews.map((r) => r.id));
-    if (newComments.length > 0) maxCommentId = Math.max(...newComments.map((c) => c.id));
-    saveCursors(taskId, pr.repo_id, maxReviewId, maxCommentId);
   }
 
   return feedbackParts.join("\n\n").trim() || "Changes requested (no specific feedback provided).";
+}
+
+/** Called when all PRs are resolved. Triggers revision if any were rejected. */
+async function handleAllPrsResolved(taskId: string): Promise<void> {
+  const { allMerged, rejected, merged } = getPrResolution(taskId);
+
+  if (allMerged) {
+    logger.info("All PRs merged, marking task committed", { taskId });
+    stopTaskPollers(taskId);
+    const db = getDb();
+    const now = new Date().toISOString();
+    db.run("UPDATE tasks SET status = 'committed', updated_at = ? WHERE id = ?", [now, taskId]);
+    return;
+  }
+
+  if (rejected.length === 0) return; // shouldn't happen but guard
+
+  const rejectedNames = rejected.map((r) => r.repo_name);
+  const mergedNames = merged.map((m) => m.repo_name);
+  logger.info("All PRs reviewed, some rejected", {
+    taskId,
+    rejected: rejectedNames,
+    merged: mergedNames,
+  });
+
+  // Notify chat
+  const { getMessagingManager } = await import("../messaging/manager");
+  const manager = getMessagingManager();
+  if (manager) {
+    const lines = [];
+    if (mergedNames.length > 0) lines.push(`Accepted: ${mergedNames.join(", ")}`);
+    lines.push(`Rejected: ${rejectedNames.join(", ")}`);
+    lines.push("Starting revision for rejected repos...");
+    manager.notifyAgentOutput(taskId, lines.join("\n")).catch(() => {});
+  }
+
+  // Stop all pollers
+  stopTaskPollers(taskId);
+
+  // Collect feedback from rejected PRs only
+  const feedback = await collectRejectedFeedback(taskId);
+
+  // Reset rejected PRs to open for re-push after revision
+  const db = getDb();
+  db.run("UPDATE task_prs SET status = 'open' WHERE task_id = ? AND status = 'rejected'", [taskId]);
+
+  try {
+    await reviseTask(taskId, feedback);
+
+    // Comment on rejected PRs
+    for (const rpr of rejected) {
+      await commentOnPullRequest(rpr.repo_name, rpr.pr_number, "Revision complete based on review feedback. Please re-review.").catch(() => {});
+    }
+
+    // Seed cursors and restart pollers for open PRs only (not merged ones)
+    const openPrs = db.query(
+      `SELECT tp.pr_number, r.name as repo_name
+       FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
+       WHERE tp.task_id = ? AND tp.status = 'open'`
+    ).all(taskId) as Array<{ pr_number: number; repo_name: string }>;
+
+    for (const opr of openPrs) {
+      await seedCursors(taskId, opr.repo_name, opr.pr_number);
+      const info = findPollerInfo(taskId, opr.repo_name);
+      if (info) {
+        startReviewPoller(taskId, opr.repo_name, info.repoPath, info.branchName, opr.pr_number);
+      }
+    }
+  } catch (err) {
+    logger.error("Revision after review failed", { taskId, error: String(err) });
+    for (const rpr of rejected) {
+      await commentOnPullRequest(rpr.repo_name, rpr.pr_number, `Revision failed: ${err}`).catch(() => {});
+    }
+    restartPollersForTask(taskId);
+  }
 }
 
 async function pollPR(state: PollerState): Promise<void> {
@@ -227,19 +306,20 @@ async function pollPR(state: PollerState): Promise<void> {
     logger.info("PR merged", { taskId, repoName, prNumber });
     stopReviewPoller(taskId, repoName);
 
-    // Update task_prs status
     const db = getDb();
-    db.run(
-      "UPDATE task_prs SET status = 'merged' WHERE task_id = ? AND repo_id = ?",
-      [taskId, repoId]
-    );
+    db.run("UPDATE task_prs SET status = 'merged' WHERE task_id = ? AND repo_id = ?", [taskId, repoId]);
 
-    // Check if ALL PRs for this task are merged
-    if (areAllPrsMerged(taskId)) {
-      logger.info("All PRs merged, marking task committed", { taskId });
-      stopTaskPollers(taskId);
-      const now = new Date().toISOString();
-      db.run("UPDATE tasks SET status = 'committed', updated_at = ? WHERE id = ?", [now, taskId]);
+    // Notify chat
+    const { getMessagingManager } = await import("../messaging/manager");
+    const manager = getMessagingManager();
+    if (manager) {
+      manager.notifyAgentOutput(taskId, `PR merged: ${repoName} (#${prNumber})`).catch(() => {});
+    }
+
+    // Check if all PRs are now resolved
+    const { allResolved } = getPrResolution(taskId);
+    if (allResolved) {
+      await handleAllPrsResolved(taskId);
     }
     return;
   }
@@ -270,43 +350,25 @@ async function pollPR(state: PollerState): Promise<void> {
   );
 
   if (changeRequests.length > 0) {
-    logger.info("Review changes requested, starting revision", { taskId, repoName, prNumber });
+    logger.info("PR rejected", { taskId, repoName, prNumber });
 
-    // Stop ALL pollers for this task (revision affects all repos)
-    stopTaskPollers(taskId);
+    // Mark this PR as rejected but DON'T revise yet -- wait for all PRs
+    const db = getDb();
+    db.run("UPDATE task_prs SET status = 'rejected' WHERE task_id = ? AND repo_id = ?", [taskId, repoId]);
+    saveCursors(taskId, repoId, lastReviewId, lastCommentId);
+    stopReviewPoller(taskId, repoName);
 
-    // Aggregate feedback from ALL PRs for this task
-    const feedback = await aggregateFeedbackForTask(taskId);
+    // Notify chat
+    const { getMessagingManager } = await import("../messaging/manager");
+    const manager = getMessagingManager();
+    if (manager) {
+      manager.notifyAgentOutput(taskId, `PR rejected: ${repoName} (#${prNumber}). Waiting for other PRs to be reviewed...`).catch(() => {});
+    }
 
-    try {
-      await reviseTask(taskId, feedback);
-
-      // Comment on all open PRs
-      const db = getDb();
-      const openPrs = db.query(
-        `SELECT tp.pr_number, r.name as repo_name
-         FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
-         WHERE tp.task_id = ? AND tp.status = 'open'`
-      ).all(taskId) as Array<{ pr_number: number; repo_name: string }>;
-
-      for (const opr of openPrs) {
-        await commentOnPullRequest(opr.repo_name, opr.pr_number, "Revision complete based on review feedback. Please re-review.").catch(() => {});
-      }
-
-      // Seed cursors and restart pollers for all open PRs
-      for (const opr of openPrs) {
-        await seedCursors(taskId, opr.repo_name, opr.pr_number);
-        const pollerState = findPollerInfo(taskId, opr.repo_name);
-        if (pollerState) {
-          startReviewPoller(taskId, opr.repo_name, pollerState.repoPath, pollerState.branchName, opr.pr_number);
-        }
-      }
-    } catch (err) {
-      logger.error("Revision after review failed", { taskId, error: String(err) });
-      // Comment on the triggering PR
-      await commentOnPullRequest(repoName, prNumber, `Revision failed: ${err}`).catch(() => {});
-      // Restart pollers so we keep watching
-      restartPollersForTask(taskId);
+    // Check if all PRs are now resolved
+    const { allResolved } = getPrResolution(taskId);
+    if (allResolved) {
+      await handleAllPrsResolved(taskId);
     }
     return;
   }
@@ -324,7 +386,6 @@ async function pollPR(state: PollerState): Promise<void> {
   saveCursors(taskId, repoId, lastReviewId, lastCommentId);
 }
 
-/** Find stored poller info for restarting. */
 function findPollerInfo(taskId: string, repoName: string): { repoPath: string; branchName: string } | null {
   const db = getDb();
   const row = db.query(
@@ -338,7 +399,6 @@ function findPollerInfo(taskId: string, repoName: string): { repoPath: string; b
   return { repoPath: row.repo_path, branchName: row.branch_name };
 }
 
-/** Restart pollers for all open PRs of a task. */
 function restartPollersForTask(taskId: string): void {
   const db = getDb();
   const prs = db.query(
@@ -364,7 +424,6 @@ export function restartPollersForReviewTasks(): void {
 
   const db = getDb();
 
-  // Use task_prs for multi-repo support
   const prs = db.query(
     `SELECT tp.task_id, tp.pr_number, r.name as repo_name, r.path as repo_path, t.branch_name
      FROM task_prs tp

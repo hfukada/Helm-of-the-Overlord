@@ -8,7 +8,7 @@ import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
 import { executeLint } from "./nodes/deterministic/lint";
 import { rm } from "node:fs/promises";
-import { createTaskClone, removeTaskClone } from "../workspace/git";
+import { createTaskClone, removeTaskClone, generateBranchName } from "../workspace/git";
 import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
