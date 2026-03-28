@@ -15,12 +15,13 @@ export function parseMultiRepoPlan(
   const headerPattern = /^##\s+\[([^\]]+)\]\s*$/gm;
   const matches: Array<{ name: string; index: number }> = [];
 
-  let match: RegExpExecArray | null;
-  while ((match = headerPattern.exec(planOutput)) !== null) {
+  let match: RegExpExecArray | null = headerPattern.exec(planOutput);
+  while (match !== null) {
     const name = match[1].trim();
     if (repoSet.has(name)) {
       matches.push({ name, index: match.index });
     }
+    match = headerPattern.exec(planOutput);
   }
 
   if (matches.length === 0) {

@@ -8,7 +8,7 @@ import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
 import { executeLint } from "./nodes/deterministic/lint";
 import { rm } from "node:fs/promises";
-import { createTaskClone, removeTaskClone, generateBranchName } from "../workspace/git";
+import { createTaskClone, generateBranchName } from "../workspace/git";
 import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
@@ -275,49 +275,6 @@ export async function cleanupTask(taskId: string): Promise<void> {
   }
 }
 
-function loadTaskAndRepo(taskId: string): { task: Task; repo: Repo } | null {
-  const db = getDb();
-
-  const taskRow = db.query("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | null;
-  if (!taskRow) return null;
-
-  const repoRow = taskRow.repo_id
-    ? (db.query("SELECT * FROM repos WHERE id = ?").get(taskRow.repo_id as number) as Record<string, unknown> | null)
-    : null;
-  if (!repoRow) return null;
-
-  const task: Task = {
-    id: taskRow.id as string,
-    title: taskRow.title as string,
-    description: taskRow.description as string,
-    repo_id: taskRow.repo_id as number,
-    status: taskRow.status as TaskStatus,
-    blueprint_state: null,
-    branch_name: taskRow.branch_name as string | null,
-    source: taskRow.source as "cli" | "web",
-    use_full_copy: !!(taskRow.use_full_copy as number),
-    created_at: taskRow.created_at as string,
-    updated_at: taskRow.updated_at as string,
-  };
-
-  const repo: Repo = {
-    id: repoRow.id as number,
-    name: repoRow.name as string,
-    path: repoRow.path as string,
-    description: repoRow.description as string | null,
-    build_cmd: repoRow.build_cmd as string | null,
-    test_cmd: repoRow.test_cmd as string | null,
-    run_cmd: repoRow.run_cmd as string | null,
-    lint_cmd: repoRow.lint_cmd as string | null,
-    language: repoRow.language as string | null,
-    framework: repoRow.framework as string | null,
-    docker_compose_path: repoRow.docker_compose_path as string | null,
-    metadata: null,
-  };
-
-  return { task, repo };
-}
-
 function parseRepoRow(row: Record<string, unknown>): Repo {
   return {
     id: row.id as number,
@@ -509,7 +466,7 @@ export async function runTask(taskId: string): Promise<void> {
   // === PLAN -> SCRUTINIZE -> PLAN AGAIN -> SCRUTINIZE -> FINALIZE ===
   const onThinking = makeThinkingForwarder(task.id, manager);
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
-  const { parseMultiRepoPlan } = await import("./plan-parser");
+
   const { buildPlanPrompt } = await import("./context-builder");
 
   // --- Plan (round 1) ---
@@ -892,7 +849,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   const onThinking = makeThinkingForwarder(task.id, manager);
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
-  const { parseMultiRepoPlan } = await import("./plan-parser");
+
 
   // Advance from review -> plan via "revise"
   state = advanceState(state, "revise");

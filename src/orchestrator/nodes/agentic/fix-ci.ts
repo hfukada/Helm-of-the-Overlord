@@ -1,56 +1,21 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
 import { runClaude } from "../../subprocess";
-import { buildSystemPrompt, getChatContext } from "../../context-builder";
+import { buildSystemPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { renderTemplate } from "../../../prompts/loader";
+import { logger } from "../../../shared/logger";
 
-export async function executeFixCi(
-  task: Task,
-  repo: Repo,
-  workDir: string,
-  ciOutput: string,
-  mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void
-): Promise<{ output: string; error: string | null }> {
-  const agentRunId = ulid();
-  const model = config.defaultModel;
-
-  const chatContext = await getChatContext(task.id);
-
-  const prompt = await renderTemplate("fix-ci", {
-    repoName: repo.name,
-    testCmd: repo.test_cmd ?? undefined,
-    buildCmd: repo.build_cmd ?? undefined,
-    ciOutput,
-    chatContext: chatContext || undefined,
-  });
-
+function recordRun(
+  agentRunId: string,
+  _taskId: string,
+  _nodeName: string,
+  _prompt: string,
+  model: string,
+  result: { output: string; error: string | null; usage: { input_tokens: number; output_tokens: number; cost_usd: number } }
+): void {
   const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'fix_ci', 'agentic', 'running', ?, ?)`,
-    [agentRunId, task.id, prompt, model]
-  );
-
-  const mcpReadTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
-    : ["Read", "Glob", "Grep"];
-
-  const result = await runClaude({
-    prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
-    workDir,
-    model,
-    maxTurns: 15,
-    allowedTools: [...mcpReadTools, "Write", "Edit", "Bash"],
-    mcpConfigPath,
-    agentRunId,
-    taskId: task.id,
-    onEvent,
-  });
-
   const now = new Date().toISOString();
   db.run(
     `UPDATE agent_runs SET
@@ -79,6 +44,86 @@ export async function executeFixCi(
        cost_usd = cost_usd + excluded.cost_usd`,
     [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
   );
+}
 
-  return { output: result.output, error: result.error };
+export async function executeFixCi(
+  task: Task,
+  repo: Repo,
+  workDir: string,
+  ciOutput: string,
+  mcpConfigPath?: string,
+  onEvent?: (type: string, content: string) => void
+): Promise<{ output: string; error: string | null }> {
+  const model = config.defaultModel;
+  const db = getDb();
+
+  const readTools = mcpConfigPath
+    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    : ["Read", "Glob", "Grep"];
+
+  // === Step 1: Plan the fix ===
+  const planRunId = ulid();
+  const planPrompt = await renderTemplate("fix-ci-plan", { ciOutput });
+
+  db.run(
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
+     VALUES (?, ?, 'fix_ci_plan', 'agentic', 'running', ?, ?)`,
+    [planRunId, task.id, planPrompt, model]
+  );
+
+  logger.info("Planning CI fix", { taskId: task.id });
+
+  const planResult = await runClaude({
+    prompt: planPrompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
+    workDir,
+    model,
+    maxTurns: 5,
+    allowedTools: readTools,
+    mcpConfigPath,
+    addDirs: [workDir],
+    agentRunId: planRunId,
+    taskId: task.id,
+    onEvent,
+  });
+
+  recordRun(planRunId, task.id, "fix_ci_plan", planPrompt, model, planResult);
+
+  if (planResult.error || planResult.output.length < 50) {
+    logger.warn("CI fix planning failed", { taskId: task.id, error: planResult.error });
+    return { output: planResult.output, error: planResult.error ?? "Fix plan too short" };
+  }
+
+  // === Step 2: Implement the fix ===
+  const implRunId = ulid();
+  const implPrompt = await renderTemplate("fix-ci", {
+    fixPlan: planResult.output,
+    ciOutput,
+  });
+
+  db.run(
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
+     VALUES (?, ?, 'fix_ci', 'agentic', 'running', ?, ?)`,
+    [implRunId, task.id, implPrompt, model]
+  );
+
+  logger.info("Implementing CI fix", { taskId: task.id });
+
+  const implResult = await runClaude({
+    prompt: implPrompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
+    workDir,
+    model,
+    maxTurns: 10,
+    allowedTools: [...readTools, "Write", "Edit", "Bash"],
+    mcpConfigPath,
+    addDirs: [workDir],
+    agentRunId: implRunId,
+    taskId: task.id,
+    onEvent,
+  });
+
+  recordRun(implRunId, task.id, "fix_ci", implPrompt, model, implResult);
+
+  return { output: implResult.output, error: implResult.error };
 }

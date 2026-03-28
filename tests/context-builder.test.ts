@@ -36,6 +36,7 @@ function makeTask(overrides?: Partial<Task>): Task {
     blueprint_state: null,
     branch_name: null,
     source: "cli",
+    use_full_copy: false,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     ...overrides,
@@ -65,64 +66,59 @@ function makeRepo(overrides?: Partial<Repo>): Repo {
 // ---------------------------------------------------------------------------
 
 describe("buildPlanPrompt", () => {
-  test("includes task title and description", async () => {
+  test("includes task description", async () => {
     const prompt = await buildPlanPrompt(makeTask(), makeRepo());
-    expect(prompt).toContain("Add user authentication");
     expect(prompt).toContain("Implement JWT-based auth");
   });
 
-  test("includes repo metadata", async () => {
+  test("includes repo name in repo list", async () => {
     const prompt = await buildPlanPrompt(makeTask(), makeRepo());
-    expect(prompt).toContain("Repository: my-app");
-    expect(prompt).toContain("Language: TypeScript");
-    expect(prompt).toContain("Framework: Hono");
-    expect(prompt).toContain("Build command: bun run build");
-    expect(prompt).toContain("Test command: bun test");
-    expect(prompt).toContain("Lint command: bun run lint");
+    expect(prompt).toContain("my-app");
+  });
+
+  test("includes repo metadata in repo list", async () => {
+    const prompt = await buildPlanPrompt(makeTask(), makeRepo());
+    expect(prompt).toContain("TypeScript");
+    expect(prompt).toContain("Hono");
+    expect(prompt).toContain("lint: `bun run lint`");
+    expect(prompt).toContain("test: `bun test`");
   });
 
   test("omits missing repo fields", async () => {
     const prompt = await buildPlanPrompt(
       makeTask(),
-      makeRepo({ language: null, framework: null, build_cmd: null })
+      makeRepo({ language: null, framework: null, lint_cmd: null })
     );
-    expect(prompt).not.toContain("Language:");
-    expect(prompt).not.toContain("Framework:");
-    expect(prompt).not.toContain("Build command:");
+    expect(prompt).not.toContain("TypeScript");
+    expect(prompt).not.toContain("Hono");
+    expect(prompt).not.toContain("lint:");
   });
 
-  test("requires structured output format with Summary, Files, Execution Plan", async () => {
+  test("includes output format with Summary and Execution Plan", async () => {
     const prompt = await buildPlanPrompt(makeTask(), makeRepo());
     expect(prompt).toContain("### Summary");
-    expect(prompt).toContain("### Files to Modify");
     expect(prompt).toContain("### Execution Plan");
-  });
-
-  test("requires numbered checklist with actionable steps", async () => {
-    const prompt = await buildPlanPrompt(makeTask(), makeRepo());
-    expect(prompt).toContain("numbered checklist");
-    expect(prompt).toContain("actionable unit of work");
-  });
-
-  test("requires lint and test as final checklist steps", async () => {
-    const prompt = await buildPlanPrompt(makeTask(), makeRepo());
-    expect(prompt).toContain("- [ ] Run lint and verify no errors");
-    expect(prompt).toContain("- [ ] Run tests and verify they pass");
-  });
-
-  test("lint/test steps come after execution plan section", async () => {
-    const prompt = await buildPlanPrompt(makeTask(), makeRepo());
-    const execPlanIdx = prompt.indexOf("### Execution Plan");
-    const lintIdx = prompt.indexOf("- [ ] Run lint");
-    const testIdx = prompt.indexOf("- [ ] Run tests");
-    expect(execPlanIdx).toBeGreaterThan(-1);
-    expect(lintIdx).toBeGreaterThan(execPlanIdx);
-    expect(testIdx).toBeGreaterThan(lintIdx);
   });
 
   test("instructs not to implement", async () => {
     const prompt = await buildPlanPrompt(makeTask(), makeRepo());
-    expect(prompt).toContain("Do NOT implement the changes");
+    expect(prompt).toContain("Do NOT implement");
+  });
+
+  test("accepts array of repos", async () => {
+    const repos = [
+      makeRepo({ name: "api", language: "TypeScript" }),
+      makeRepo({ name: "frontend", language: "JavaScript", framework: "React" }),
+    ];
+    const prompt = await buildPlanPrompt(makeTask(), repos);
+    expect(prompt).toContain("api");
+    expect(prompt).toContain("frontend");
+    expect(prompt).toContain("React");
+  });
+
+  test("includes multi-repo prefix instruction", async () => {
+    const prompt = await buildPlanPrompt(makeTask(), makeRepo());
+    expect(prompt).toContain("[repo-name]");
   });
 });
 
@@ -135,49 +131,48 @@ describe("buildImplementPrompt", () => {
     "### Summary",
     "Add JWT auth to the API.",
     "",
-    "### Files to Modify",
-    "- src/auth.ts (new): JWT helper functions",
-    "- src/routes/login.ts (new): Login endpoint",
-    "",
     "### Execution Plan",
     "1. [ ] Create src/auth.ts with signToken and verifyToken functions",
     "2. [ ] Create src/routes/login.ts with POST /login handler",
-    "3. [ ] Run lint and verify no errors",
-    "4. [ ] Run tests and verify they pass",
   ].join("\n");
 
   test("includes the plan text", async () => {
     const prompt = await buildImplementPrompt(makeTask(), makeRepo(), samplePlan);
-    expect(prompt).toContain("## Implementation Plan");
+    expect(prompt).toContain("## Plan");
     expect(prompt).toContain(samplePlan);
   });
 
-  test("instructs to follow execution plan step by step", async () => {
+  test("instructs to follow plan step by step", async () => {
     const prompt = await buildImplementPrompt(makeTask(), makeRepo(), samplePlan);
-    expect(prompt).toContain("Follow the Execution Plan checklist above step by step");
+    expect(prompt).toContain("Follow the Execution Plan step by step");
   });
 
   test("instructs not to run lint/test commands", async () => {
     const prompt = await buildImplementPrompt(makeTask(), makeRepo(), samplePlan);
-    expect(prompt).toContain("Do NOT run lint or test commands yourself");
-    expect(prompt).toContain("orchestrator handles that automatically");
+    expect(prompt).toContain("Do NOT run lint, test, or build");
   });
 
   test("instructs not to commit", async () => {
     const prompt = await buildImplementPrompt(makeTask(), makeRepo(), samplePlan);
-    expect(prompt).toContain("Do NOT commit changes");
+    expect(prompt).toContain("Do NOT commit");
   });
 
-  test("includes task context", async () => {
+  test("includes task description", async () => {
     const prompt = await buildImplementPrompt(makeTask(), makeRepo(), samplePlan);
-    expect(prompt).toContain("Add user authentication");
-    expect(prompt).toContain("Repository: my-app");
+    expect(prompt).toContain("Implement JWT-based auth");
   });
 
-  test("includes repo language and framework", async () => {
+  test("includes repo in repo list", async () => {
     const prompt = await buildImplementPrompt(makeTask(), makeRepo(), samplePlan);
-    expect(prompt).toContain("Language: TypeScript");
-    expect(prompt).toContain("Framework: Hono");
+    expect(prompt).toContain("my-app");
+    expect(prompt).toContain("TypeScript");
+  });
+
+  test("accepts array of repos", async () => {
+    const repos = [makeRepo({ name: "api" }), makeRepo({ name: "web" })];
+    const prompt = await buildImplementPrompt(makeTask(), repos, samplePlan);
+    expect(prompt).toContain("api");
+    expect(prompt).toContain("web");
   });
 });
 

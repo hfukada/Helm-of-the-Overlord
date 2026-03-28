@@ -1,7 +1,14 @@
-Fix the CI failures below. Minimal, targeted fixes only. Do not add new tests or features.
+Apply the fix plan below to resolve CI failures. Follow each step exactly.
 
+## Fix Plan
+{{fixPlan}}
+
+## Original Errors
 ```
 {{ciOutput}}
 ```
 
-Do NOT run tests or builds yourself.
+## Rules
+- Follow the fix plan step by step.
+- Minimal changes only. Do not refactor or add features.
+- Do NOT run tests or builds yourself.
