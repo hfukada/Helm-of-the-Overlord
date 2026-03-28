@@ -222,12 +222,20 @@ async function collectRejectedFeedback(taskId: string): Promise<string> {
 
 /** Called when all PRs are resolved. Triggers revision if any were rejected. */
 async function handleAllPrsResolved(taskId: string): Promise<void> {
+  // Guard: task may have been deleted while pollers were running
+  const db = getDb();
+  const taskExists = db.query("SELECT 1 FROM tasks WHERE id = ?").get(taskId);
+  if (!taskExists) {
+    logger.warn("Task deleted, stopping pollers", { taskId });
+    stopTaskPollers(taskId);
+    return;
+  }
+
   const { allMerged, rejected, merged } = getPrResolution(taskId);
 
   if (allMerged) {
     logger.info("All PRs merged, marking task committed", { taskId });
     stopTaskPollers(taskId);
-    const db = getDb();
     const now = new Date().toISOString();
     db.run("UPDATE tasks SET status = 'committed', updated_at = ? WHERE id = ?", [now, taskId]);
     return;
@@ -261,7 +269,6 @@ async function handleAllPrsResolved(taskId: string): Promise<void> {
   const feedback = await collectRejectedFeedback(taskId);
 
   // Reset rejected PRs to open for re-push after revision
-  const db = getDb();
   db.run("UPDATE task_prs SET status = 'open' WHERE task_id = ? AND status = 'rejected'", [taskId]);
 
   try {
@@ -297,6 +304,15 @@ async function handleAllPrsResolved(taskId: string): Promise<void> {
 
 async function pollPR(state: PollerState): Promise<void> {
   const { taskId, repoName, repoId, prNumber } = state;
+
+  // Guard: task may have been deleted
+  const db = getDb();
+  if (!db.query("SELECT 1 FROM tasks WHERE id = ?").get(taskId)) {
+    logger.warn("Task deleted, stopping poller", { taskId, repoName });
+    stopReviewPoller(taskId, repoName);
+    return;
+  }
+
   let { lastReviewId, lastCommentId } = loadCursors(taskId, repoId);
 
   const pr = await getPullRequest(repoName, prNumber);

@@ -804,6 +804,15 @@ export async function runTask(taskId: string): Promise<void> {
 }
 
 export async function reviseTask(taskId: string, feedback: string): Promise<void> {
+  // Verify task still exists (may have been deleted while revision was queued)
+  {
+    const db = getDb();
+    if (!db.query("SELECT 1 FROM tasks WHERE id = ?").get(taskId)) {
+      logger.warn("Task deleted before revision could start, aborting", { taskId });
+      return;
+    }
+  }
+
   const loaded = loadTaskAndRepos(taskId);
   if (!loaded) {
     logger.error("Task or repo not found for revision", { taskId });
