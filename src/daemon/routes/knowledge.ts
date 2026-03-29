@@ -87,13 +87,15 @@ knowledge.post("/repos/:name/reindex", async (c) => {
     language: repoRow.language as string | null,
     framework: repoRow.framework as string | null,
     docker_compose_path: repoRow.docker_compose_path as string | null,
+    docker_image: repoRow.docker_image as string | null,
+    ci_on_host: !!(repoRow.ci_on_host as number),
     metadata: null,
   };
 
   // Re-parse repo metadata (commands, language, framework)
   const parsed = await parseRepo(repo.path);
   const updates: Record<string, string | null> = {};
-  for (const field of ["build_cmd", "test_cmd", "run_cmd", "lint_cmd", "language", "framework", "docker_compose_path"] as const) {
+  for (const field of ["build_cmd", "test_cmd", "run_cmd", "lint_cmd", "language", "framework", "docker_compose_path", "docker_image"] as const) {
     if (parsed[field] && parsed[field] !== repoRow[field]) {
       updates[field] = parsed[field];
     }

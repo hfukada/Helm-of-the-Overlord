@@ -54,21 +54,25 @@ async function listRepos(): Promise<void> {
 async function addRepo(args: string[]): Promise<void> {
   const target = args[0];
   if (!target) {
-    console.log("Usage: hoto repos add <git-url-or-path> [--name name]");
+    console.log("Usage: hoto repos add <git-url-or-path> [--name name] [--allow-ci-on-host]");
     process.exit(1);
   }
 
   let name: string | undefined;
+  let ciOnHost = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--name" || args[i] === "-n") {
       name = args[++i];
+    } else if (args[i] === "--allow-ci-on-host") {
+      ciOnHost = true;
     }
   }
 
   // Detect if target is a URL or local path
   const isUrl = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("git@") || target.includes("://");
-  const body: Record<string, string> = isUrl ? { url: target } : { path: target };
+  const body: Record<string, string | boolean> = isUrl ? { url: target } : { path: target };
   if (name) body.name = name;
+  if (ciOnHost) body.ci_on_host = true;
 
   if (isUrl) {
     console.log(`Cloning ${target}...`);

@@ -528,16 +528,20 @@ export class MessagingManager {
 
     const url = cmd.args[1];
     let name: string | undefined;
+    let ciOnHost = false;
     for (let i = 2; i < cmd.args.length; i++) {
       if (cmd.args[i] === "--name" && cmd.args[i + 1]) {
         name = cmd.args[++i];
+      } else if (cmd.args[i] === "--allow-ci-on-host") {
+        ciOnHost = true;
       }
     }
 
     await this.provider.sendMessage(cmd.channelId, `Cloning ${url}...`);
 
-    const body: Record<string, string> = { url };
+    const body: Record<string, string | boolean> = { url };
     if (name) body.name = name;
+    if (ciOnHost) body.ci_on_host = true;
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos`, {
       method: "POST",
@@ -681,6 +685,8 @@ export class MessagingManager {
       language: repoRow.language as string | null,
       framework: repoRow.framework as string | null,
       docker_compose_path: repoRow.docker_compose_path as string | null,
+      docker_image: repoRow.docker_image as string | null,
+      ci_on_host: !!(repoRow.ci_on_host as number),
       metadata: null,
     };
 

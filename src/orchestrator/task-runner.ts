@@ -22,7 +22,7 @@ import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
 import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
 
-const MAX_LINT_ROUNDS = 1;
+const MAX_LINT_ROUNDS = 2;
 const MAX_CI_ROUNDS = 2;
 const INPUT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INPUT_POLL_INTERVAL_MS = 2000;
@@ -288,6 +288,8 @@ function parseRepoRow(row: Record<string, unknown>): Repo {
     language: row.language as string | null,
     framework: row.framework as string | null,
     docker_compose_path: row.docker_compose_path as string | null,
+    docker_image: row.docker_image as string | null,
+    ci_on_host: !!(row.ci_on_host as number),
     metadata: null,
   };
 }
@@ -612,70 +614,98 @@ export async function runTask(taskId: string): Promise<void> {
 
     // --- CI (test/build with fix loop) ---
     if (repo.test_cmd || repo.build_cmd) {
-      updateTaskStatus(task.id, "ci_running", state);
-
-      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-        logger.info("Running CI", { taskId: task.id, repo: repo.name, round });
-
-        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
-          saveNodeOutput(task.id, "ci", accumulated, false);
-        });
-        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-        if (ciResult.success) break;
-
-        if (containerName) discoverSecrets(repo.id, ciResult.output);
-        if (round >= MAX_CI_ROUNDS - 1) break;
-        if (isTaskCancelled(task.id)) return;
-
-        state = advanceState(state, "fail");
-        updateTaskStatus(task.id, "ci_fixing", state);
-
-        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
-        if (fixResult.error) {
-          if (isTaskCancelled(task.id)) return;
-          break;
-        }
-
-        state = advanceState(state, "done");
-        state.ci_rounds++;
-        updateTaskStatus(task.id, "ci_running", state);
+      if (!repo.test_cmd && repo.build_cmd) {
+        const notice = `[NOTICE] No test command for ${repo.name} -- using build command as CI check: ${repo.build_cmd}`;
+        if (manager) manager.notifyAgentOutput(task.id, notice).catch(() => {});
       }
+      if (!containerName && !repo.ci_on_host) {
+        const msg = `[SKIPPED] CI for ${repo.name}: no Docker container available and ci_on_host is not enabled. Register with --allow-ci-on-host to run on host.`;
+        logger.warn(msg, { taskId: task.id, repo: repo.name });
+        saveNodeOutput(task.id, "ci", msg, false);
+        if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
+      } else {
+        updateTaskStatus(task.id, "ci_running", state);
+
+        for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+          logger.info("Running CI", { taskId: task.id, repo: repo.name, round });
+
+          const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+            saveNodeOutput(task.id, "ci", accumulated, false);
+          });
+          saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+          if (ciResult.success) break;
+
+          if (containerName) discoverSecrets(repo.id, ciResult.output);
+          if (round >= MAX_CI_ROUNDS - 1) break;
+          if (isTaskCancelled(task.id)) return;
+
+          state = advanceState(state, "fail");
+          updateTaskStatus(task.id, "ci_fixing", state);
+
+          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+          if (fixResult.error) {
+            if (isTaskCancelled(task.id)) return;
+            break;
+          }
+
+          state = advanceState(state, "done");
+          state.ci_rounds++;
+          updateTaskStatus(task.id, "ci_running", state);
+        }
+      }
+    } else {
+      const msg = `[SKIPPED] No test or build command detected for ${repo.name}. CI cannot run.`;
+      logger.warn(msg, { taskId: task.id, repo: repo.name });
+      saveNodeOutput(task.id, "ci", msg, false);
+      if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
     }
 
     if (isTaskCancelled(task.id)) return;
 
     // --- Lint (with fix loop) ---
     if (repo.lint_cmd) {
-      updateTaskStatus(task.id, "linting", state);
-
-      for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-        logger.info("Running lint", { taskId: task.id, repo: repo.name, round });
-
-        const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
-          saveNodeOutput(task.id, "lint", accumulated, false);
-        });
-        saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
-
-        if (lintResult.success) break;
-
-        if (containerName) discoverSecrets(repo.id, lintResult.output);
-        if (round >= MAX_LINT_ROUNDS) break;
-        if (isTaskCancelled(task.id)) return;
-
-        state = advanceState(state, "errors");
-        updateTaskStatus(task.id, "fix_linting", state);
-
-        const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
-        if (fixResult.error) {
-          if (isTaskCancelled(task.id)) return;
-          break;
-        }
-
-        state = advanceState(state, "done");
-        state.lint_rounds++;
+      if (!containerName && !repo.ci_on_host) {
+        const msg = `[SKIPPED] Lint for ${repo.name}: no Docker container available and ci_on_host is not enabled.`;
+        logger.warn(msg, { taskId: task.id, repo: repo.name });
+        saveNodeOutput(task.id, "lint", msg, false);
+        if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
+      } else {
         updateTaskStatus(task.id, "linting", state);
+
+        for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
+          logger.info("Running lint", { taskId: task.id, repo: repo.name, round });
+
+          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+            saveNodeOutput(task.id, "lint", accumulated, false);
+          });
+          saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
+
+          if (lintResult.success) break;
+
+          if (containerName) discoverSecrets(repo.id, lintResult.output);
+          if (round >= MAX_LINT_ROUNDS) break;
+          if (isTaskCancelled(task.id)) return;
+
+          state = advanceState(state, "errors");
+          updateTaskStatus(task.id, "fix_linting", state);
+
+          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
+          if (fixResult.error) {
+            if (isTaskCancelled(task.id)) return;
+            break;
+          }
+
+          state = advanceState(state, "done");
+          state.lint_rounds++;
+          updateTaskStatus(task.id, "linting", state);
+        }
       }
+    } else {
+      const msg = `[SKIPPED] No lint command detected for ${repo.name}. Lint cannot run.`;
+      logger.warn(msg, { taskId: task.id, repo: repo.name });
+      saveNodeOutput(task.id, "lint", msg, false);
+      if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
     }
 
     // Tear down Docker container
@@ -969,28 +999,39 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
     // --- CI ---
     if (repo.test_cmd || repo.build_cmd) {
-      updateTaskStatus(task.id, "ci_running", state);
-
-      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-        const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
-          saveNodeOutput(task.id, "ci", accumulated, false);
-        });
-        saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-        if (ciResult.success) break;
-        if (containerName) discoverSecrets(repo.id, ciResult.output);
-        if (round >= MAX_CI_ROUNDS - 1) break;
-        if (isTaskCancelled(task.id)) return;
-
-        state = advanceState(state, "fail");
-        updateTaskStatus(task.id, "ci_fixing", state);
-
-        const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
-        if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
-
-        state = advanceState(state, "done");
-        state.ci_rounds++;
+      if (!repo.test_cmd && repo.build_cmd) {
+        const notice = `[NOTICE] No test command for ${repo.name} -- using build command as CI check: ${repo.build_cmd}`;
+        if (manager) manager.notifyAgentOutput(task.id, notice).catch(() => {});
+      }
+      if (!containerName && !repo.ci_on_host) {
+        const msg = `[SKIPPED] CI for ${repo.name}: no Docker container available and ci_on_host is not enabled.`;
+        logger.warn(msg, { taskId: task.id, repo: repo.name });
+        saveNodeOutput(task.id, "ci", msg, false);
+        if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
+      } else {
         updateTaskStatus(task.id, "ci_running", state);
+
+        for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+          const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+            saveNodeOutput(task.id, "ci", accumulated, false);
+          });
+          saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
+
+          if (ciResult.success) break;
+          if (containerName) discoverSecrets(repo.id, ciResult.output);
+          if (round >= MAX_CI_ROUNDS - 1) break;
+          if (isTaskCancelled(task.id)) return;
+
+          state = advanceState(state, "fail");
+          updateTaskStatus(task.id, "ci_fixing", state);
+
+          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+          if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
+
+          state = advanceState(state, "done");
+          state.ci_rounds++;
+          updateTaskStatus(task.id, "ci_running", state);
+        }
       }
     }
 
@@ -998,28 +1039,35 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
     // --- Lint ---
     if (repo.lint_cmd) {
-      updateTaskStatus(task.id, "linting", state);
-
-      for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-        const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
-          saveNodeOutput(task.id, "lint", accumulated, false);
-        });
-        saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
-
-        if (lintResult.success) break;
-        if (containerName) discoverSecrets(repo.id, lintResult.output);
-        if (round >= MAX_LINT_ROUNDS) break;
-        if (isTaskCancelled(task.id)) return;
-
-        state = advanceState(state, "errors");
-        updateTaskStatus(task.id, "fix_linting", state);
-
-        const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
-        if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
-
-        state = advanceState(state, "done");
-        state.lint_rounds++;
+      if (!containerName && !repo.ci_on_host) {
+        const msg = `[SKIPPED] Lint for ${repo.name}: no Docker container available and ci_on_host is not enabled.`;
+        logger.warn(msg, { taskId: task.id, repo: repo.name });
+        saveNodeOutput(task.id, "lint", msg, false);
+        if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
+      } else {
         updateTaskStatus(task.id, "linting", state);
+
+        for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
+          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+            saveNodeOutput(task.id, "lint", accumulated, false);
+          });
+          saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
+
+          if (lintResult.success) break;
+          if (containerName) discoverSecrets(repo.id, lintResult.output);
+          if (round >= MAX_LINT_ROUNDS) break;
+          if (isTaskCancelled(task.id)) return;
+
+          state = advanceState(state, "errors");
+          updateTaskStatus(task.id, "fix_linting", state);
+
+          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
+          if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
+
+          state = advanceState(state, "done");
+          state.lint_rounds++;
+          updateTaskStatus(task.id, "linting", state);
+        }
       }
     }
 
@@ -1123,6 +1171,12 @@ async function runCi(
     allOutput += text;
     onChunk?.(allOutput);
   };
+
+  if (!repo.test_cmd && repo.build_cmd) {
+    const notice = `[NOTICE] No test command detected for ${repo.name}. Using build command as CI check: ${repo.build_cmd}\n`;
+    logger.warn(notice, { repo: repo.name, build_cmd: repo.build_cmd });
+    emit(notice);
+  }
 
   const decoder = new TextDecoder();
 

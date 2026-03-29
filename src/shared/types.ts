@@ -46,6 +46,8 @@ export interface Repo {
   language: string | null;
   framework: string | null;
   docker_compose_path: string | null;
+  docker_image: string | null;
+  ci_on_host: boolean;
   metadata: Record<string, unknown> | null;
   index_commit_hash?: string | null;
 }

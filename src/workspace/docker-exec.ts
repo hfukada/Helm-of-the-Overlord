@@ -124,44 +124,77 @@ export async function setupTaskContainer(
 
   // Option 2: Dockerfile in workdir
   const dockerfile = join(workDir, "Dockerfile");
-  if (!existsSync(dockerfile)) {
-    return null;
+  if (existsSync(dockerfile)) {
+    const imageName = `hoto-img-${taskId.slice(-8)}`;
+    logger.info("Building Docker image for task", { taskId, workDir });
+
+    const buildResult = await $`docker build -t ${imageName} ${workDir}`.quiet().nothrow();
+    if (buildResult.exitCode !== 0) {
+      const buildOutput = buildResult.stderr.toString();
+      logger.warn("Docker build failed", { taskId, output: buildOutput });
+      discoverSecrets(repo.id, buildOutput);
+      return null;
+    }
+
+    const secretFlags = buildSecretFlags(secrets);
+
+    logger.info("Starting Docker container for task", { taskId, name });
+    const args = [
+      "docker", "run", "-d",
+      "--name", name,
+      "-v", `${workDir}:/workspace`,
+      "-w", "/workspace",
+      ...secretFlags,
+      imageName,
+      "sleep", "infinity",
+    ];
+    const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+    if (runResult.exitCode !== 0) {
+      logger.warn("Docker run failed", {
+        taskId,
+        output: new TextDecoder().decode(runResult.stderr),
+      });
+      return null;
+    }
+
+    logger.info("Docker container started", { taskId, name });
+    return name;
   }
 
-  const imageName = `hoto-img-${taskId.slice(-8)}`;
-  logger.info("Building Docker image for task", { taskId, workDir });
+  // Option 3: Language-based Docker image fallback
+  if (repo.docker_image) {
+    const secretFlags = buildSecretFlags(secrets);
 
-  const buildResult = await $`docker build -t ${imageName} ${workDir}`.quiet().nothrow();
-  if (buildResult.exitCode !== 0) {
-    const buildOutput = buildResult.stderr.toString();
-    logger.warn("Docker build failed", { taskId, output: buildOutput });
-    discoverSecrets(repo.id, buildOutput);
-    return null;
-  }
-
-  const secretFlags = buildSecretFlags(secrets);
-
-  logger.info("Starting Docker container for task", { taskId, name });
-  const args = [
-    "docker", "run", "-d",
-    "--name", name,
-    "-v", `${workDir}:/workspace`,
-    "-w", "/workspace",
-    ...secretFlags,
-    imageName,
-    "sleep", "infinity",
-  ];
-  const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
-  if (runResult.exitCode !== 0) {
-    logger.warn("Docker run failed", {
+    logger.info("Starting language-based Docker container", {
       taskId,
-      output: new TextDecoder().decode(runResult.stderr),
+      image: repo.docker_image,
+      name,
     });
-    return null;
+
+    const args = [
+      "docker", "run", "-d",
+      "--name", name,
+      "-v", `${workDir}:/workspace`,
+      "-w", "/workspace",
+      ...secretFlags,
+      repo.docker_image,
+      "sleep", "infinity",
+    ];
+    const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+    if (runResult.exitCode !== 0) {
+      logger.warn("Docker run (language image) failed", {
+        taskId,
+        image: repo.docker_image,
+        output: new TextDecoder().decode(runResult.stderr),
+      });
+      return null;
+    }
+
+    logger.info("Language-based Docker container started", { taskId, name, image: repo.docker_image });
+    return name;
   }
 
-  logger.info("Docker container started", { taskId, name });
-  return name;
+  return null;
 }
 
 export async function teardownTaskContainer(taskId: string): Promise<void> {

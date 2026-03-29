@@ -12,7 +12,18 @@ export interface RepoMetadata {
   lint_cmd: string | null;
   description: string | null;
   docker_compose_path: string | null;
+  docker_image: string | null;
 }
+
+const LANGUAGE_DOCKER_IMAGES: Record<string, string> = {
+  "typescript/bun": "oven/bun:latest",
+  "typescript": "node:22-slim",
+  "javascript": "node:22-slim",
+  "python": "python:3.12-slim",
+  "go": "golang:1.23-slim",
+  "rust": "rust:1.83-slim",
+  "java": "eclipse-temurin:21-jdk-slim",
+};
 
 export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
   const meta: RepoMetadata = {
@@ -24,6 +35,7 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
     lint_cmd: null,
     description: null,
     docker_compose_path: null,
+    docker_image: null,
   };
 
   // Check for package.json (Node/Bun/Deno)
@@ -106,13 +118,30 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
     } catch {}
   }
 
-  // Check for docker-compose
-  for (const name of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
+  // Check for docker-compose (prefer test-specific compose files)
+  for (const name of [
+    "docker-compose.test.yml", "docker-compose.test.yaml",
+    "docker-compose.yml", "docker-compose.yaml",
+    "compose.yml", "compose.yaml",
+  ]) {
     const p = join(repoPath, name);
     if (existsSync(p)) {
       meta.docker_compose_path = p;
       break;
     }
+  }
+
+  // Check for pom.xml (Java/Maven)
+  if (existsSync(join(repoPath, "pom.xml"))) {
+    meta.language = meta.language ?? "java";
+    meta.build_cmd = meta.build_cmd ?? "mvn compile";
+    meta.test_cmd = meta.test_cmd ?? "mvn test";
+    meta.lint_cmd = meta.lint_cmd ?? "mvn checkstyle:check";
+  }
+
+  // Resolve Docker image from language (only when no compose/Dockerfile)
+  if (!meta.docker_compose_path && !existsSync(join(repoPath, "Dockerfile"))) {
+    meta.docker_image = (meta.language && LANGUAGE_DOCKER_IMAGES[meta.language]) ?? null;
   }
 
   return meta;

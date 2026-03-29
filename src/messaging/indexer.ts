@@ -37,6 +37,8 @@ export async function indexTaskChatHistory(taskId: string): Promise<void> {
     language: repoRow.language as string | null,
     framework: repoRow.framework as string | null,
     docker_compose_path: repoRow.docker_compose_path as string | null,
+    docker_image: repoRow.docker_image as string | null,
+    ci_on_host: !!(repoRow.ci_on_host as number),
     metadata: null,
   };
 

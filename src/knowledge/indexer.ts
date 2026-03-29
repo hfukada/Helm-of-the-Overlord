@@ -15,7 +15,8 @@ type ChunkType =
   | "code_pattern"
   | "config"
   | "changelog"
-  | "chat_history";
+  | "chat_history"
+  | "repo_commands";
 
 interface Chunk {
   source_file: string;
@@ -31,9 +32,105 @@ const INDEXABLE_FILES: Array<{ pattern: string; type: ChunkType; title: string }
   { pattern: "CONTRIBUTING.md", type: "build_instructions", title: "Contributing Guide" },
   { pattern: "ARCHITECTURE.md", type: "architecture", title: "Architecture" },
   { pattern: "CLAUDE.md", type: "build_instructions", title: "Claude Instructions" },
+  { pattern: "DEVELOPMENT.md", type: "build_instructions", title: "Development Guide" },
   { pattern: "CHANGELOG.md", type: "changelog", title: "Changelog" },
   { pattern: "docs/README.md", type: "api_doc", title: "Docs README" },
 ];
+
+/** Files to scan for test/lint/build command hints. */
+const COMMAND_HINT_FILES = [
+  "README.md", "CLAUDE.md", "DEVELOPMENT.md", "CONTRIBUTING.md",
+  "docs/README.md", "docs/DEVELOPMENT.md",
+];
+
+/**
+ * Scan documentation files for test/lint/build command patterns.
+ * Returns discovered commands (only fills in missing values).
+ */
+async function detectCommandsFromDocs(
+  repoPath: string,
+  existing: { test_cmd: string | null; lint_cmd: string | null; build_cmd: string | null }
+): Promise<{ test_cmd: string | null; lint_cmd: string | null; build_cmd: string | null }> {
+  const result = { ...existing };
+  const allMissing = !result.test_cmd && !result.lint_cmd && !result.build_cmd;
+  if (!allMissing && result.test_cmd && result.lint_cmd && result.build_cmd) {
+    return result; // all already known
+  }
+
+  let combined = "";
+  for (const file of COMMAND_HINT_FILES) {
+    const filePath = join(repoPath, file);
+    if (existsSync(filePath)) {
+      try {
+        combined += `${await readFile(filePath, "utf-8")}\n`;
+      } catch {}
+    }
+  }
+  if (!combined) return result;
+
+  // Extract code blocks and lines that look like shell commands
+  const codeBlocks = combined.match(/```(?:sh|bash|shell|zsh|console)?\n([\s\S]*?)```/g) ?? [];
+  const commandLines = codeBlocks.map((b) => b.replace(/```\w*\n?/g, "")).join("\n");
+
+  // Test command patterns
+  if (!result.test_cmd) {
+    const testPatterns = [
+      /^(bun\s+(?:run\s+)?test\b.*)/m,
+      /^(npm\s+(?:run\s+)?test\b.*)/m,
+      /^(yarn\s+(?:run\s+)?test\b.*)/m,
+      /^(pnpm\s+(?:run\s+)?test\b.*)/m,
+      /^(pytest\b.*)/m,
+      /^(python\s+-m\s+pytest\b.*)/m,
+      /^(go\s+test\b.*)/m,
+      /^(cargo\s+test\b.*)/m,
+      /^(mvn\s+test\b.*)/m,
+      /^(make\s+test\b.*)/m,
+    ];
+    for (const p of testPatterns) {
+      const m = commandLines.match(p);
+      if (m) { result.test_cmd = m[1].trim(); break; }
+    }
+  }
+
+  // Lint command patterns
+  if (!result.lint_cmd) {
+    const lintPatterns = [
+      /^(bun\s+(?:run\s+)?lint\b.*)/m,
+      /^(npm\s+(?:run\s+)?lint\b.*)/m,
+      /^(yarn\s+(?:run\s+)?lint\b.*)/m,
+      /^(pnpm\s+(?:run\s+)?lint\b.*)/m,
+      /^(ruff\s+check\b.*)/m,
+      /^(flake8\b.*)/m,
+      /^(golangci-lint\s+run\b.*)/m,
+      /^(cargo\s+clippy\b.*)/m,
+      /^(make\s+lint\b.*)/m,
+    ];
+    for (const p of lintPatterns) {
+      const m = commandLines.match(p);
+      if (m) { result.lint_cmd = m[1].trim(); break; }
+    }
+  }
+
+  // Build command patterns
+  if (!result.build_cmd) {
+    const buildPatterns = [
+      /^(bun\s+(?:run\s+)?build\b.*)/m,
+      /^(npm\s+(?:run\s+)?build\b.*)/m,
+      /^(yarn\s+(?:run\s+)?build\b.*)/m,
+      /^(pnpm\s+(?:run\s+)?build\b.*)/m,
+      /^(go\s+build\b.*)/m,
+      /^(cargo\s+build\b.*)/m,
+      /^(mvn\s+(?:compile|package)\b.*)/m,
+      /^(make\s+build\b.*)/m,
+    ];
+    for (const p of buildPatterns) {
+      const m = commandLines.match(p);
+      if (m) { result.build_cmd = m[1].trim(); break; }
+    }
+  }
+
+  return result;
+}
 
 const CODE_EXTENSIONS = new Set([
   ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".rb",
@@ -207,6 +304,52 @@ export async function indexRepo(repo: Repo, opts?: { force?: boolean }): Promise
     }
   } catch (err) {
     logger.warn("Failed to list git files", { error: String(err) });
+  }
+
+  // Detect test/lint/build commands from documentation if missing
+  const detectedCmds = await detectCommandsFromDocs(repoPath, {
+    test_cmd: repo.test_cmd,
+    lint_cmd: repo.lint_cmd,
+    build_cmd: repo.build_cmd,
+  });
+
+  // Update repo in DB if we discovered new commands
+  const cmdUpdates: string[] = [];
+  const cmdValues: (string | number)[] = [];
+  for (const field of ["test_cmd", "lint_cmd", "build_cmd"] as const) {
+    if (detectedCmds[field] && detectedCmds[field] !== repo[field]) {
+      cmdUpdates.push(`${field} = ?`);
+      cmdValues.push(detectedCmds[field] as string);
+    }
+  }
+  if (cmdUpdates.length > 0) {
+    cmdValues.push(repo.id);
+    db.run(`UPDATE repos SET ${cmdUpdates.join(", ")} WHERE id = ?`, cmdValues);
+    logger.info("Updated repo commands from docs", {
+      repo: repo.name,
+      updates: cmdUpdates.map((u) => u.split(" ")[0]),
+    });
+  }
+
+  // Add a repo_commands summary chunk (always refreshed)
+  db.run("DELETE FROM knowledge_chunks WHERE repo_id = ? AND chunk_type = 'repo_commands'", [repo.id]);
+  const cmdLines: string[] = [];
+  if (detectedCmds.build_cmd || repo.build_cmd) cmdLines.push(`Build: ${detectedCmds.build_cmd ?? repo.build_cmd}`);
+  if (detectedCmds.test_cmd || repo.test_cmd) cmdLines.push(`Test: ${detectedCmds.test_cmd ?? repo.test_cmd}`);
+  if (detectedCmds.lint_cmd || repo.lint_cmd) cmdLines.push(`Lint: ${detectedCmds.lint_cmd ?? repo.lint_cmd}`);
+  if (repo.language) cmdLines.push(`Language: ${repo.language}`);
+  if (repo.framework) cmdLines.push(`Framework: ${repo.framework}`);
+  if (repo.docker_image) cmdLines.push(`Docker Image: ${repo.docker_image}`);
+  if (repo.docker_compose_path) cmdLines.push(`Docker Compose: ${repo.docker_compose_path}`);
+
+  if (cmdLines.length > 0) {
+    chunks.push({
+      source_file: "_repo_commands",
+      chunk_type: "repo_commands",
+      title: `${repo.name} - Build/Test/Lint Commands`,
+      content: cmdLines.join("\n"),
+      metadata: {},
+    });
   }
 
   // Insert chunks into DB

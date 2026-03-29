@@ -29,6 +29,7 @@ repos.post("/", async (c) => {
     test_cmd?: string;
     run_cmd?: string;
     lint_cmd?: string;
+    ci_on_host?: boolean;
   }>();
 
   if (!body.url && !body.path) {
@@ -93,8 +94,8 @@ repos.post("/", async (c) => {
   const parsed = await parseRepo(repoPath);
 
   const result = db.run(
-    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path, docker_image, ci_on_host)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       repoPath,
@@ -106,6 +107,8 @@ repos.post("/", async (c) => {
       body.run_cmd ?? parsed.run_cmd,
       body.lint_cmd ?? parsed.lint_cmd,
       parsed.docker_compose_path,
+      parsed.docker_image,
+      body.ci_on_host ? 1 : 0,
     ]
   );
 
@@ -123,6 +126,8 @@ repos.post("/", async (c) => {
     language: body.language ?? parsed.language,
     framework: body.framework ?? parsed.framework,
     docker_compose_path: parsed.docker_compose_path,
+    docker_image: parsed.docker_image,
+    ci_on_host: body.ci_on_host ?? false,
     metadata: null,
   };
   indexRepo(repo).catch((err) => {
