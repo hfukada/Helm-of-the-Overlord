@@ -184,43 +184,89 @@ export async function requestHumanInput(taskId: string, question: string): Promi
   return "No response received. Proceed with your best judgment.";
 }
 
+/** Lines that are agent preamble/filler, not actual plan content. */
+const FILLER_PATTERNS = [
+  /^now\b.*(?:plan|picture|approach|understand)/i,
+  /^here(?:'s| is)\b/i,
+  /^let me\b/i,
+  /^i(?:'ll| will)\b/i,
+  /^(?:ok|okay|sure|alright)\b/i,
+  /^based on\b/i,
+  /^after (?:review|read|analyz)/i,
+  /^looking at\b/i,
+];
+
+function isFiller(line: string): boolean {
+  const trimmed = line.replace(/^#+\s*/, "").trim();
+  return trimmed.length === 0 || FILLER_PATTERNS.some((p) => p.test(trimmed));
+}
+
 function generatePrMetadata(
   task: Task,
   planOutput: string,
   diffStat: string,
   lintPassed: boolean | null,
-  ciPassed: boolean | null
+  ciPassed: boolean | null,
+  ciOutput: string | null,
+  lintOutput: string | null
 ): { title: string; body: string } {
-  // Derive title: first non-empty line from planOutput that looks like a heading or summary.
-  // Strip leading # markers and whitespace. Fall back to task.title. Trim to 72 chars.
+  // Derive title: first non-filler line from planOutput, or fall back to task.title.
   let title = task.title;
   const lines = planOutput.split("\n");
   for (const line of lines) {
     const stripped = line.replace(/^#+\s*/, "").trim();
-    if (stripped.length > 0) {
+    if (stripped.length > 0 && !isFiller(stripped)) {
       title = stripped.length > 72 ? stripped.slice(0, 72) : stripped;
       break;
     }
   }
 
-  // Derive summary: first paragraph or content up to ~500 chars from planOutput.
-  const paragraphs = planOutput.split(/\n\n+/);
-  const summaryRaw = paragraphs[0] ?? "";
-  const summary = summaryRaw.length > 500 ? `${summaryRaw.slice(0, 500)}...` : summaryRaw;
+  // Find the "## Execution Plan" or "### Execution Plan" section as the plan body.
+  // Fall back to full planOutput if no such section exists.
+  let planBody = planOutput;
+  const execIdx = planOutput.search(/^#{1,3}\s*Execution Plan/m);
+  if (execIdx >= 0) {
+    planBody = planOutput.slice(execIdx);
+  }
 
   // Truncate plan to ~3000 chars.
-  const planTruncated = planOutput.length > 3000
-    ? `${planOutput.slice(0, 3000)}\n...(truncated)`
-    : planOutput;
+  const planTruncated = planBody.length > 3000
+    ? `${planBody.slice(0, 3000)}\n...(truncated)`
+    : planBody;
 
-  const lintStatus = lintPassed === null ? "skipped" : lintPassed ? "passed" : "failed";
-  const ciStatus = ciPassed === null ? "skipped" : ciPassed ? "passed" : "failed";
+  // Determine lint/CI status -- distinguish "skipped" from "failed"
+  const lintStatus = lintPassed === null
+    ? "skipped"
+    : lintPassed
+      ? "passed"
+      : (lintOutput?.includes("[SKIPPED]") ? "skipped (not configured)" : "failed");
+  const ciStatus = ciPassed === null
+    ? "skipped"
+    : ciPassed
+      ? "passed"
+      : (ciOutput?.includes("[SKIPPED]") ? "skipped (not configured)" : "failed");
 
   const bodyParts: string[] = [];
 
-  if (summary) {
+  // Summary from the "### Summary" section if it exists, otherwise first non-filler paragraph
+  const summaryMatch = planOutput.match(/^#{1,3}\s*Summary\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|\Z)/m);
+  if (summaryMatch) {
+    const summaryText = summaryMatch[1].trim();
+    const summary = summaryText.length > 500 ? `${summaryText.slice(0, 500)}...` : summaryText;
     bodyParts.push(summary);
     bodyParts.push("");
+  } else {
+    // Fall back: first non-filler paragraph
+    const paragraphs = planOutput.split(/\n\n+/);
+    for (const para of paragraphs) {
+      const trimmed = para.trim();
+      if (trimmed && !isFiller(trimmed)) {
+        const summary = trimmed.length > 500 ? `${trimmed.slice(0, 500)}...` : trimmed;
+        bodyParts.push(summary);
+        bodyParts.push("");
+        break;
+      }
+    }
   }
 
   if (diffStat) {
@@ -755,8 +801,9 @@ export async function runTask(taskId: string): Promise<void> {
         const baseBranch = await getDefaultBranch(repo.path);
 
         const db = getDb();
-        const lintRow = db.query("SELECT lint_passed FROM tasks WHERE id = ?").get(task.id) as { lint_passed: number | null } | null;
-        const ciRow = db.query("SELECT ci_passed FROM tasks WHERE id = ?").get(task.id) as { ci_passed: number | null } | null;
+        const statusRow = db.query(
+          "SELECT lint_passed, lint_output, ci_passed, ci_output FROM tasks WHERE id = ?"
+        ).get(task.id) as { lint_passed: number | null; lint_output: string | null; ci_passed: number | null; ci_output: string | null } | null;
 
         const planRow = db.query(
           "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('finalize-plan', 'plan') ORDER BY finished_at DESC LIMIT 1"
@@ -775,8 +822,10 @@ export async function runTask(taskId: string): Promise<void> {
           task,
           planOutput,
           diffStat,
-          lintRow?.lint_passed != null ? !!lintRow.lint_passed : null,
-          ciRow?.ci_passed != null ? !!ciRow.ci_passed : null
+          statusRow?.lint_passed != null ? !!statusRow.lint_passed : null,
+          statusRow?.ci_passed != null ? !!statusRow.ci_passed : null,
+          statusRow?.ci_output ?? null,
+          statusRow?.lint_output ?? null
         );
 
         const pr = await createPullRequest(
@@ -1184,7 +1233,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
             logger.warn("Failed to get diff stat for PR update", { taskId: task.id, error: String(diffErr) });
           }
 
-          const prMetadata = generatePrMetadata(task, planOutput, diffStat, null, null);
+          const prMetadata = generatePrMetadata(task, planOutput, diffStat, null, null, null, null);
           await updatePullRequest(repo.name, prNumber, prMetadata.title, prMetadata.body);
           logger.info("Updated Gitea PR title and body after revision", { taskId: task.id, repo: repo.name, prNumber });
         } catch (err) {
