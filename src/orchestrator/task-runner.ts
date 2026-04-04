@@ -1010,16 +1010,21 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
     if (smallResult.error || smallResult.plan.length < 50) {
       if (isTaskCancelled(task.id)) return;
-      logger.error("Small feedback planning failed", { taskId: task.id, error: smallResult.error });
-      state = advanceState(state, "error");
-      updateTaskStatus(task.id, "error", state);
-      return;
+      logger.warn("Small feedback planning failed, falling back to large path", {
+        taskId: task.id, error: smallResult.error, outputLen: smallResult.plan.length,
+      });
+      if (manager) {
+        manager.notifyAgentOutput(task.id, "Small feedback plan failed -- falling back to full revision.").catch(() => {});
+      }
+      // Fall through to the large path below
+      triageResult.verdict = "large" as typeof triageResult.verdict;
+    } else {
+      planResult.plan = smallResult.plan;
+      state = advanceState(state, "done"); // -> implement
     }
+  }
 
-    planResult.plan = smallResult.plan;
-    state = advanceState(state, "done"); // -> implement
-
-  } else {
+  if (triageResult.verdict === "large" && !planResult.plan) {
     // === LARGE: revised plan -> scrutinize loop -> implement ===
     updateTaskStatus(task.id, "planning", state);
     logger.info("Large review feedback -- planning structural revision", { taskId: task.id });
