@@ -184,21 +184,16 @@ export async function requestHumanInput(taskId: string, question: string): Promi
   return "No response received. Proceed with your best judgment.";
 }
 
-/** Lines that are agent preamble/filler, not actual plan content. */
-const FILLER_PATTERNS = [
-  /^now\b.*(?:plan|picture|approach|understand)/i,
-  /^here(?:'s| is)\b/i,
-  /^let me\b/i,
-  /^i(?:'ll| will)\b/i,
-  /^(?:ok|okay|sure|alright)\b/i,
-  /^based on\b/i,
-  /^after (?:review|read|analyz)/i,
-  /^looking at\b/i,
-];
-
+/**
+ * Check if a line is agent preamble/filler rather than actual plan content.
+ * Instead of pattern-matching filler, we look for lines that ARE plan content:
+ * - Starts with a markdown heading that isn't "Plan" or "Summary" (those are structural)
+ * - Is inside a known section like "### Summary"
+ * Anything before the first structured section heading is considered filler.
+ */
 function isFiller(line: string): boolean {
   const trimmed = line.replace(/^#+\s*/, "").trim();
-  return trimmed.length === 0 || FILLER_PATTERNS.some((p) => p.test(trimmed));
+  return trimmed.length === 0;
 }
 
 function generatePrMetadata(
@@ -210,14 +205,19 @@ function generatePrMetadata(
   ciOutput: string | null,
   lintOutput: string | null
 ): { title: string; body: string } {
-  // Derive title: first non-filler line from planOutput, or fall back to task.title.
+  // Derive title from the Summary section content, or fall back to task.title.
+  // Never use raw agent preamble -- only use structured content.
   let title = task.title;
-  const lines = planOutput.split("\n");
-  for (const line of lines) {
-    const stripped = line.replace(/^#+\s*/, "").trim();
-    if (stripped.length > 0 && !isFiller(stripped)) {
-      title = stripped.length > 72 ? stripped.slice(0, 72) : stripped;
-      break;
+  const summarySection = planOutput.match(/^#{1,3}\s*Summary\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|\Z)/m);
+  if (summarySection) {
+    // Use the first non-empty line of the summary section
+    const summaryLines = summarySection[1].trim().split("\n");
+    for (const sl of summaryLines) {
+      const stripped = sl.replace(/^[-*]\s*/, "").trim();
+      if (stripped.length > 0) {
+        title = stripped.length > 72 ? stripped.slice(0, 72) : stripped;
+        break;
+      }
     }
   }
 
