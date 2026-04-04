@@ -6,6 +6,7 @@ import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
 import { getMessagingManager } from "../../messaging/manager";
+import { fixDates, fixDatesAll } from "../dates";
 
 const tasks = new Hono();
 
@@ -82,8 +83,8 @@ tasks.get("/", (c) => {
   const db = getDb();
   const rows = db.query(
     "SELECT id, title, status, repo_id, branch_name, source, created_at, updated_at FROM tasks ORDER BY created_at DESC"
-  ).all();
-  return c.json(rows);
+  ).all() as Array<Record<string, unknown>>;
+  return c.json(fixDatesAll(rows, "created_at", "updated_at"));
 });
 
 tasks.get("/:id", async (c) => {
@@ -115,7 +116,8 @@ tasks.get("/:id", async (c) => {
   // Include agent runs
   const agentRuns = db.query(
     "SELECT id, node_name, agent_type, status, prompt, output, token_input, token_output, cost_usd, model, started_at, finished_at, error FROM agent_runs WHERE task_id = ? ORDER BY started_at"
-  ).all(id);
+  ).all(id) as Array<Record<string, unknown>>;
+  fixDatesAll(agentRuns, "started_at", "finished_at");
 
   // Parse blueprint_state
   let blueprintState = null;
@@ -138,6 +140,8 @@ tasks.get("/:id", async (c) => {
      FROM task_prs tp JOIN repos r ON r.id = tp.repo_id
      WHERE tp.task_id = ? ORDER BY r.name`
   ).all(id);
+
+  fixDates(task, "created_at", "updated_at");
 
   return c.json({
     ...task,
@@ -301,8 +305,8 @@ tasks.get("/:id/input-requests", (c) => {
   const db = getDb();
   const requests = db.query(
     "SELECT id, question, answer, status, created_at, answered_at FROM task_input_requests WHERE task_id = ? ORDER BY created_at DESC"
-  ).all(id);
-  return c.json(requests);
+  ).all(id) as Array<Record<string, unknown>>;
+  return c.json(fixDatesAll(requests, "created_at", "answered_at"));
 });
 
 tasks.post("/:id/input-requests/:requestId/answer", async (c) => {
@@ -333,8 +337,8 @@ tasks.get("/:id/messages", (c) => {
   const db = getDb();
   const messages = db.query(
     "SELECT id, source, sender_id, content, created_at FROM task_messages WHERE task_id = ? ORDER BY created_at"
-  ).all(id);
-  return c.json(messages);
+  ).all(id) as Array<Record<string, unknown>>;
+  return c.json(fixDatesAll(messages, "created_at"));
 });
 
 export { tasks };
