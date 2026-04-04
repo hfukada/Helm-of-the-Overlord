@@ -1,5 +1,6 @@
 
 import { join, resolve } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { logger } from "../shared/logger";
 import type { TokenUsage, StreamEventType } from "../shared/types";
 import { getDb } from "../knowledge/db";
@@ -52,6 +53,38 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     workDir: opts.workDir,
     agentRunId: opts.agentRunId,
   });
+
+  // Dump prompt to task directory for debugging
+  if (opts.taskId) {
+    try {
+      const nodeName = (getDb().query(
+        "SELECT node_name FROM agent_runs WHERE id = ?"
+      ).get(opts.agentRunId) as { node_name: string } | null)?.node_name ?? "unknown";
+
+      const promptsDir = join(taskDir(opts.taskId), "prompts");
+      mkdirSync(promptsDir, { recursive: true });
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `${timestamp}_${nodeName}.md`;
+      const content = [
+        `# ${nodeName}`,
+        `Agent Run: ${opts.agentRunId}`,
+        `Model: ${model}`,
+        `Timestamp: ${new Date().toISOString()}`,
+        "",
+        "## System Prompt",
+        opts.systemPrompt ?? "(none)",
+        "",
+        "## Prompt",
+        opts.prompt,
+      ].join("\n");
+
+      writeFileSync(join(promptsDir, filename), content);
+      logger.debug("Dumped prompt to file", { taskId: opts.taskId, file: filename });
+    } catch (err) {
+      logger.warn("Failed to dump prompt", { error: String(err) });
+    }
+  }
 
   const result = await claudeStream(
     {
