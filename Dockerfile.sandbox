@@ -1,0 +1,12 @@
+FROM alpine:3.21
+
+RUN apk add --no-cache curl git bash docker-cli ca-certificates
+
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:$PATH"
+
+RUN bun install -g @anthropic-ai/claude-code
+
+WORKDIR /workspace
+
+CMD ["sleep", "infinity"]

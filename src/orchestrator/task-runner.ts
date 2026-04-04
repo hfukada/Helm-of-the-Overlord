@@ -13,7 +13,7 @@ import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
-import { setupTaskContainer, teardownTaskContainer } from "../workspace/docker-exec";
+import { setupTaskContainer, teardownTaskContainer, isSandboxContainer } from "../workspace/docker-exec";
 import { discoverSecrets } from "../workspace/secret-discovery";
 import { getMessagingManager } from "../messaging/manager";
 import { indexTaskChatHistory } from "../messaging/indexer";
@@ -650,8 +650,17 @@ export async function runTask(taskId: string): Promise<void> {
     // Set up Docker container per repo if applicable
     let containerName: string | null = null;
     try {
-      containerName = await setupTaskContainer(repo, workDir, task.id);
-    } catch {}
+      containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
+    } catch (err) {
+      logger.error({ err, taskId: task.id }, "failed to set up task container");
+      containerName = null;
+    }
+
+    // For sandbox containers, the task directory is mounted at /workspace and each
+    // repo is a subdirectory. For repo-specific containers, workDir is /workspace.
+    const containerWorkDir = (containerName && isSandboxContainer(containerName))
+      ? `/workspace/${repo.name}`
+      : "/workspace";
 
     let repoMcpConfigPath: string | undefined;
     try {
@@ -675,7 +684,7 @@ export async function runTask(taskId: string): Promise<void> {
         for (let round = 0; round < MAX_CI_ROUNDS; round++) {
           logger.info("Running CI", { taskId: task.id, repo: repo.name, round });
 
-          const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+          const ciResult = await runCi(repo, workDir, containerName ?? undefined, containerWorkDir, (accumulated) => {
             saveNodeOutput(task.id, "ci", accumulated, false);
           });
           saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
@@ -722,7 +731,7 @@ export async function runTask(taskId: string): Promise<void> {
         for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
           logger.info("Running lint", { taskId: task.id, repo: repo.name, round });
 
-          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, containerWorkDir, (accumulated) => {
             saveNodeOutput(task.id, "lint", accumulated, false);
           });
           saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
@@ -1094,7 +1103,18 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     const workDir = workDirs.get(repo.name)!;
 
     let containerName: string | null = null;
-    try { containerName = await setupTaskContainer(repo, workDir, task.id); } catch {}
+    try {
+      containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
+    } catch (err) {
+      logger.error({ err, taskId: task.id }, "failed to set up task container");
+      containerName = null;
+    }
+
+    // For sandbox containers, the task directory is mounted at /workspace and each
+    // repo is a subdirectory. For repo-specific containers, workDir is /workspace.
+    const containerWorkDir = (containerName && isSandboxContainer(containerName))
+      ? `/workspace/${repo.name}`
+      : "/workspace";
 
     let repoMcpConfigPath: string | undefined;
     try { repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name); } catch {}
@@ -1114,7 +1134,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
         updateTaskStatus(task.id, "ci_running", state);
 
         for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-          const ciResult = await runCi(repo, workDir, containerName ?? undefined, (accumulated) => {
+          const ciResult = await runCi(repo, workDir, containerName ?? undefined, containerWorkDir, (accumulated) => {
             saveNodeOutput(task.id, "ci", accumulated, false);
           });
           saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
@@ -1150,7 +1170,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
         updateTaskStatus(task.id, "linting", state);
 
         for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, (accumulated) => {
+          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, containerWorkDir, (accumulated) => {
             saveNodeOutput(task.id, "lint", accumulated, false);
           });
           saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
@@ -1261,6 +1281,7 @@ async function runCi(
   repo: Repo,
   workDir: string,
   containerName?: string,
+  containerWorkDir: string = "/workspace",
   onChunk?: (accumulated: string) => void
 ): Promise<{ success: boolean; output: string }> {
   const commands: string[] = [];
@@ -1288,7 +1309,7 @@ async function runCi(
 
     try {
       const argv = containerName
-        ? ["docker", "exec", "-w", "/workspace", containerName, "sh", "-c", cmd]
+        ? ["docker", "exec", "-w", containerWorkDir, containerName, "sh", "-c", cmd]
         : ["sh", "-c", cmd];
 
       const proc = Bun.spawn(argv, {
