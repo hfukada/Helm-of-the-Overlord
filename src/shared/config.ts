@@ -36,7 +36,7 @@ function loadConfig(): Config {
   const daemonHost = process.env.HOTO_HOST ?? "127.0.0.1";
   const defaultModel = process.env.HOTO_MODEL ?? "claude-sonnet-4-6";
 
-  const chromaUrl = process.env.CHROMA_URL ?? "http://127.0.0.1:8000";
+  const chromaUrl = process.env.CHROMA_URL ?? "http://127.0.0.1:8033";
   const matrixHomeserverUrl = process.env.MATRIX_HOMESERVER_URL ?? null;
   const matrixBotUser = process.env.MATRIX_BOT_USER ?? "@hoto:localhost";
   const matrixBotPassword = process.env.MATRIX_BOT_PASSWORD ?? null;

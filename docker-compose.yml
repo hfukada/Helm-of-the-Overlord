@@ -14,9 +14,9 @@ services:
   #    HOTO_HOST: "0.0.0.0"
   #    HOTO_PORT: "7777"
   #    HOTO_WORKSPACE: /data
-  #    CHROMA_URL: http://chromadb:8000
-  #    MATRIX_HOMESERVER_URL: http://synapse:8008
-  #    GITEA_URL: http://gitea:3000
+  #    CHROMA_URL: http://chromadb:8033
+  #    MATRIX_HOMESERVER_URL: http://synapse:8098
+  #    GITEA_URL: http://gitea:3777
   #  depends_on:
   #    - chromadb
   #    - synapse
@@ -25,17 +25,18 @@ services:
   chromadb:
     image: ghcr.io/chroma-core/chroma:1.5.5
     ports:
-      - "8000:8000"
+      - "8033:8033"
     volumes:
       - chroma-data:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
+      - CHROMA_SERVER_HTTP_PORT=8033
 
   synapse:
     image: matrixdotorg/synapse:v1.149.1
     entrypoint: ["/bin/bash", "/scripts/synapse-init.sh"]
     ports:
-      - "8008:8008"
+      - "8098:8098"
     volumes:
       - synapse-data:/data
       - ./scripts/synapse-init.sh:/scripts/synapse-init.sh:ro
@@ -44,14 +45,15 @@ services:
     image: gitea/gitea:1.25.5
     entrypoint: ["/bin/sh", "/hoto-scripts/gitea-init.sh"]
     ports:
-      - "3000:3000"
+      - "3777:3777"
     volumes:
       - gitea-data:/data
       - ./scripts/gitea-init.sh:/hoto-scripts/gitea-init.sh:ro
     environment:
       GITEA__database__DB_TYPE: sqlite3
       GITEA__database__PATH: /data/gitea/gitea.db
-      GITEA__server__ROOT_URL: http://gitea:3000
+      GITEA__server__ROOT_URL: http://gitea:3777
+      GITEA__server__HTTP_PORT: "3777"
       GITEA__server__DOMAIN: gitea
       GITEA__service__DISABLE_REGISTRATION: "false"
       GITEA__api__ENABLE_SWAGGER: "false"

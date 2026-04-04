@@ -61,9 +61,24 @@ const NODES: BlueprintNode[] = [
     type: "human",
     transitions: {
       accept: "commit",
-      revise: "plan",
+      revise: "understand_review",
       cancel: "review",
     },
+  },
+  {
+    name: "understand_review",
+    type: "agentic",
+    transitions: { small: "review_small_feedback", large: "review_large_feedback" },
+  },
+  {
+    name: "review_small_feedback",
+    type: "agentic",
+    transitions: { done: "implement", error: "review" },
+  },
+  {
+    name: "review_large_feedback",
+    type: "agentic",
+    transitions: { done: "scrutinize", error: "review" },
   },
   {
     name: "commit",

@@ -888,79 +888,132 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
 
   const onThinking = makeThinkingForwarder(task.id, manager);
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
+  const { executeUnderstandReview, executeReviewSmallFeedback, executeReviewLargeFeedback } = await import("./nodes/agentic/review-feedback");
 
-
-  // Advance from review -> plan via "revise"
+  // Advance from review -> understand_review via "revise"
   state = advanceState(state, "revise");
 
-  // === PLAN (revision) ===
-  updateTaskStatus(task.id, "planning", state);
-  logger.info("Starting revision plan phase", { taskId: task.id, repoCount: repos.length });
-
   const previousPlanRow = db.query(
-    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('plan', 'plan_again', 'finalize_plan') ORDER BY finished_at DESC LIMIT 1"
+    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('plan', 'plan_again', 'finalize_plan', 'review_small_feedback', 'review_large_feedback') ORDER BY finished_at DESC LIMIT 1"
   ).get(task.id) as { output: string } | null;
   const previousPlan = previousPlanRow?.output ?? "(no previous plan found)";
 
-  const { buildRevisionPlanPrompt } = await import("./context-builder");
-  const revisionPlanPrompt = await buildRevisionPlanPrompt(task, primaryRepo, feedback, previousPlan);
+  // === UNDERSTAND REVIEW: triage feedback as small or large ===
+  updateTaskStatus(task.id, "planning", state);
+  logger.info("Triaging review feedback", { taskId: task.id });
 
-  const planResult = await executePlan(task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, revisionPlanPrompt);
+  if (manager) {
+    manager.notifyAgentOutput(task.id, "Analyzing review feedback to determine revision scope...").catch(() => {});
+  }
 
-  if (planResult.error || planResult.plan.length < 200) {
+  const triageResult = await executeUnderstandReview(
+    task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking
+  );
+
+  if (triageResult.error) {
     if (isTaskCancelled(task.id)) return;
-    logger.error("Revision planning failed or insufficient output", {
-      taskId: task.id, error: planResult.error, outputLen: planResult.plan.length,
-    });
-    state = advanceState(state, "error");
-    updateTaskStatus(task.id, "review", state);
-    return;
+    logger.error("Review triage failed", { taskId: task.id, error: triageResult.error });
+    state = advanceState(state, "large"); // default to large path on error
+  } else {
+    state = advanceState(state, triageResult.verdict);
   }
 
   if (isTaskCancelled(task.id)) return;
 
-  // --- Scrutinize loop (same as runTask) ---
-  state = advanceState(state, "done");
-  updateTaskStatus(task.id, "scrutinizing", state);
+  const planResult = { plan: "" };
 
-  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking);
+  if (triageResult.verdict === "small") {
+    // === SMALL: targeted fix plan -> straight to implement ===
+    updateTaskStatus(task.id, "planning", state);
+    logger.info("Small review feedback -- planning targeted fixes", { taskId: task.id });
 
-  if (!scrutiny1.error) {
-    if (isTaskCancelled(task.id)) return;
-    state = advanceState(state, "done");
-    updateTaskStatus(task.id, "replanning", state);
+    if (manager) {
+      manager.notifyAgentOutput(task.id, "Review feedback classified as SMALL -- planning targeted fixes (skipping full scrutiny).").catch(() => {});
+    }
 
-    const planAgainResult = await executePlanAgain(
-      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+    const smallResult = await executeReviewSmallFeedback(
+      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking
     );
 
-    if (!planAgainResult.error) {
+    if (smallResult.error || smallResult.plan.length < 50) {
+      if (isTaskCancelled(task.id)) return;
+      logger.error("Small feedback planning failed", { taskId: task.id, error: smallResult.error });
+      state = advanceState(state, "error");
+      updateTaskStatus(task.id, "review", state);
+      return;
+    }
+
+    planResult.plan = smallResult.plan;
+    state = advanceState(state, "done"); // -> implement
+
+  } else {
+    // === LARGE: revised plan -> scrutinize loop -> implement ===
+    updateTaskStatus(task.id, "planning", state);
+    logger.info("Large review feedback -- planning structural revision", { taskId: task.id });
+
+    if (manager) {
+      manager.notifyAgentOutput(task.id, "Review feedback classified as LARGE -- planning structural revision with full scrutiny.").catch(() => {});
+    }
+
+    const largeResult = await executeReviewLargeFeedback(
+      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking
+    );
+
+    if (largeResult.error || largeResult.plan.length < 200) {
+      if (isTaskCancelled(task.id)) return;
+      logger.error("Large feedback planning failed", { taskId: task.id, error: largeResult.error });
+      state = advanceState(state, "error");
+      updateTaskStatus(task.id, "review", state);
+      return;
+    }
+
+    planResult.plan = largeResult.plan;
+    state = advanceState(state, "done"); // -> scrutinize
+
+    if (isTaskCancelled(task.id)) return;
+
+    // --- Scrutinize loop (same as runTask) ---
+    updateTaskStatus(task.id, "scrutinizing", state);
+
+    const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking);
+
+    if (!scrutiny1.error) {
       if (isTaskCancelled(task.id)) return;
       state = advanceState(state, "done");
-      updateTaskStatus(task.id, "scrutinizing", state);
+      updateTaskStatus(task.id, "replanning", state);
 
-      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking);
+      const planAgainResult = await executePlanAgain(
+        task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+      );
 
-      if (!scrutiny2.error) {
+      if (!planAgainResult.error) {
         if (isTaskCancelled(task.id)) return;
         state = advanceState(state, "done");
-        updateTaskStatus(task.id, "finalizing_plan", state);
+        updateTaskStatus(task.id, "scrutinizing", state);
 
-        const finalPlan = await executeFinalizePlan(
-          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
-        );
+        const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking);
 
-        planResult.plan = (!finalPlan.error && finalPlan.plan.length > 200) ? finalPlan.plan : planAgainResult.plan;
-        state = advanceState(state, "done");
+        if (!scrutiny2.error) {
+          if (isTaskCancelled(task.id)) return;
+          state = advanceState(state, "done");
+          updateTaskStatus(task.id, "finalizing_plan", state);
+
+          const finalPlan = await executeFinalizePlan(
+            task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+          );
+
+          planResult.plan = (!finalPlan.error && finalPlan.plan.length > 200) ? finalPlan.plan : planAgainResult.plan;
+          state = advanceState(state, "done");
+        } else {
+          planResult.plan = planAgainResult.plan;
+          state = advanceState(state, "error");
+        }
       } else {
-        planResult.plan = planAgainResult.plan;
         state = advanceState(state, "error");
       }
     } else {
       state = advanceState(state, "error");
     }
-  } else {
-    state = advanceState(state, "error");
   }
 
   if (isTaskCancelled(task.id)) return;

@@ -12,7 +12,7 @@ GITEA_PID=$!
 # Wait for Gitea to be ready
 echo "[hoto-init] Waiting for Gitea to start..."
 for i in $(seq 1 60); do
-  if wget -q -O /dev/null http://127.0.0.1:3000/api/v1/version 2>/dev/null; then
+  if wget -q -O /dev/null http://127.0.0.1:3777/api/v1/version 2>/dev/null; then
     break
   fi
   sleep 1

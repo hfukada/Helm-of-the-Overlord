@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="helm.png" width="128" alt="Helm of the Overlord" />
+</p>
+
 # Hoto (Helm of the Overlord)
+
+Named after the Dota 2 item [Helm of the Overlord](https://dota2.fandom.com/wiki/Helm_of_the_Overlord) -- which grants the ability to take control of units in the game.
 
 Multi-repo, multi-agent one-shot task manager. Describe a task in plain text, and Hoto spins up Claude subagents to plan, implement, lint, test, and open a Gitea pull request for review -- all in an isolated git worktree.
 
@@ -127,7 +133,7 @@ All configuration is via environment variables. The daemon reads these at startu
 | `HOTO_HOST` | `127.0.0.1` | Daemon bind address |
 | `HOTO_PORT` | `7777` | Daemon HTTP port |
 | `HOTO_MODEL` | `claude-sonnet-4-6` | Claude model used for agent runs |
-| `CHROMA_URL` | `http://127.0.0.1:8000` | ChromaDB URL for vector search (optional) |
+| `CHROMA_URL` | `http://127.0.0.1:8033` | ChromaDB URL for vector search (optional) |
 | `MATRIX_HOMESERVER_URL` | — | Matrix homeserver URL for the bot (optional) |
 | `MATRIX_BOT_USER` | `@hoto:localhost` | Matrix bot user ID (optional) |
 | `MATRIX_BOT_PASSWORD` | — | Matrix bot password (optional) |

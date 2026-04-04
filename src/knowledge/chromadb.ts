@@ -16,7 +16,7 @@ function getClient(): ChromaClient {
     const url = new URL(config.chromaUrl);
     _client = new ChromaClient({
       host: url.hostname,
-      port: parseInt(url.port || "8000", 10),
+      port: parseInt(url.port || "8033", 10),
       ssl: url.protocol === "https:",
     });
   }

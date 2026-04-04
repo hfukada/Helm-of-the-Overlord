@@ -10,6 +10,8 @@ if [ ! -f /data/homeserver.yaml ]; then
   # Bind to all interfaces so the container port is reachable
   sed -i "s/- ::1/- '::'/" /data/homeserver.yaml
   sed -i "s/- 127.0.0.1/- 0.0.0.0/" /data/homeserver.yaml
+  # Use non-standard port
+  sed -i "s/port: 8008/port: 8098/" /data/homeserver.yaml
 
   # Enable registration without email verification
   cat >> /data/homeserver.yaml <<'EOF'
