@@ -11,6 +11,7 @@ export async function executeLint(
   repo: Repo,
   workDir: string,
   containerName?: string,
+  containerWorkDir: string = "/workspace",
   onChunk?: (accumulated: string) => void
 ): Promise<LintResult> {
   const cmd = repo.lint_cmd;
@@ -23,7 +24,7 @@ export async function executeLint(
 
   try {
     const argv = containerName
-      ? ["docker", "exec", "-w", "/workspace", containerName, "sh", "-c", cmd]
+      ? ["docker", "exec", "-w", containerWorkDir, containerName, "sh", "-c", cmd]
       : ["sh", "-c", cmd];
 
     const proc = Bun.spawn(argv, {
