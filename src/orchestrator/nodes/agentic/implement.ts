@@ -18,7 +18,7 @@ export async function executeImplement(
   const prompt = await buildImplementPrompt(task, repos, plan);
 
   const repoNames = repos.map((r) => r.name).join(", ");
-  const systemPrompt = `You are working on: ${repoNames}. Your working directory is ${workDir}. ALL file paths MUST be within this directory. Use relative paths like ./file.ts or ./src/file.ts. NEVER use absolute paths starting with /home or /. You have access to Read, Write, Edit, Glob, Grep, and Bash tools. Do not run destructive commands. Do not push to git.`;
+  const systemPrompt = `You are working on: ${repoNames}. Your working directory is ${workDir}. ALL file paths for Write/Edit/Read MUST be absolute paths under ${workDir}. For example: ${workDir}/src/foo.ts. Do NOT create files outside of ${workDir} -- files outside the repo worktree will not be committed. You have access to Read, Write, Edit, Glob, Grep, and Bash tools. Do not run destructive commands. Do not push to git.`;
 
   const model = config.defaultModel;
 

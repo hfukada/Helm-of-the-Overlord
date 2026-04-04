@@ -784,6 +784,21 @@ export async function runTask(taskId: string): Promise<void> {
   for (const repo of repos) {
     const workDir = workDirs.get(repo.name)!;
 
+    // Check for stray files in task dir that should be in the worktree
+    try {
+      const tDir = taskDir(task.id);
+      const strayResult = await $`find ${tDir} -maxdepth 1 -type f ! -name 'mcp-config.json' ! -name '*.log'`.quiet().nothrow();
+      const strays = strayResult.stdout.toString().trim().split("\n").filter(Boolean);
+      if (strays.length > 0) {
+        logger.warn("Found stray files in task dir (not in repo worktree, will not be committed)", {
+          taskId: task.id, files: strays,
+        });
+        if (manager) {
+          manager.notifyAgentOutput(task.id, `[warning] Found ${strays.length} file(s) outside repo worktree that will not be committed: ${strays.join(", ")}`).catch(() => {});
+        }
+      }
+    } catch {}
+
     // Commit
     try {
       await $`git -C ${workDir} add -A`.quiet();
