@@ -141,6 +141,49 @@ repos.post("/", async (c) => {
   }, 201);
 });
 
+repos.patch("/:name", async (c) => {
+  const name = c.req.param("name");
+  const db = getDb();
+
+  const existing = db.query("SELECT id FROM repos WHERE name = ? AND archived = 0").get(name) as { id: number } | null;
+  if (!existing) {
+    return c.json({ error: "Repo not found" }, 404);
+  }
+
+  const body = await c.req.json<{
+    description?: string | null;
+    language?: string | null;
+    framework?: string | null;
+    build_cmd?: string | null;
+    test_cmd?: string | null;
+    run_cmd?: string | null;
+    lint_cmd?: string | null;
+    ci_on_host?: boolean;
+  }>();
+
+  const allowed = ["description", "language", "framework", "build_cmd", "test_cmd", "run_cmd", "lint_cmd", "ci_on_host"] as const;
+  const sets: string[] = [];
+  const values: (string | number | null)[] = [];
+
+  for (const key of allowed) {
+    if (key in body) {
+      sets.push(`${key} = ?`);
+      values.push(key === "ci_on_host" ? (body[key] ? 1 : 0) : body[key] ?? null);
+    }
+  }
+
+  if (sets.length === 0) {
+    return c.json({ error: "No fields to update" }, 400);
+  }
+
+  values.push(existing.id);
+  db.run(`UPDATE repos SET ${sets.join(", ")} WHERE id = ?`, values);
+
+  const updated = db.query("SELECT * FROM repos WHERE id = ?").get(existing.id);
+  logger.info("Repo updated", { name, fields: sets.map((s) => s.split(" ")[0]) });
+  return c.json(updated);
+});
+
 repos.delete("/:name", (c) => {
   const name = c.req.param("name");
   const db = getDb();

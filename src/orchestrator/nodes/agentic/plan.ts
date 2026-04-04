@@ -25,7 +25,7 @@ export async function executePlan(
   );
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -33,7 +33,7 @@ export async function executePlan(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 7,
+    maxTurns: 12,
     allowedTools,
     mcpConfigPath,
     agentRunId,

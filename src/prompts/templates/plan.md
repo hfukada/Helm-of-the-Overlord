@@ -32,6 +32,7 @@ Do NOT implement -- only plan.
 
 ### Execution Plan
 Numbered checklist. Each step: the file path, what to change, and why.
+Group ALL changes to the same file into ONE step. The implementation agent has limited turns -- never split one file across multiple steps.
 
 For multi-repo tasks, prefix each step with `[repo-name]`:
 1. [ ] [my-api] In `src/auth.ts`, add logout handler

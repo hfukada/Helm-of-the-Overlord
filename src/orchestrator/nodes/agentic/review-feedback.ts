@@ -103,7 +103,7 @@ export async function executeUnderstandReview(
   saveAgentRun(agentRunId, task.id, "understand_review", prompt, model);
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -157,7 +157,7 @@ export async function executeReviewSmallFeedback(
   saveAgentRun(agentRunId, task.id, "review_small_feedback", prompt, model);
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -226,7 +226,7 @@ export async function executeReviewLargeFeedback(
   saveAgentRun(agentRunId, task.id, "review_large_feedback", prompt, model);
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -234,7 +234,7 @@ export async function executeReviewLargeFeedback(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 7,
+    maxTurns: 10,
     allowedTools,
     mcpConfigPath,
     agentRunId,

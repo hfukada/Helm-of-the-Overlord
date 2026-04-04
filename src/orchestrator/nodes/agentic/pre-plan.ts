@@ -32,8 +32,8 @@ export async function executePrePlan(
     model,
     maxTurns: 3,
     allowedTools: mcpConfigPath
-      ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file"]
-      : [],
+      ? ["mcp__hoto__search_knowledge", "Read", "Glob"]
+      : ["Read", "Glob"],
     mcpConfigPath,
     agentRunId,
     taskId: task.id,

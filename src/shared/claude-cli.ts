@@ -290,7 +290,11 @@ export async function claudeBatch(
   const exitCode = await proc.exited;
   if (exitCode !== 0 && !error) {
     const stderr = await getStderr(proc);
-    error = `claude exited with code ${exitCode}: ${stderr}`;
+    if (exitCode === 1 && !stderr.trim()) {
+      error = `claude reached max turns limit (agent may not have finished all work)`;
+    } else {
+      error = `claude exited with code ${exitCode}: ${stderr}`;
+    }
   }
 
   return { text, usage, error };
@@ -396,7 +400,11 @@ export async function claudeStream(
   const exitCode = await proc.exited;
   if (exitCode !== 0 && !error) {
     const stderr = await getStderr(proc);
-    error = `claude exited with code ${exitCode}: ${stderr}`;
+    if (exitCode === 1 && !stderr.trim()) {
+      error = `claude reached max turns limit (agent may not have finished all work)`;
+    } else {
+      error = `claude exited with code ${exitCode}: ${stderr}`;
+    }
   }
 
   return { text, usage, error };

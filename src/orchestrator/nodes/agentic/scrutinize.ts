@@ -49,7 +49,7 @@ export async function executeScrutinize(
   );
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -57,7 +57,7 @@ export async function executeScrutinize(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 7,
+    maxTurns: 10,
     allowedTools,
     mcpConfigPath,
     agentRunId,
@@ -149,7 +149,7 @@ export async function executePlanAgain(
   );
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -157,7 +157,7 @@ export async function executePlanAgain(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 7,
+    maxTurns: 10,
     allowedTools,
     mcpConfigPath,
     agentRunId,
@@ -245,7 +245,7 @@ export async function executeFinalizePlan(
   );
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   const result = await runClaude({
@@ -253,7 +253,7 @@ export async function executeFinalizePlan(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 7,
+    maxTurns: 10,
     allowedTools,
     mcpConfigPath,
     agentRunId,

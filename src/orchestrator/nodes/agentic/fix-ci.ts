@@ -58,7 +58,7 @@ export async function executeFixCi(
   const db = getDb();
 
   const readTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "mcp__hoto__list_files", "mcp__hoto__read_file", "Read", "Glob", "Grep"]
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
   // === Step 1: Plan the fix ===
