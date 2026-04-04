@@ -15,6 +15,7 @@ export type TaskStatus =
   | "waiting_for_input"
   | "accepted"
   | "committed"
+  | "error"
   | "failed"
   | "cancelled";
 

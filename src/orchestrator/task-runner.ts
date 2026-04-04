@@ -539,7 +539,7 @@ export async function runTask(taskId: string): Promise<void> {
       manager.notifyAgentOutput(task.id, `[error] Plan output too short (${planResult.plan.length} chars). The planning agent may have run out of turns while exploring.`).catch(() => {});
     }
     state = advanceState(state, "error");
-    updateTaskStatus(task.id, "review", state);
+    updateTaskStatus(task.id, "error", state);
     return;
   }
 
@@ -633,7 +633,7 @@ export async function runTask(taskId: string): Promise<void> {
     if (isTaskCancelled(task.id)) return;
     logger.error("Implementation failed", { taskId: task.id, error: implResult.error });
     state = advanceState(state, "error");
-    updateTaskStatus(task.id, "review", state);
+    updateTaskStatus(task.id, "error", state);
     return;
   }
 
@@ -988,7 +988,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       if (isTaskCancelled(task.id)) return;
       logger.error("Small feedback planning failed", { taskId: task.id, error: smallResult.error });
       state = advanceState(state, "error");
-      updateTaskStatus(task.id, "review", state);
+      updateTaskStatus(task.id, "error", state);
       return;
     }
 
@@ -1012,7 +1012,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       if (isTaskCancelled(task.id)) return;
       logger.error("Large feedback planning failed", { taskId: task.id, error: largeResult.error });
       state = advanceState(state, "error");
-      updateTaskStatus(task.id, "review", state);
+      updateTaskStatus(task.id, "error", state);
       return;
     }
 
@@ -1081,7 +1081,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     if (isTaskCancelled(task.id)) return;
     logger.error("Revision implementation failed", { taskId: task.id, error: implResult.error });
     state = advanceState(state, "error");
-    updateTaskStatus(task.id, "review", state);
+    updateTaskStatus(task.id, "error", state);
     return;
   }
 
