@@ -11,13 +11,13 @@ const COMMAND_HELP: Record<string, string> = {
     "Example: !list",
   ].join("\n"),
   status: [
-    "!status <id>",
+    "!status [id]",
     "Show details for a task. You can use just the first few characters of the ID.",
     "Shows: title, full ID, status, branch name, created/updated timestamps.",
     "Example: !status 01JA3B",
   ].join("\n"),
   cancel: [
-    "!cancel <id>",
+    "!cancel [id]",
     "Cancel a running task. Kills subprocesses, tears down containers, removes the worktree.",
     "Cannot cancel tasks already in a terminal state (committed, cancelled).",
     "Example: !cancel 01JA3B",
@@ -577,9 +577,13 @@ export class MessagingManager {
   }
 
   private async cmdCancel(cmd: CommandEvent): Promise<void> {
-    const taskId = cmd.args[0];
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT task_id FROM messaging_channels WHERE channel_id = ?"
+    ).get(cmd.channelId) as { task_id: string } | null;
+    const taskId = cmd.args[0] ?? channelRow?.task_id;
     if (!taskId) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !cancel <task-id>");
+      await this.provider.sendMessage(cmd.channelId, "Usage: !cancel [task-id]");
       return;
     }
 
@@ -593,16 +597,19 @@ export class MessagingManager {
   }
 
   private async cmdStatus(cmd: CommandEvent): Promise<void> {
-    const taskId = cmd.args[0];
-    if (!taskId) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !status <task-id>");
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT task_id FROM messaging_channels WHERE channel_id = ?"
+    ).get(cmd.channelId) as { task_id: string } | null;
+    const rawId = cmd.args[0] ?? channelRow?.task_id;
+    if (!rawId) {
+      await this.provider.sendMessage(cmd.channelId, "Usage: !status [task-id]");
       return;
     }
-
-    const db = getDb();
-    const task = db.query(
-      "SELECT id, title, status, branch_name, created_at, updated_at FROM tasks WHERE id LIKE ?"
-    ).get(`${taskId}%`) as Record<string, string> | null;
+    // Use exact match when ID came from channel row (full ULID); prefix match when typed by user
+    const task = cmd.args[0]
+      ? (db.query("SELECT id, title, status, branch_name, created_at, updated_at FROM tasks WHERE id LIKE ?").get(`${rawId}%`) as Record<string, string> | null)
+      : (db.query("SELECT id, title, status, branch_name, created_at, updated_at FROM tasks WHERE id = ?").get(rawId) as Record<string, string> | null);
 
     if (!task) {
       await this.provider.sendMessage(cmd.channelId, "Task not found.");
@@ -1007,8 +1014,8 @@ export class MessagingManager {
       "",
       "General (any channel):",
       "  !list                     List recent tasks (last 20)",
-      "  !status <id>              Show task details (status, branch, timestamps)",
-      "  !cancel <id>              Cancel a running task and clean up its worktree",
+      "  !status [id]              Show task details (status, branch, timestamps)",
+      "  !cancel [id]              Cancel a running task and clean up its worktree",
       "  !delete-task <id>         Delete a task and remove all associated data",
       "  !clean-done               Delete all finished tasks (committed, cancelled, failed)",
       "  !run <description>        Submit a new task",
