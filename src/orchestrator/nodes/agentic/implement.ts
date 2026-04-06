@@ -4,6 +4,29 @@ import { runClaude } from "../../subprocess";
 import { buildImplementPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
+import { logger } from "../../../shared/logger";
+
+const MIN_TURNS = 15;
+const MAX_TURNS = 50;
+
+/**
+ * Estimate the number of tool turns needed based on the plan content.
+ * Heuristic: ~3 baseline + ~2.5 per unique file + ~1 per new file.
+ */
+function estimateTurns(plan: string): number {
+  // Count unique file paths referenced in backticks
+  const fileRefs = plan.match(/`[^`]+\.\w+`/g) ?? [];
+  const uniqueFiles = new Set(fileRefs.map((f) => f.replace(/`/g, ""))).size;
+
+  // Count new file indicators
+  const newFiles = (plan.match(/\(new\s*file\)|\bnew file\b|\(create\)/gi) ?? []).length;
+
+  const estimate = 3 + Math.ceil(uniqueFiles * 2.5) + newFiles;
+  const clamped = Math.max(MIN_TURNS, Math.min(MAX_TURNS, estimate));
+
+  logger.info("Estimated implement turns", { uniqueFiles, newFiles, estimate, clamped });
+  return clamped;
+}
 
 export async function executeImplement(
   task: Task,
@@ -33,12 +56,14 @@ export async function executeImplement(
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep", "Write", "Edit", "Bash"]
     : ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
 
+  const maxTurns = estimateTurns(plan);
+
   const result = await runClaude({
     prompt,
     systemPrompt,
     workDir,
     model,
-    maxTurns: 30,
+    maxTurns,
     allowedTools,
     mcpConfigPath,
     addDirs: [workDir],
