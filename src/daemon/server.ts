@@ -14,7 +14,6 @@ import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
 import { getDb } from "../knowledge/db";
 import { MessagingManager, setMessagingManager } from "../messaging/manager";
-import { MatrixProvider } from "../messaging/matrix/client";
 import { initGiteaClient } from "../gitea/client";
 import { restartPollersForReviewTasks } from "../gitea/review-poller";
 import { writeFile, unlink } from "node:fs/promises";
@@ -71,21 +70,48 @@ export async function startDaemon(): Promise<void> {
     }
   }
 
-  // Initialize messaging if configured
+  // Initialize messaging
+  const manager = new MessagingManager();
+  setMessagingManager(manager);
+
+  const activeConnectors: string[] = [];
+
   if (config.matrixHomeserverUrl) {
     try {
-      const provider = new MatrixProvider();
-      const manager = new MessagingManager(provider);
-      setMessagingManager(manager);
-      await manager.start();
-      const mainChannelId = provider.getMainChannelId();
+      const { MatrixProvider } = await import("../messaging/matrix/client");
+      const matrixProvider = new MatrixProvider();
+      await matrixProvider.connect();
+      manager.registerProvider(matrixProvider);
+      const mainChannelId = matrixProvider.getMainChannelId();
       if (mainChannelId) {
-        manager.setMainChannel(mainChannelId);
+        manager.setMainChannel("matrix", mainChannelId);
       }
+      activeConnectors.push("matrix");
       logger.info("Matrix messaging initialized", { mainChannel: mainChannelId });
     } catch (err) {
       logger.warn("Matrix messaging failed to initialize, continuing without it", { error: String(err) });
     }
+  }
+
+  if (config.discordBotToken && config.discordGuildId) {
+    try {
+      const { DiscordProvider } = await import("../messaging/discord/client");
+      const discordProvider = new DiscordProvider(config.discordBotToken, config.discordGuildId);
+      await discordProvider.connect();
+      manager.registerProvider(discordProvider);
+      const mainChannelId = discordProvider.getMainChannelId();
+      if (mainChannelId) {
+        manager.setMainChannel("discord", mainChannelId);
+      }
+      activeConnectors.push("discord");
+      logger.info("Discord messaging initialized", { mainChannel: mainChannelId });
+    } catch (err) {
+      logger.warn("Discord messaging failed to initialize, continuing without it", { error: String(err) });
+    }
+  }
+
+  if (activeConnectors.length > 0) {
+    logger.info("Messaging connectors active", { connectors: activeConnectors });
   }
 
   // Write PID file

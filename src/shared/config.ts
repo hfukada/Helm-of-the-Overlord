@@ -14,6 +14,8 @@ export interface Config {
   matrixBotUser: string;
   matrixBotPassword: string | null;
   matrixBotToken: string | null;
+  discordBotToken: string | null;
+  discordGuildId: string | null;
   giteaUrl: string | null;
   giteaAdminToken: string | null;
   giteaBotUser: string;
@@ -41,6 +43,8 @@ function loadConfig(): Config {
   const matrixBotUser = process.env.MATRIX_BOT_USER ?? "@hoto:localhost";
   const matrixBotPassword = process.env.MATRIX_BOT_PASSWORD ?? null;
   const matrixBotToken = process.env.MATRIX_BOT_TOKEN ?? null;
+  const discordBotToken = process.env.DISCORD_BOT_TOKEN ?? null;
+  const discordGuildId = process.env.DISCORD_GUILD_ID ?? null;
 
   const giteaUrl = process.env.GITEA_URL ?? null;
   const giteaAdminToken = process.env.GITEA_ADMIN_TOKEN ?? null;
@@ -61,6 +65,8 @@ function loadConfig(): Config {
     matrixBotUser,
     matrixBotPassword,
     matrixBotToken,
+    discordBotToken,
+    discordGuildId,
     giteaUrl,
     giteaAdminToken,
     giteaBotUser,

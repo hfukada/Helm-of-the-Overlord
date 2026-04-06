@@ -4,6 +4,7 @@ export interface CommandEvent {
   rawText: string;
   channelId: string;
   senderId: string;
+  providerName: string;
 }
 
 export interface MessageEvent {
@@ -11,9 +12,11 @@ export interface MessageEvent {
   channelId: string;
   senderId: string;
   senderName: string;
+  providerName: string;
 }
 
 export interface MessagingProvider {
+  readonly providerName: string;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   getMainChannelId(): string | null;

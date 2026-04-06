@@ -9,6 +9,8 @@ import { logger } from "../../shared/logger";
 matrixLogger.setLevel("warn");
 
 export class MatrixProvider implements MessagingProvider {
+  readonly providerName = "matrix";
+
   private client: sdk.MatrixClient | null = null;
   private commandHandlers: Array<(cmd: CommandEvent) => Promise<void>> = [];
   private messageHandlers: Array<(msg: MessageEvent) => Promise<void>> = [];
@@ -89,6 +91,7 @@ export class MatrixProvider implements MessagingProvider {
           rawText: body,
           channelId,
           senderId,
+          providerName: "matrix",
         };
 
         for (const handler of this.commandHandlers) {
@@ -100,6 +103,7 @@ export class MatrixProvider implements MessagingProvider {
           channelId,
           senderId,
           senderName,
+          providerName: "matrix",
         };
 
         for (const handler of this.messageHandlers) {

@@ -17,6 +17,7 @@
   "dependencies": {
     "@chroma-core/ollama": "0.1.8",
     "chromadb": "3.4.0",
+    "discord.js": "14.16.3",
     "hono": "^4.7.0",
     "matrix-js-sdk": "^34.0.0",
     "ollama": "^0.6.3",
