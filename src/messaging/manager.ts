@@ -3,6 +3,7 @@ import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
 import type { Task, TaskStatus } from "../shared/types";
+import { claudeText } from "../shared/claude-cli";
 
 const COMMAND_HELP: Record<string, string> = {
   list: [
@@ -213,17 +214,37 @@ export class MessagingManager {
     }
   }
 
+  private async guessIntent(text: string): Promise<"run" | "ask" | "cancel"> {
+    const prompt =
+      "Classify the following user message into exactly one of these intents: run, ask, cancel.\n" +
+      "- run: the user wants to start a task or is asking if hoto can do something for them.\n" +
+      "- ask: the user has a question about how something works.\n" +
+      "- cancel: the user wants to cancel something.\n" +
+      "Reply with a single lowercase word: run, ask, or cancel.\n\n" +
+      `Message: ${text}`;
+    try {
+      const reply = (await claudeText(prompt)).trim().toLowerCase();
+      if (reply === "run" || reply === "ask" || reply === "cancel") {
+        return reply;
+      }
+      return "ask";
+    } catch (err) {
+      logger.error({ err }, "guessIntent failed, defaulting to ask");
+      return "ask";
+    }
+  }
+
   private async handleMessage(msg: MessageEvent): Promise<void> {
-    // Plain-text messages in the main channel are treated as !ask queries
+    // Plain-text messages in the main channel use intent guessing
     if (this.mainChannelId && msg.channelId === this.mainChannelId && !msg.text.startsWith("!")) {
-      const askEvent: CommandEvent = {
-        command: "ask",
-        args: msg.text.split(" "),
-        rawText: msg.text,
-        channelId: msg.channelId,
-        senderId: msg.senderId,
-      };
-      await this.cmdAsk(askEvent);
+      const intent = await this.guessIntent(msg.text);
+      if (intent === "run") {
+        await this.cmdRun({ ...msg, command: "run", args: msg.text.split(" "), rawText: msg.text });
+      } else if (intent === "cancel") {
+        await this.provider.sendMessage(msg.channelId, "To cancel a task, use: !cancel <task-id>");
+      } else {
+        await this.cmdAsk({ ...msg, command: "ask", args: msg.text.split(" "), rawText: msg.text });
+      }
       return;
     }
 
