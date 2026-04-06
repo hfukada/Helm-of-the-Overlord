@@ -163,10 +163,38 @@ export class MessagingManager {
   private getProviderForTask(taskId: string): MessagingProvider | null {
     const db = getDb();
     const row = db.query(
-      "SELECT provider FROM messaging_channels WHERE task_id = ?"
+      "SELECT provider FROM messaging_channels WHERE task_id = ? LIMIT 1"
     ).get(taskId) as { provider: string } | null;
     if (!row) return null;
     return this.providers.get(row.provider) ?? null;
+  }
+
+  /** Get all (provider, channelId) pairs for a task. */
+  private getTaskChannels(taskId: string): Array<{ provider: MessagingProvider; channelId: string }> {
+    const db = getDb();
+    const rows = db.query(
+      "SELECT provider, channel_id FROM messaging_channels WHERE task_id = ?"
+    ).all(taskId) as Array<{ provider: string; channel_id: string }>;
+
+    const result: Array<{ provider: MessagingProvider; channelId: string }> = [];
+    for (const row of rows) {
+      const p = this.providers.get(row.provider);
+      if (p) result.push({ provider: p, channelId: row.channel_id });
+    }
+    return result;
+  }
+
+  /** Send a message to all channels for a task. */
+  private async sendToTaskChannels(taskId: string, message: string): Promise<void> {
+    for (const { provider, channelId } of this.getTaskChannels(taskId)) {
+      try {
+        await provider.sendMessage(channelId, message);
+      } catch (err) {
+        logger.warn("Failed to send to task channel", {
+          taskId, provider: provider.providerName, error: String(err),
+        });
+      }
+    }
   }
 
   private getSenderProvider(event: { providerName: string }): MessagingProvider | null {
@@ -306,15 +334,10 @@ export class MessagingManager {
   }
 
   async notifyTaskStatusChange(task: Task, newStatus: TaskStatus): Promise<void> {
+    const channels = this.getTaskChannels(task.id);
+    if (channels.length === 0) return;
+
     const db = getDb();
-    const channelRow = db.query(
-      "SELECT channel_id FROM messaging_channels WHERE task_id = ?"
-    ).get(task.id) as { channel_id: string } | null;
-
-    if (!channelRow) return;
-
-    const p = this.getProviderForTask(task.id);
-    if (!p) return;
 
     // Check for Gitea PR URLs (from task_prs)
     const prs = db.query(
@@ -353,39 +376,29 @@ export class MessagingManager {
     };
 
     const message = statusMessages[newStatus];
-    if (message) {
-      await p.sendMessage(channelRow.channel_id, `[${newStatus}] ${message}`);
-    }
-
-    if (newStatus === "review" && prs.length > 0) {
-      const topic = prs.map((pr) => pr.pr_url).join(" | ");
-      await p.setChannelTopic(channelRow.channel_id, `Review: ${topic}`);
+    for (const { provider, channelId } of channels) {
+      try {
+        if (message) {
+          await provider.sendMessage(channelId, `[${newStatus}] ${message}`);
+        }
+        if (newStatus === "review" && prs.length > 0) {
+          const topic = prs.map((pr) => pr.pr_url).join(" | ");
+          await provider.setChannelTopic(channelId, `Review: ${topic}`);
+        }
+      } catch (err) {
+        logger.warn("Failed to notify task status change", {
+          taskId: task.id, provider: provider.providerName, error: String(err),
+        });
+      }
     }
   }
 
   async notifyAgentOutput(taskId: string, text: string): Promise<void> {
-    const db = getDb();
-    const channelRow = db.query(
-      "SELECT channel_id FROM messaging_channels WHERE task_id = ?"
-    ).get(taskId) as { channel_id: string } | null;
-
-    if (!channelRow) return;
-
-    const p = this.getProviderForTask(taskId);
-    if (!p) return;
-
-    // Truncate long output
     const truncated = text.length > 2000 ? `${text.slice(0, 2000)}\n[truncated]` : text;
-    await p.sendMessage(channelRow.channel_id, truncated);
+    await this.sendToTaskChannels(taskId, truncated);
   }
 
   async notifyReviewReady(task: Task): Promise<void> {
-    // Determine which provider this task belongs to, fall back to first registered
-    const p = this.getProviderForTask(task.id) ?? this.providers.values().next().value ?? null;
-    if (!p) return;
-    const mainChannelId = this.mainChannelIds.get(p.providerName) ?? null;
-    if (!mainChannelId) return;
-
     const db = getDb();
     const prs = db.query(
       `SELECT tp.pr_url, r.name as repo_name FROM task_prs tp
@@ -402,74 +415,74 @@ export class MessagingManager {
     } else {
       msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review.`;
     }
-    await p.sendMessage(mainChannelId, msg);
+
+    // Announce in all main channels
+    for (const [providerName, p] of this.providers) {
+      const mainChannelId = this.mainChannelIds.get(providerName);
+      if (mainChannelId) {
+        try { await p.sendMessage(mainChannelId, msg); } catch {}
+      }
+    }
   }
 
   async notifyInputRequest(taskId: string, question: string): Promise<void> {
-    const db = getDb();
-    const channelRow = db.query(
-      "SELECT channel_id FROM messaging_channels WHERE task_id = ?"
-    ).get(taskId) as { channel_id: string } | null;
-
-    if (channelRow) {
-      const p = this.getProviderForTask(taskId);
-      if (!p) return;
-      await p.sendMessage(
-        channelRow.channel_id,
-        `[Question from agent] ${question}\n\nReply in this channel to answer.`
-      );
-    }
+    await this.sendToTaskChannels(
+      taskId,
+      `[Question from agent] ${question}\n\nReply in this channel to answer.`
+    );
   }
 
   async createTaskChannel(task: Task, branchName?: string): Promise<string | null> {
-    try {
-      const creator = this.taskCreators.get(task.id);
-      const providerName = creator?.providerName ?? (this.providers.keys().next().value as string | undefined) ?? "matrix";
-      const p = this.providers.get(providerName);
-      if (!p) {
-        logger.warn("No provider available for task channel creation", { taskId: task.id });
-        return null;
+    const creator = this.taskCreators.get(task.id);
+    let firstChannelId: string | null = null;
+
+    const summary = [
+      `Task: ${task.title}`,
+      `ID: ${task.id}`,
+      `Branch: ${branchName ?? "pending"}`,
+    ].join("\n");
+
+    const announcement = [
+      `New task: "${task.title}"`,
+      `  ID: ${task.id}`,
+      `  Branch: ${branchName ?? "pending"}`,
+    ].join("\n");
+
+    // Create a task channel on every active provider
+    for (const [providerName, p] of this.providers) {
+      try {
+        const channelId = await p.createTaskChannel(task.id, task.title);
+
+        const db = getDb();
+        db.run(
+          "INSERT OR REPLACE INTO messaging_channels (task_id, channel_id, provider) VALUES (?, ?, ?)",
+          [task.id, channelId, providerName]
+        );
+
+        if (!firstChannelId) firstChannelId = channelId;
+
+        // Announce in main channel
+        const mainChannelId = this.mainChannelIds.get(providerName);
+        if (mainChannelId) {
+          await p.sendMessage(mainChannelId, announcement);
+        }
+
+        // Invite the task creator if they used this provider
+        if (creator?.providerName === providerName && creator.senderId) {
+          await p.inviteUser(channelId, creator.senderId);
+        }
+
+        // Post summary in the task channel
+        await p.sendMessage(channelId, summary);
+      } catch (err) {
+        logger.warn("Failed to create task channel on provider", {
+          taskId: task.id, provider: providerName, error: String(err),
+        });
       }
-
-      const channelId = await p.createTaskChannel(task.id, task.title);
-
-      const db = getDb();
-      db.run(
-        "INSERT OR REPLACE INTO messaging_channels (task_id, channel_id, provider) VALUES (?, ?, ?)",
-        [task.id, channelId, providerName]
-      );
-
-      // Announce in main channel
-      const mainChannelId = this.mainChannelIds.get(providerName);
-      if (mainChannelId) {
-        const lines = [
-          `New task: "${task.title}"`,
-          `  ID: ${task.id}`,
-          `  Branch: ${branchName ?? "pending"}`,
-        ];
-        await p.sendMessage(mainChannelId, lines.join("\n"));
-      }
-
-      // Invite the task creator if known
-      const creatorSenderId = creator?.senderId;
-      if (creatorSenderId) {
-        await p.inviteUser(channelId, creatorSenderId);
-        this.taskCreators.delete(task.id);
-      }
-
-      // Post summary in the task channel itself
-      const lines = [
-        `Task: ${task.title}`,
-        `ID: ${task.id}`,
-        `Branch: ${branchName ?? "pending"}`,
-      ];
-      await p.sendMessage(channelId, lines.join("\n"));
-
-      return channelId;
-    } catch (err) {
-      logger.warn("Failed to create task channel", { taskId: task.id, error: String(err) });
-      return null;
     }
+
+    this.taskCreators.delete(task.id);
+    return firstChannelId;
   }
 
   async archiveTaskChannel(taskId: string): Promise<void> {
@@ -491,17 +504,13 @@ export class MessagingManager {
   }
 
   async kickAndArchiveTaskChannel(taskId: string): Promise<void> {
-    const db = getDb();
-    const channelRow = db.query(
-      "SELECT channel_id FROM messaging_channels WHERE task_id = ?"
-    ).get(taskId) as { channel_id: string } | null;
-
-    if (!channelRow) return;
-
-    const p = this.getProviderForTask(taskId);
-    if (p) {
-      try { await p.kickAllMembers(channelRow.channel_id); } catch (err) { logger.warn("Failed to kick members", { taskId, error: String(err) }); }
-      try { await p.archiveChannel(channelRow.channel_id); } catch (err) { logger.warn("Failed to archive task channel", { taskId, error: String(err) }); }
+    for (const { provider, channelId } of this.getTaskChannels(taskId)) {
+      try { await provider.kickAllMembers(channelId); } catch (err) {
+        logger.warn("Failed to kick members", { taskId, provider: provider.providerName, error: String(err) });
+      }
+      try { await provider.archiveChannel(channelId); } catch (err) {
+        logger.warn("Failed to archive task channel", { taskId, provider: provider.providerName, error: String(err) });
+      }
     }
   }
 

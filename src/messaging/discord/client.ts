@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, ChannelType, type TextChannel } from "discord.js";
+import { Client, GatewayIntentBits, ChannelType, PermissionFlagsBits, type TextChannel } from "discord.js";
 import { getDb } from "../../knowledge/db";
 import { logger } from "../../shared/logger";
 import type { MessagingProvider, CommandEvent, MessageEvent } from "../interface";
@@ -114,6 +114,10 @@ export class DiscordProvider implements MessagingProvider {
         type: ChannelType.GuildText,
         topic: title,
       }) as TextChannel;
+
+      // Send an initial message so the channel appears in the user's channel list
+      await channel.send(`Task: **${title}**\nID: \`${taskId}\``);
+
       return channel.id;
     } catch (err) {
       logger.warn("Discord: failed to create task channel", { taskId, error: String(err) });
@@ -152,8 +156,19 @@ export class DiscordProvider implements MessagingProvider {
     await this.sendMessage(channelId, plaintext);
   }
 
-  async inviteUser(_channelId: string, _userId: string): Promise<void> {
-    // No-op: Discord users join servers, not individual channels.
+  async inviteUser(channelId: string, userId: string): Promise<void> {
+    try {
+      const channel = await this.client.channels.fetch(channelId) as TextChannel;
+      // Grant the user explicit permission to view the channel
+      await channel.permissionOverwrites.create(userId, {
+        ViewChannel: true,
+        SendMessages: true,
+      });
+      // Mention the user so they get a notification
+      await channel.send(`<@${userId}> You've been assigned to this task.`);
+    } catch (err) {
+      logger.warn("Discord: failed to invite user to channel", { channelId, userId, error: String(err) });
+    }
   }
 
   async kickAllMembers(_channelId: string): Promise<void> {

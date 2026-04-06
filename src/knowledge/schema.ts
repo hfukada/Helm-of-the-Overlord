@@ -233,6 +233,26 @@ export function runMigrations(db: Database): void {
     }
   }
 
+  // Migrate messaging_channels to composite PK (task_id, provider) if needed
+  const hasOldSchema = db.query(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='messaging_channels'"
+  ).get() as { sql: string } | null;
+  if (hasOldSchema?.sql && !hasOldSchema.sql.includes("PRIMARY KEY (task_id, provider)")) {
+    db.exec(`CREATE TABLE IF NOT EXISTS messaging_channels_v2 (
+      task_id TEXT NOT NULL,
+      channel_id TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'matrix',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (task_id, provider)
+    )`);
+    db.exec(
+      `INSERT OR IGNORE INTO messaging_channels_v2 (task_id, channel_id, provider, created_at)
+       SELECT task_id, channel_id, provider, created_at FROM messaging_channels`
+    );
+    db.exec("DROP TABLE messaging_channels");
+    db.exec("ALTER TABLE messaging_channels_v2 RENAME TO messaging_channels");
+  }
+
   // Backfill task_repos from existing tasks.repo_id (only where the repo still exists)
   db.exec(
     `INSERT OR IGNORE INTO task_repos (task_id, repo_id, role)
