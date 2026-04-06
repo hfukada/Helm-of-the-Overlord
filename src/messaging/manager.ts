@@ -117,43 +117,55 @@ const COMMAND_HELP: Record<string, string> = {
 };
 
 export class MessagingManager {
-  private provider: MessagingProvider;
-  private mainChannelId: string | null = null;
-  private taskCreators = new Map<string, string>(); // taskId -> Matrix userId
+  private providers = new Map<string, MessagingProvider>();
+  private mainChannelIds = new Map<string, string>(); // providerName -> channelId
+  private taskCreators = new Map<string, { senderId: string; providerName: string }>();
 
-  constructor(provider: MessagingProvider) {
-    this.provider = provider;
-  }
+  constructor() {}
 
-  async start(): Promise<void> {
-    await this.provider.connect();
+  registerProvider(provider: MessagingProvider): void {
+    this.providers.set(provider.providerName, provider);
 
-    this.provider.onCommand(async (cmd) => {
+    provider.onCommand(async (cmd) => {
       try {
         await this.handleCommand(cmd);
       } catch (err) {
         logger.error("Command handler failed", { command: cmd.command, error: String(err) });
-        await this.provider.sendMessage(cmd.channelId, `Error: ${err}`);
+        const p = this.providers.get(cmd.providerName);
+        if (p) await p.sendMessage(cmd.channelId, `Error: ${err}`);
       }
     });
 
-    this.provider.onMessage(async (msg) => {
+    provider.onMessage(async (msg) => {
       try {
         await this.handleMessage(msg);
       } catch (err) {
         logger.error("Message handler failed", { error: String(err) });
       }
     });
-
-    logger.info("Messaging manager started");
   }
 
   async stop(): Promise<void> {
-    await this.provider.disconnect();
+    for (const provider of this.providers.values()) {
+      await provider.disconnect();
+    }
   }
 
-  setMainChannel(channelId: string): void {
-    this.mainChannelId = channelId;
+  setMainChannel(providerName: string, channelId: string): void {
+    this.mainChannelIds.set(providerName, channelId);
+  }
+
+  private getProviderForTask(taskId: string): MessagingProvider | null {
+    const db = getDb();
+    const row = db.query(
+      "SELECT provider FROM messaging_channels WHERE task_id = ?"
+    ).get(taskId) as { provider: string } | null;
+    if (!row) return null;
+    return this.providers.get(row.provider) ?? null;
+  }
+
+  private getSenderProvider(event: { providerName: string }): MessagingProvider | null {
+    return this.providers.get(event.providerName) ?? null;
   }
 
   private async handleCommand(cmd: CommandEvent): Promise<void> {
@@ -210,7 +222,7 @@ export class MessagingManager {
         await this.cmdHelp(cmd);
         break;
       default:
-        await this.provider.sendMessage(cmd.channelId, `Unknown command: !${cmd.command}. Type !help for available commands.`);
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Unknown command: !${cmd.command}. Type !help for available commands.`);
     }
   }
 
@@ -236,12 +248,13 @@ export class MessagingManager {
 
   private async handleMessage(msg: MessageEvent): Promise<void> {
     // Plain-text messages in the main channel use intent guessing
-    if (this.mainChannelId && msg.channelId === this.mainChannelId && !msg.text.startsWith("!")) {
+    const senderMainChannelId = this.mainChannelIds.get(msg.providerName) ?? null;
+    if (senderMainChannelId && msg.channelId === senderMainChannelId && !msg.text.startsWith("!")) {
       const intent = await this.guessIntent(msg.text);
       if (intent === "run") {
         await this.cmdRun({ ...msg, command: "run", args: msg.text.split(" "), rawText: msg.text });
       } else if (intent === "cancel") {
-        await this.provider.sendMessage(msg.channelId, "To cancel a task, use: !cancel <task-id>");
+        await this.getSenderProvider(msg)?.sendMessage(msg.channelId, "To cancel a task, use: !cancel <task-id>");
       } else {
         await this.cmdAsk({ ...msg, command: "ask", args: msg.text.split(" "), rawText: msg.text });
       }
@@ -272,7 +285,7 @@ export class MessagingManager {
         "UPDATE task_input_requests SET answer = ?, status = 'answered', answered_at = ? WHERE id = ?",
         [msg.text, now, pendingRequest.id]
       );
-      await this.provider.sendMessage(msg.channelId, "Answer received. Resuming task...");
+      await this.getSenderProvider(msg)?.sendMessage(msg.channelId, "Answer received. Resuming task...");
     }
   }
 
@@ -292,6 +305,9 @@ export class MessagingManager {
 
     if (!channelRow) return;
 
+    const p = this.getProviderForTask(task.id);
+    if (!p) return;
+
     // Check for Gitea PR URLs (from task_prs)
     const prs = db.query(
       `SELECT tp.pr_url, r.name as repo_name FROM task_prs tp
@@ -301,7 +317,7 @@ export class MessagingManager {
 
     let reviewMsg: string;
     if (prs.length > 1) {
-      const prList = prs.map((p) => `  ${p.repo_name}: ${p.pr_url}`).join("\n");
+      const prList = prs.map((pr) => `  ${pr.repo_name}: ${pr.pr_url}`).join("\n");
       reviewMsg = `Task ready for review:\n${prList}`;
     } else if (prs.length === 1) {
       reviewMsg = `Task ready for review: ${prs[0].pr_url}`;
@@ -330,12 +346,12 @@ export class MessagingManager {
 
     const message = statusMessages[newStatus];
     if (message) {
-      await this.provider.sendMessage(channelRow.channel_id, `[${newStatus}] ${message}`);
+      await p.sendMessage(channelRow.channel_id, `[${newStatus}] ${message}`);
     }
 
     if (newStatus === "review" && prs.length > 0) {
-      const topic = prs.map((p) => p.pr_url).join(" | ");
-      await this.provider.setChannelTopic(channelRow.channel_id, `Review: ${topic}`);
+      const topic = prs.map((pr) => pr.pr_url).join(" | ");
+      await p.setChannelTopic(channelRow.channel_id, `Review: ${topic}`);
     }
   }
 
@@ -347,31 +363,38 @@ export class MessagingManager {
 
     if (!channelRow) return;
 
+    const p = this.getProviderForTask(taskId);
+    if (!p) return;
+
     // Truncate long output
     const truncated = text.length > 2000 ? `${text.slice(0, 2000)}\n[truncated]` : text;
-    await this.provider.sendMessage(channelRow.channel_id, truncated);
+    await p.sendMessage(channelRow.channel_id, truncated);
   }
 
   async notifyReviewReady(task: Task): Promise<void> {
-    if (this.mainChannelId) {
-      const db = getDb();
-      const prs = db.query(
-        `SELECT tp.pr_url, r.name as repo_name FROM task_prs tp
-         JOIN repos r ON r.id = tp.repo_id
-         WHERE tp.task_id = ? AND tp.status = 'open' ORDER BY r.name`
-      ).all(task.id) as Array<{ pr_url: string; repo_name: string }>;
+    // Determine which provider this task belongs to, fall back to first registered
+    const p = this.getProviderForTask(task.id) ?? this.providers.values().next().value ?? null;
+    if (!p) return;
+    const mainChannelId = this.mainChannelIds.get(p.providerName) ?? null;
+    if (!mainChannelId) return;
 
-      let msg: string;
-      if (prs.length > 1) {
-        const prList = prs.map((p) => `  ${p.repo_name}: ${p.pr_url}`).join("\n");
-        msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review:\n${prList}`;
-      } else if (prs.length === 1) {
-        msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review: ${prs[0].pr_url}`;
-      } else {
-        msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review.`;
-      }
-      await this.provider.sendMessage(this.mainChannelId, msg);
+    const db = getDb();
+    const prs = db.query(
+      `SELECT tp.pr_url, r.name as repo_name FROM task_prs tp
+       JOIN repos r ON r.id = tp.repo_id
+       WHERE tp.task_id = ? AND tp.status = 'open' ORDER BY r.name`
+    ).all(task.id) as Array<{ pr_url: string; repo_name: string }>;
+
+    let msg: string;
+    if (prs.length > 1) {
+      const prList = prs.map((pr) => `  ${pr.repo_name}: ${pr.pr_url}`).join("\n");
+      msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review:\n${prList}`;
+    } else if (prs.length === 1) {
+      msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review: ${prs[0].pr_url}`;
+    } else {
+      msg = `Task "${task.title}" (${task.id.slice(0, 8)}) is ready for review.`;
     }
+    await p.sendMessage(mainChannelId, msg);
   }
 
   async notifyInputRequest(taskId: string, question: string): Promise<void> {
@@ -381,7 +404,9 @@ export class MessagingManager {
     ).get(taskId) as { channel_id: string } | null;
 
     if (channelRow) {
-      await this.provider.sendMessage(
+      const p = this.getProviderForTask(taskId);
+      if (!p) return;
+      await p.sendMessage(
         channelRow.channel_id,
         `[Question from agent] ${question}\n\nReply in this channel to answer.`
       );
@@ -390,32 +415,37 @@ export class MessagingManager {
 
   async createTaskChannel(task: Task, branchName?: string): Promise<string | null> {
     try {
-      const channelId = await this.provider.createTaskChannel(task.id, task.title);
+      const creator = this.taskCreators.get(task.id);
+      const providerName = creator?.providerName ?? (this.providers.keys().next().value as string | undefined) ?? "matrix";
+      const p = this.providers.get(providerName);
+      if (!p) {
+        logger.warn("No provider available for task channel creation", { taskId: task.id });
+        return null;
+      }
+
+      const channelId = await p.createTaskChannel(task.id, task.title);
 
       const db = getDb();
       db.run(
         "INSERT OR REPLACE INTO messaging_channels (task_id, channel_id, provider) VALUES (?, ?, ?)",
-        [task.id, channelId, "matrix"]
+        [task.id, channelId, providerName]
       );
 
-      const shortId = task.id.slice(0, 8).toLowerCase();
-      const channelAlias = `#hoto-task-${shortId}:localhost`;
-
       // Announce in main channel
-      if (this.mainChannelId) {
+      const mainChannelId = this.mainChannelIds.get(providerName);
+      if (mainChannelId) {
         const lines = [
           `New task: "${task.title}"`,
           `  ID: ${task.id}`,
           `  Branch: ${branchName ?? "pending"}`,
-          `  Channel: ${channelAlias}`,
         ];
-        await this.provider.sendMessage(this.mainChannelId, lines.join("\n"));
+        await p.sendMessage(mainChannelId, lines.join("\n"));
       }
 
       // Invite the task creator if known
-      const creatorId = this.taskCreators.get(task.id);
-      if (creatorId) {
-        await this.provider.inviteUser(channelId, creatorId);
+      const creatorSenderId = creator?.senderId;
+      if (creatorSenderId) {
+        await p.inviteUser(channelId, creatorSenderId);
         this.taskCreators.delete(task.id);
       }
 
@@ -425,7 +455,7 @@ export class MessagingManager {
         `ID: ${task.id}`,
         `Branch: ${branchName ?? "pending"}`,
       ];
-      await this.provider.sendMessage(channelId, lines.join("\n"));
+      await p.sendMessage(channelId, lines.join("\n"));
 
       return channelId;
     } catch (err) {
@@ -442,10 +472,13 @@ export class MessagingManager {
 
     if (!channelRow) return;
 
-    try {
-      await this.provider.archiveChannel(channelRow.channel_id);
-    } catch (err) {
-      logger.warn("Failed to archive task channel", { taskId, error: String(err) });
+    const p = this.getProviderForTask(taskId);
+    if (p) {
+      try {
+        await p.archiveChannel(channelRow.channel_id);
+      } catch (err) {
+        logger.warn("Failed to archive task channel", { taskId, error: String(err) });
+      }
     }
   }
 
@@ -457,16 +490,10 @@ export class MessagingManager {
 
     if (!channelRow) return;
 
-    try {
-      await this.provider.kickAllMembers(channelRow.channel_id);
-    } catch (err) {
-      logger.warn("Failed to kick members from task channel", { taskId, error: String(err) });
-    }
-
-    try {
-      await this.provider.archiveChannel(channelRow.channel_id);
-    } catch (err) {
-      logger.warn("Failed to archive task channel", { taskId, error: String(err) });
+    const p = this.getProviderForTask(taskId);
+    if (p) {
+      try { await p.kickAllMembers(channelRow.channel_id); } catch (err) { logger.warn("Failed to kick members", { taskId, error: String(err) }); }
+      try { await p.archiveChannel(channelRow.channel_id); } catch (err) { logger.warn("Failed to archive task channel", { taskId, error: String(err) }); }
     }
   }
 
@@ -487,11 +514,11 @@ export class MessagingManager {
 
     const description = descParts.join(" ");
     if (!description) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !run <description> [-r repo [-r repo2]]\nType !help run for details.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !run <description> [-r repo [-r repo2]]\nType !help run for details.");
       return;
     }
 
-    const body: Record<string, unknown> = { description, source: "matrix" };
+    const body: Record<string, unknown> = { description, source: cmd.providerName };
     if (repoNames.length > 1) {
       body.repo_names = repoNames;
     } else if (repoNames.length === 1) {
@@ -506,11 +533,11 @@ export class MessagingManager {
 
     if (res.ok) {
       const data = await res.json() as { id: string; title: string };
-      this.taskCreators.set(data.id, cmd.senderId);
-      await this.provider.sendMessage(cmd.channelId, `Task created: ${data.title} (${data.id.slice(0, 8)})`);
+      this.taskCreators.set(data.id, { senderId: cmd.senderId, providerName: cmd.providerName });
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task created: ${data.title} (${data.id.slice(0, 8)})`);
     } else {
       const err = await res.json() as { error: string };
-      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
     }
   }
 
@@ -520,7 +547,7 @@ export class MessagingManager {
     if (sub === "remove" || sub === "delete") {
       const name = cmd.args[1];
       if (!name) {
-        await this.provider.sendMessage(cmd.channelId, "Usage: !repo remove <name>");
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !repo remove <name>");
         return;
       }
 
@@ -529,21 +556,21 @@ export class MessagingManager {
       });
 
       if (res.ok) {
-        await this.provider.sendMessage(cmd.channelId, `Repo archived: ${name}`);
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo archived: ${name}`);
       } else {
         const body = await res.text();
         try {
           const err = JSON.parse(body) as { error: string };
-          await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+          await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
         } catch {
-          await this.provider.sendMessage(cmd.channelId, `Failed: ${body}`);
+          await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${body}`);
         }
       }
       return;
     }
 
     if (sub !== "add" || !cmd.args[1]) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !repo add <git-url> [--name <name>] | !repo remove <name>\nType !help repo for details.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !repo add <git-url> [--name <name>] | !repo remove <name>\nType !help repo for details.");
       return;
     }
 
@@ -558,7 +585,7 @@ export class MessagingManager {
       }
     }
 
-    await this.provider.sendMessage(cmd.channelId, `Cloning ${url}...`);
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Cloning ${url}...`);
 
     const body: Record<string, string | boolean> = { url };
     if (name) body.name = name;
@@ -575,10 +602,10 @@ export class MessagingManager {
       const info = [data.name];
       if (data.language) info.push(`(${data.language})`);
       if (data.framework) info.push(`[${data.framework}]`);
-      await this.provider.sendMessage(cmd.channelId, `Repo registered: ${info.join(" ")}. Indexing in background.`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo registered: ${info.join(" ")}. Indexing in background.`);
     } else {
       const err = await res.json() as { error: string };
-      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
     }
   }
 
@@ -589,12 +616,12 @@ export class MessagingManager {
     ).all() as Array<{ id: string; title: string; status: string }>;
 
     if (tasks.length === 0) {
-      await this.provider.sendMessage(cmd.channelId, "No tasks found.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "No tasks found.");
       return;
     }
 
     const lines = tasks.map((t) => `${t.id.slice(0, 8)} [${t.status}] ${t.title}`);
-    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
   private async cmdCancel(cmd: CommandEvent): Promise<void> {
@@ -604,16 +631,16 @@ export class MessagingManager {
     ).get(cmd.channelId) as { task_id: string } | null;
     const taskId = cmd.args[0] ?? channelRow?.task_id;
     if (!taskId) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !cancel [task-id]");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !cancel [task-id]");
       return;
     }
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/${taskId}/cancel`, { method: "POST" });
     if (res.ok) {
-      await this.provider.sendMessage(cmd.channelId, `Task ${taskId} cancelled.`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task ${taskId} cancelled.`);
     } else {
       const body = await res.text();
-      await this.provider.sendMessage(cmd.channelId, `Failed to cancel: ${body}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to cancel: ${body}`);
     }
   }
 
@@ -624,7 +651,7 @@ export class MessagingManager {
     ).get(cmd.channelId) as { task_id: string } | null;
     const rawId = cmd.args[0] ?? channelRow?.task_id;
     if (!rawId) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !status [task-id]");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !status [task-id]");
       return;
     }
     // Use exact match when ID came from channel row (full ULID); prefix match when typed by user
@@ -633,7 +660,7 @@ export class MessagingManager {
       : (db.query("SELECT id, title, status, branch_name, created_at, updated_at FROM tasks WHERE id = ?").get(rawId) as Record<string, string> | null);
 
     if (!task) {
-      await this.provider.sendMessage(cmd.channelId, "Task not found.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Task not found.");
       return;
     }
 
@@ -646,7 +673,7 @@ export class MessagingManager {
       `Updated: ${task.updated_at}`,
     ].filter(Boolean);
 
-    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
   private async cmdRepos(cmd: CommandEvent): Promise<void> {
@@ -658,7 +685,7 @@ export class MessagingManager {
     }>;
 
     if (repos.length === 0) {
-      await this.provider.sendMessage(cmd.channelId, "No repos registered.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "No repos registered.");
       return;
     }
 
@@ -669,7 +696,7 @@ export class MessagingManager {
       return parts.join(" ");
     });
 
-    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
   private async cmdReindex(cmd: CommandEvent): Promise<void> {
@@ -685,19 +712,19 @@ export class MessagingManager {
     }
 
     if (!repoName) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !reindex <repo-name> [--force]");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !reindex <repo-name> [--force]");
       return;
     }
 
     const db = getDb();
     const repoRow = db.query("SELECT * FROM repos WHERE name = ? AND archived = 0").get(repoName) as Record<string, unknown> | null;
     if (!repoRow) {
-      await this.provider.sendMessage(cmd.channelId, `Repo '${repoName}' not found.`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo '${repoName}' not found.`);
       return;
     }
 
     const label = force ? " (force)" : "";
-    await this.provider.sendMessage(cmd.channelId, `Reindexing ${repoName}${label}...`);
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Reindexing ${repoName}${label}...`);
 
     // Run async, report back when done
     const { indexRepo } = await import("../knowledge/indexer");
@@ -718,10 +745,11 @@ export class MessagingManager {
       metadata: null,
     };
 
+    const senderProvider = this.getSenderProvider(cmd);
     indexRepo(repo, { force }).then(async (result) => {
-      await this.provider.sendMessage(cmd.channelId, `Reindexed ${repoName}: ${result.chunks} chunks, ${result.embeddings} embeddings.`);
+      await senderProvider?.sendMessage(cmd.channelId, `Reindexed ${repoName}: ${result.chunks} chunks, ${result.embeddings} embeddings.`);
     }).catch(async (err) => {
-      await this.provider.sendMessage(cmd.channelId, `Reindex failed: ${err}`);
+      await senderProvider?.sendMessage(cmd.channelId, `Reindex failed: ${err}`);
     });
   }
 
@@ -733,20 +761,20 @@ export class MessagingManager {
     ).all(today) as Array<{ model: string; input_tokens: number; output_tokens: number; cost_usd: number }>;
 
     if (rows.length === 0) {
-      await this.provider.sendMessage(cmd.channelId, "No token usage today.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "No token usage today.");
       return;
     }
 
     const lines = rows.map((r) =>
       `${r.model}: ${r.input_tokens} in / ${r.output_tokens} out ($${r.cost_usd.toFixed(4)})`
     );
-    await this.provider.sendMessage(cmd.channelId, `Token usage today:\n${lines.join("\n")}`);
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Token usage today:\n${lines.join("\n")}`);
   }
 
   private async cmdAsk(cmd: CommandEvent): Promise<void> {
     const query = cmd.args.join(" ");
     if (!query) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !ask <question>");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !ask <question>");
       return;
     }
 
@@ -757,20 +785,21 @@ export class MessagingManager {
     });
 
     if (!res.ok) {
-      await this.provider.sendMessage(cmd.channelId, "Ask failed.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Ask failed.");
       return;
     }
 
     const data = await res.json() as { id: string | null; answer?: string; status?: string };
 
     if (data.answer) {
-      await this.provider.sendMessage(cmd.channelId, data.answer);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, data.answer);
       return;
     }
 
     if (data.id) {
-      await this.provider.sendMessage(cmd.channelId, "Thinking...");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Thinking...");
       // Poll for answer
+      const senderProvider = this.getSenderProvider(cmd);
       const pollAnswer = async () => {
         for (let i = 0; i < 60; i++) {
           await new Promise((r) => setTimeout(r, 2000));
@@ -778,15 +807,15 @@ export class MessagingManager {
           if (!pollRes.ok) continue;
           const pollData = await pollRes.json() as { status: string; answer?: string; error?: string };
           if (pollData.status === "completed" && pollData.answer) {
-            await this.provider.sendMessage(cmd.channelId, pollData.answer);
+            await senderProvider?.sendMessage(cmd.channelId, pollData.answer);
             return;
           }
           if (pollData.status === "failed") {
-            await this.provider.sendMessage(cmd.channelId, `Ask failed: ${pollData.error ?? "unknown error"}`);
+            await senderProvider?.sendMessage(cmd.channelId, `Ask failed: ${pollData.error ?? "unknown error"}`);
             return;
           }
         }
-        await this.provider.sendMessage(cmd.channelId, "Ask timed out.");
+        await senderProvider?.sendMessage(cmd.channelId, "Ask timed out.");
       };
       pollAnswer();
     }
@@ -799,15 +828,15 @@ export class MessagingManager {
     ).get(cmd.channelId) as { task_id: string } | null;
 
     if (!channelRow) {
-      await this.provider.sendMessage(cmd.channelId, "This command only works in task channels.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "This command only works in task channels.");
       return;
     }
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/${channelRow.task_id}/accept`, { method: "POST" });
     if (res.ok) {
-      await this.provider.sendMessage(cmd.channelId, "Task approved.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Task approved.");
     } else {
-      await this.provider.sendMessage(cmd.channelId, "Failed to approve task.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Failed to approve task.");
     }
   }
 
@@ -818,13 +847,13 @@ export class MessagingManager {
     ).get(cmd.channelId) as { task_id: string } | null;
 
     if (!channelRow) {
-      await this.provider.sendMessage(cmd.channelId, "This command only works in task channels.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "This command only works in task channels.");
       return;
     }
 
     const feedback = cmd.args.join(" ");
     if (!feedback) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !revise <feedback>");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !revise <feedback>");
       return;
     }
 
@@ -835,9 +864,9 @@ export class MessagingManager {
     });
 
     if (res.ok) {
-      await this.provider.sendMessage(cmd.channelId, "Revision started.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Revision started.");
     } else {
-      await this.provider.sendMessage(cmd.channelId, "Failed to start revision.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Failed to start revision.");
     }
   }
 
@@ -853,7 +882,7 @@ export class MessagingManager {
       ).get(`${prefix}%`) as { id: string } | null;
 
       if (!task) {
-        await this.provider.sendMessage(cmd.channelId, `Task not found: ${prefix}`);
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task not found: ${prefix}`);
         return;
       }
       taskId = task.id;
@@ -864,7 +893,7 @@ export class MessagingManager {
       ).get(cmd.channelId) as { task_id: string } | null;
 
       if (!channelRow) {
-        await this.provider.sendMessage(
+        await this.getSenderProvider(cmd)?.sendMessage(
           cmd.channelId,
           "Usage: !delete-task <id>  (or run !delete-task from inside a task channel)"
         );
@@ -883,23 +912,24 @@ export class MessagingManager {
 
     if (res.ok) {
       // Always notify the channel where the command was issued
-      await this.provider.sendMessage(cmd.channelId, `Task "${title}" (${taskId}) deleted.`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task "${title}" (${taskId}) deleted.`);
 
       // Also announce in main channel if the command came from a task channel
-      if (this.mainChannelId && cmd.channelId !== this.mainChannelId) {
-        await this.provider.sendMessage(
-          this.mainChannelId,
+      const senderMainChannelId = this.mainChannelIds.get(cmd.providerName) ?? null;
+      if (senderMainChannelId && cmd.channelId !== senderMainChannelId) {
+        await this.getSenderProvider(cmd)?.sendMessage(
+          senderMainChannelId,
           `Task "${title}" (${taskId}) deleted.`
         );
       }
     } else {
       const body = await res.text();
-      await this.provider.sendMessage(cmd.channelId, `Failed to delete task: ${body}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to delete task: ${body}`);
     }
   }
 
   private async cmdCleanDone(cmd: CommandEvent): Promise<void> {
-    await this.provider.sendMessage(cmd.channelId, "Cleaning up finished tasks...");
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Cleaning up finished tasks...");
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/done`, {
       method: "DELETE",
@@ -907,7 +937,7 @@ export class MessagingManager {
 
     if (!res.ok) {
       const body = await res.text();
-      await this.provider.sendMessage(cmd.channelId, `Failed to clean done tasks: ${body}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to clean done tasks: ${body}`);
       return;
     }
 
@@ -927,13 +957,13 @@ export class MessagingManager {
       }
     }
 
-    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
   private async cmdRelate(cmd: CommandEvent): Promise<void> {
     // !relate <repo-a> <repo-b> <description...>
     if (cmd.args.length < 3) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !relate <repo-a> <repo-b> <description>\nType !help relate for details.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !relate <repo-a> <repo-b> <description>\nType !help relate for details.");
       return;
     }
 
@@ -951,17 +981,17 @@ export class MessagingManager {
     });
 
     if (res.ok) {
-      await this.provider.sendMessage(cmd.channelId, `Relationship added: ${repoA} <-> ${repoB}: ${description}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Relationship added: ${repoA} <-> ${repoB}: ${description}`);
     } else {
       const err = await res.json() as { error: string };
-      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
     }
   }
 
   private async cmdUnrelate(cmd: CommandEvent): Promise<void> {
     // !unrelate <repo-a> <repo-b> [relationship-type]
     if (cmd.args.length < 2) {
-      await this.provider.sendMessage(cmd.channelId, "Usage: !unrelate <repo-a> <repo-b> [relationship-type]\nType !help unrelate for details.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !unrelate <repo-a> <repo-b> [relationship-type]\nType !help unrelate for details.");
       return;
     }
 
@@ -978,10 +1008,10 @@ export class MessagingManager {
     });
 
     if (res.ok) {
-      await this.provider.sendMessage(cmd.channelId, `Relationship removed: ${repoA} <-> ${repoB}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Relationship removed: ${repoA} <-> ${repoB}`);
     } else {
       const err = await res.json() as { error: string };
-      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
     }
   }
 
@@ -994,7 +1024,7 @@ export class MessagingManager {
     const res = await fetch(url);
     if (!res.ok) {
       const err = await res.json() as { error: string };
-      await this.provider.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
       return;
     }
 
@@ -1006,7 +1036,7 @@ export class MessagingManager {
     }>;
 
     if (data.length === 0) {
-      await this.provider.sendMessage(cmd.channelId, repoName ? `No relationships for ${repoName}.` : "No repo relationships defined.");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, repoName ? `No relationships for ${repoName}.` : "No repo relationships defined.");
       return;
     }
 
@@ -1014,7 +1044,7 @@ export class MessagingManager {
       const desc = r.description ? ` -- ${r.description}` : "";
       return `${r.source_name} -> ${r.target_name} (${r.relationship})${desc}`;
     });
-    await this.provider.sendMessage(cmd.channelId, lines.join("\n"));
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
   private async cmdHelp(cmd: CommandEvent): Promise<void> {
@@ -1023,10 +1053,10 @@ export class MessagingManager {
     if (topic) {
       const detailed = COMMAND_HELP[topic];
       if (detailed) {
-        await this.provider.sendMessage(cmd.channelId, detailed);
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, detailed);
         return;
       }
-      await this.provider.sendMessage(cmd.channelId, `Unknown command: ${topic}. Type !help for a list.`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Unknown command: ${topic}. Type !help for a list.`);
       return;
     }
 
@@ -1056,7 +1086,7 @@ export class MessagingManager {
       "  !delete-task              Delete this task and close the channel",
       "  (plain messages)          Answer questions from the agent",
     ];
-    await this.provider.sendMessage(cmd.channelId, help.join("\n"));
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, help.join("\n"));
   }
 }
 
