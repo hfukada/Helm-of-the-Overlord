@@ -235,13 +235,13 @@ export class MessagingManager {
       "Reply with a single lowercase word: run, ask, or cancel.\n\n" +
       `Message: ${text}`;
     try {
-      const reply = (await claudeText(prompt)).trim().toLowerCase();
+      const reply = (await claudeText({ prompt })).trim().toLowerCase();
       if (reply === "run" || reply === "ask" || reply === "cancel") {
         return reply;
       }
       return "ask";
     } catch (err) {
-      logger.error({ err }, "guessIntent failed, defaulting to ask");
+      logger.error("guessIntent failed, defaulting to ask", { error: String(err) });
       return "ask";
     }
   }

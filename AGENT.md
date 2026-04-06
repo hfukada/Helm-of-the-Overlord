@@ -19,6 +19,7 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `src/knowledge/` - SQLite DB, schema, embeddings (future), search
 - `src/orchestrator/` - Blueprint engine, subprocess management, agent nodes
 - `src/workspace/` - Workspace directory and git operations
+- `src/messaging/` - Chat bot integration (Matrix, Discord)
 - `src/shared/` - Types, config, logger
 
 ## Key Commands

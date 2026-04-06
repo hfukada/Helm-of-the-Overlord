@@ -19,7 +19,7 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `src/gitea/` - Gitea REST client, PR creation, review polling
 - `src/knowledge/` - SQLite DB, schema, embeddings (future), search
 - `src/mcp/` - MCP server (stdio JSON-RPC) for knowledge base access
-- `src/messaging/` - Matrix chat bot and commands
+- `src/messaging/` - Chat bot integration (Matrix, Discord)
 - `src/orchestrator/` - Blueprint engine, subprocess management, agent nodes
 - `src/prompts/` - Markdown prompt templates per pipeline stage
 - `src/workspace/` - Workspace directory and git operations

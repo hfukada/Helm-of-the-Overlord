@@ -101,7 +101,9 @@ src/
     repo-parser.ts           Auto-detect language/framework/commands
     search.ts                Hybrid vector + keyword search
   mcp/                       MCP server (stdio JSON-RPC) exposing knowledge base to agents
-  messaging/                 Matrix chat bot and commands
+  messaging/                 Chat bot integration (Matrix, Discord)
+    matrix/client.ts         Matrix (Synapse) provider
+    discord/client.ts        Discord provider
   orchestrator/
     blueprint.ts             Pipeline state machine
     task-runner.ts           Runs blueprint nodes in sequence
@@ -138,6 +140,8 @@ All configuration is via environment variables. The daemon reads these at startu
 | `MATRIX_BOT_USER` | `@hoto:localhost` | Matrix bot user ID (optional) |
 | `MATRIX_BOT_PASSWORD` | — | Matrix bot password (optional) |
 | `MATRIX_BOT_TOKEN` | — | Matrix bot access token (optional, alternative to password) |
+| `DISCORD_BOT_TOKEN` | — | Discord bot token (optional) |
+| `DISCORD_GUILD_ID` | — | Discord server (guild) ID (optional) |
 | `GITEA_URL` | — | Gitea instance URL (optional) |
 | `GITEA_ADMIN_TOKEN` | — | Gitea admin token for PR creation (optional) |
 | `GITEA_BOT_USER` | `hoto-bot` | Gitea bot username |
@@ -145,9 +149,21 @@ All configuration is via environment variables. The daemon reads these at startu
 | `GITEA_ORG` | `hoto` | Gitea organization for repos |
 | `GITEA_POLL_INTERVAL_MS` | `15000` | Interval for polling PR review status (ms) |
 
-## Matrix bot
+## Chat integration
 
-When `MATRIX_HOMESERVER_URL`, `MATRIX_BOT_USER`, and `MATRIX_BOT_PASSWORD` are set, Hoto joins the configured Matrix room and responds to commands:
+Hoto supports Matrix and Discord as chat providers. Both can be enabled simultaneously -- commands and notifications work identically across both.
+
+### Matrix
+
+Set `MATRIX_HOMESERVER_URL`, `MATRIX_BOT_USER`, and `MATRIX_BOT_PASSWORD` (or `MATRIX_BOT_TOKEN`). The bot auto-registers on first run if the homeserver allows open registration.
+
+### Discord
+
+Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. Create a bot at [discord.com/developers](https://discord.com/developers/applications) with the **Message Content** privileged intent enabled. Invite it to your server with `bot` + `applications.commands` scopes.
+
+### Commands
+
+Both providers respond to the same `!` commands in their main channel:
 
 ```
 !run <description> [-r repo]          Submit a task
