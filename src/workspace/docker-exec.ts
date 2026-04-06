@@ -157,52 +157,53 @@ export async function setupTaskContainer(
 
   // Option 1: docker-compose
   if (repo.docker_compose_path) {
-    const composePath = join(repo.path, repo.docker_compose_path);
-    if (!existsSync(composePath)) {
-      logger.warn("Docker compose file not found", { path: composePath });
-      return null;
-    }
+    // docker_compose_path may be absolute or relative to repo.path
+    const composePath = repo.docker_compose_path.startsWith("/")
+      ? repo.docker_compose_path
+      : join(repo.path, repo.docker_compose_path);
 
-    // For compose, pass secrets as environment variables
-    const env: Record<string, string> = { ...process.env } as Record<string, string>;
-    for (const s of secrets) {
-      if (s.secret_type === "env_var") {
-        if (s.value_source === "host_env" && process.env[s.key]) {
-          env[s.key] = process.env[s.key] ?? "";
-        } else if (s.value_source === "host_file" && s.host_path) {
-          try {
-            env[s.key] = readFileSync(s.host_path, "utf-8").trim();
-          } catch {}
+    if (existsSync(composePath)) {
+      // For compose, pass secrets as environment variables
+      const env: Record<string, string> = { ...process.env } as Record<string, string>;
+      for (const s of secrets) {
+        if (s.secret_type === "env_var") {
+          if (s.value_source === "host_env" && process.env[s.key]) {
+            env[s.key] = process.env[s.key] ?? "";
+          } else if (s.value_source === "host_file" && s.host_path) {
+            try {
+              env[s.key] = readFileSync(s.host_path, "utf-8").trim();
+            } catch {}
+          }
         }
       }
-    }
 
-    logger.info("Starting docker-compose for task", { taskId, composePath });
-    const result = await $`docker compose -f ${composePath} up -d`.env(env).quiet().nothrow();
-    if (result.exitCode !== 0) {
-      logger.warn("Docker compose up failed", {
-        taskId,
-        output: result.stderr.toString(),
-      });
-      return null;
-    }
-
-    // Get the first running service container name
-    try {
-      const ps = await $`docker compose -f ${composePath} ps --format json`.quiet().text();
-      const lines = ps.trim().split("\n").filter(Boolean);
-      if (lines.length > 0) {
-        const first = JSON.parse(lines[0]) as { Name?: string };
-        if (first.Name) {
-          logger.info("Docker compose container identified", { taskId, container: first.Name });
-          return first.Name;
+      logger.info("Starting docker-compose for task", { taskId, composePath });
+      const result = await $`docker compose -f ${composePath} up -d`.env(env).quiet().nothrow();
+      if (result.exitCode === 0) {
+        // Get the first running service container name
+        try {
+          const ps = await $`docker compose -f ${composePath} ps --format json`.quiet().text();
+          const lines = ps.trim().split("\n").filter(Boolean);
+          if (lines.length > 0) {
+            const first = JSON.parse(lines[0]) as { Name?: string };
+            if (first.Name) {
+              logger.info("Docker compose container identified", { taskId, container: first.Name });
+              return first.Name;
+            }
+          }
+        } catch (err) {
+          logger.warn("Could not identify compose container", { error: String(err) });
         }
+      } else {
+        logger.warn("Docker compose up failed, falling through to next option", {
+          taskId,
+          output: result.stderr.toString(),
+        });
       }
-    } catch (err) {
-      logger.warn("Could not identify compose container", { error: String(err) });
+    } else {
+      logger.warn("Docker compose file not found, falling through", { path: composePath });
     }
-
-    return null;
+    // Fall through to next options
   }
 
   // Option 2: Dockerfile in workdir
@@ -214,34 +215,34 @@ export async function setupTaskContainer(
     const buildResult = await $`docker build -t ${imageName} ${workDir}`.quiet().nothrow();
     if (buildResult.exitCode !== 0) {
       const buildOutput = buildResult.stderr.toString();
-      logger.warn("Docker build failed", { taskId, output: buildOutput });
+      logger.warn("Docker build failed, falling through to next option", { taskId, output: buildOutput });
       discoverSecrets(repo.id, buildOutput);
-      return null;
+      // Fall through to next options
+    } else {
+      const secretFlags = buildSecretFlags(secrets);
+
+      logger.info("Starting Docker container for task", { taskId, name });
+      const args = [
+        "docker", "run", "-d",
+        "--name", name,
+        "-v", `${workDir}:/workspace`,
+        "-w", "/workspace",
+        ...secretFlags,
+        imageName,
+        "sleep", "infinity",
+      ];
+      const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
+      if (runResult.exitCode !== 0) {
+        logger.warn("Docker run failed, falling through to next option", {
+          taskId,
+          output: new TextDecoder().decode(runResult.stderr),
+        });
+        // Fall through
+      } else {
+        logger.info("Docker container started", { taskId, name });
+        return name;
+      }
     }
-
-    const secretFlags = buildSecretFlags(secrets);
-
-    logger.info("Starting Docker container for task", { taskId, name });
-    const args = [
-      "docker", "run", "-d",
-      "--name", name,
-      "-v", `${workDir}:/workspace`,
-      "-w", "/workspace",
-      ...secretFlags,
-      imageName,
-      "sleep", "infinity",
-    ];
-    const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
-    if (runResult.exitCode !== 0) {
-      logger.warn("Docker run failed", {
-        taskId,
-        output: new TextDecoder().decode(runResult.stderr),
-      });
-      return null;
-    }
-
-    logger.info("Docker container started", { taskId, name });
-    return name;
   }
 
   // Option 3: Language-based Docker image fallback
@@ -265,16 +266,16 @@ export async function setupTaskContainer(
     ];
     const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
     if (runResult.exitCode !== 0) {
-      logger.warn("Docker run (language image) failed", {
+      logger.warn("Docker run (language image) failed, falling through to sandbox", {
         taskId,
         image: repo.docker_image,
         output: new TextDecoder().decode(runResult.stderr),
       });
-      return null;
+      // Fall through to sandbox
+    } else {
+      logger.info("Language-based Docker container started", { taskId, name, image: repo.docker_image });
+      return name;
     }
-
-    logger.info("Language-based Docker container started", { taskId, name, image: repo.docker_image });
-    return name;
   }
 
   // No repo-specific container config found; fall back to sandbox
