@@ -96,7 +96,8 @@ knowledge.post("/repos/:name/reindex", async (c) => {
   const parsed = await parseRepo(repo.path);
   const updates: Record<string, string | null> = {};
   for (const field of ["build_cmd", "test_cmd", "run_cmd", "lint_cmd", "language", "framework", "docker_compose_path", "docker_image"] as const) {
-    if (parsed[field] && parsed[field] !== repoRow[field]) {
+    // Only fill in null/empty values -- don't overwrite manually configured commands
+    if (parsed[field] && !repoRow[field]) {
       updates[field] = parsed[field];
     }
   }

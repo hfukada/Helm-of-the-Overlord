@@ -46,10 +46,22 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
       meta.description = pkg.description ?? null;
 
       const scripts = pkg.scripts ?? {};
-      meta.build_cmd = scripts.build ?? null;
-      meta.test_cmd = scripts.test ?? null;
-      meta.run_cmd = scripts.start ?? scripts.dev ?? null;
-      meta.lint_cmd = scripts.lint ?? null;
+
+      // Detect package manager to use the right runner (bun run, npm run, etc.)
+      let runner = "npm run";
+      if (existsSync(join(repoPath, "bun.lockb")) || existsSync(join(repoPath, "bunfig.toml"))) {
+        runner = "bun run";
+      } else if (existsSync(join(repoPath, "yarn.lock"))) {
+        runner = "yarn";
+      } else if (existsSync(join(repoPath, "pnpm-lock.yaml"))) {
+        runner = "pnpm run";
+      }
+
+      // Store as runner commands (e.g. "bun run build") not raw script bodies
+      meta.build_cmd = scripts.build ? `${runner} build` : null;
+      meta.test_cmd = scripts.test ? `${runner} test` : null;
+      meta.run_cmd = (scripts.start || scripts.dev) ? `${runner} ${scripts.start ? "start" : "dev"}` : null;
+      meta.lint_cmd = scripts.lint ? `${runner} lint` : null;
 
       // Detect framework
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
