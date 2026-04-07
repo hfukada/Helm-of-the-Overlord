@@ -140,3 +140,15 @@ export async function deleteCollectionItems(
     logger.warn("ChromaDB delete failed", { repoName, error: String(err) });
   }
 }
+
+export async function deleteCollection(repoName: string): Promise<void> {
+  const collectionName = `hoto-${repoName}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 63);
+  try {
+    const client = getClient();
+    await client.deleteCollection({ name: collectionName });
+    _collections.delete(repoName);
+    logger.info("ChromaDB collection deleted", { repoName, collectionName });
+  } catch (err) {
+    logger.warn("ChromaDB collection delete failed (ignored)", { repoName, error: String(err) });
+  }
+}

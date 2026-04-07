@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { join } from "node:path";
 import { $ } from "bun";
 import { getDb } from "../../knowledge/db";
+import { deleteCollection } from "../../knowledge/chromadb";
 import { logger } from "../../shared/logger";
 import { config } from "../../shared/config";
 import { parseRepo } from "../../knowledge/repo-parser";
@@ -184,17 +185,31 @@ repos.patch("/:name", async (c) => {
   return c.json(updated);
 });
 
-repos.delete("/:name", (c) => {
+repos.delete("/:name", async (c) => {
   const name = c.req.param("name");
   const db = getDb();
 
-  const result = db.run("UPDATE repos SET archived = 1 WHERE name = ? AND archived = 0", [name]);
-  if (result.changes === 0) {
-    return c.json({ error: "Repo not found or already archived" }, 404);
+  const repo = db.query("SELECT id FROM repos WHERE name = ? AND archived = 0").get(name) as { id: number } | null;
+  if (!repo) {
+    return c.json({ error: "Repo not found" }, 404);
   }
 
-  logger.info("Repo archived", { name });
-  return c.json({ archived: name });
+  const TERMINAL = ["committed", "failed", "cancelled"];
+  const placeholders = TERMINAL.map(() => "?").join(", ");
+  const active = db.query(
+    `SELECT 1 FROM tasks t
+     JOIN task_repos tr ON tr.task_id = t.id
+     WHERE tr.repo_id = ? AND t.status NOT IN (${placeholders})
+     LIMIT 1`
+  ).get(repo.id, ...TERMINAL) as unknown;
+  if (active) {
+    return c.json({ error: "Repo has active tasks" }, 409);
+  }
+
+  db.run("DELETE FROM repos WHERE id = ?", [repo.id]);
+  await deleteCollection(name);
+  logger.info("Repo deleted", { name });
+  return c.json({ deleted: name });
 });
 
 export { repos };
