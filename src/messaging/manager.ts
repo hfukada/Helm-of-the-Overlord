@@ -40,11 +40,16 @@ const COMMAND_HELP: Record<string, string> = {
     "!repo remove <name>",
     "Add or remove a repo.",
     "  add: Clone a git repo and register it. Auto-detects language, framework, and commands.",
-    "  remove: Untrack a repo (removes from DB, does not delete files).",
+    "  remove: Hard-delete a repo and its embeddings (blocked if active tasks).",
     "Examples:",
     "  !repo add https://github.com/org/project.git",
     "  !repo add git@github.com:org/project.git --name my-project",
     "  !repo remove my-project",
+  ].join("\n"),
+  "delete-repo": [
+    "!delete-repo <name>",
+    "Same as !repo remove. Hard-delete a repo and its embeddings (blocked if active tasks).",
+    "Example: !delete-repo my-project",
   ].join("\n"),
   reindex: [
     "!reindex <repo>",
@@ -187,6 +192,9 @@ export class MessagingManager {
         break;
       case "repo":
         await this.cmdRepo(cmd);
+        break;
+      case "delete-repo":
+        await this.cmdDeleteRepo(cmd);
         break;
       case "reindex":
         await this.cmdReindex(cmd);
@@ -556,7 +564,9 @@ export class MessagingManager {
       });
 
       if (res.ok) {
-        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo archived: ${name}`);
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo deleted: ${name}`);
+      } else if (res.status === 409) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Cannot delete repo: active tasks exist`);
       } else {
         const body = await res.text();
         try {
@@ -606,6 +616,32 @@ export class MessagingManager {
     } else {
       const err = await res.json() as { error: string };
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    }
+  }
+
+  private async cmdDeleteRepo(cmd: CommandEvent): Promise<void> {
+    const name = cmd.args[0];
+    if (!name) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !delete-repo <name>");
+      return;
+    }
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/${name}`, {
+      method: "DELETE",
+    });
+
+    if (res.ok) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo deleted: ${name}`);
+    } else if (res.status === 409) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Cannot delete repo: active tasks exist`);
+    } else {
+      const body = await res.text();
+      try {
+        const err = JSON.parse(body) as { error: string };
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      } catch {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${body}`);
+      }
     }
   }
 
