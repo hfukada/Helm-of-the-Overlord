@@ -52,9 +52,9 @@ services:
     environment:
       GITEA__database__DB_TYPE: sqlite3
       GITEA__database__PATH: /data/gitea/gitea.db
-      GITEA__server__ROOT_URL: http://gitea:3777
+      GITEA__server__ROOT_URL: http://${HOTO_HOSTNAME:-localhost}:3777
       GITEA__server__HTTP_PORT: "3777"
-      GITEA__server__DOMAIN: gitea
+      GITEA__server__DOMAIN: ${HOTO_HOSTNAME:-localhost}
       GITEA__service__DISABLE_REGISTRATION: "false"
       GITEA__api__ENABLE_SWAGGER: "false"
       GITEA__security__INSTALL_LOCK: "true"

@@ -1,6 +1,8 @@
-FROM alpine:3.21
+FROM debian:bookworm-slim
 
-RUN apk add --no-cache curl git bash docker-cli ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl git bash ca-certificates docker.io unzip \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"

@@ -8,6 +8,8 @@ import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
 import { executeLint } from "./nodes/deterministic/lint";
 import { rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { createTaskClone, generateBranchName } from "../workspace/git";
 import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
@@ -1297,6 +1299,38 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   });
 }
 
+/**
+ * Detect the install command for a repo based on lockfiles/manifests.
+ * Returns null if no install is needed or can't be determined.
+ */
+function detectInstallCmd(workDir: string): string | null {
+  if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bunfig.toml"))) {
+    return "bun install --frozen-lockfile";
+  }
+  if (existsSync(join(workDir, "package-lock.json"))) {
+    return "npm ci";
+  }
+  if (existsSync(join(workDir, "yarn.lock"))) {
+    return "yarn install --frozen-lockfile";
+  }
+  if (existsSync(join(workDir, "pnpm-lock.yaml"))) {
+    return "pnpm install --frozen-lockfile";
+  }
+  if (existsSync(join(workDir, "package.json"))) {
+    return "npm install";
+  }
+  if (existsSync(join(workDir, "requirements.txt"))) {
+    return "pip install -r requirements.txt";
+  }
+  if (existsSync(join(workDir, "pyproject.toml"))) {
+    return "pip install -e .";
+  }
+  if (existsSync(join(workDir, "go.mod"))) {
+    return "go mod download";
+  }
+  return null;
+}
+
 async function runCi(
   repo: Repo,
   workDir: string,
@@ -1305,6 +1339,15 @@ async function runCi(
   onChunk?: (accumulated: string) => void
 ): Promise<{ success: boolean; output: string }> {
   const commands: string[] = [];
+
+  // When running in a container, install dependencies first
+  if (containerName) {
+    const installCmd = detectInstallCmd(workDir);
+    if (installCmd) {
+      commands.push(installCmd);
+    }
+  }
+
   if (repo.build_cmd) commands.push(repo.build_cmd);
   if (repo.test_cmd) commands.push(repo.test_cmd);
 
