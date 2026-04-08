@@ -132,12 +132,30 @@ describe("blueprint state machine: fix loops", () => {
 // ---------------------------------------------------------------------------
 
 describe("blueprint state machine: reject/revise", () => {
-  test("revise transitions from review back to plan", () => {
+  test("revise transitions from review to understand_review", () => {
     let state = advanceToReview();
     expect(state.current_node).toBe("review");
 
     state = advanceState(state, "revise");
-    expect(state.current_node).toBe("plan");
+    expect(state.current_node).toBe("understand_review");
+  });
+
+  test("understand_review small path skips scrutiny", () => {
+    let state = advanceToReview();
+    state = advanceState(state, "revise"); // -> understand_review
+    state = advanceState(state, "small"); // -> review_small_feedback
+    expect(state.current_node).toBe("review_small_feedback");
+    state = advanceState(state, "done"); // -> implement
+    expect(state.current_node).toBe("implement");
+  });
+
+  test("understand_review large path goes through scrutiny", () => {
+    let state = advanceToReview();
+    state = advanceState(state, "revise"); // -> understand_review
+    state = advanceState(state, "large"); // -> review_large_feedback
+    expect(state.current_node).toBe("review_large_feedback");
+    state = advanceState(state, "done"); // -> scrutinize
+    expect(state.current_node).toBe("scrutinize");
   });
 
   test("revise creates new history entries for the second cycle", () => {
@@ -148,24 +166,22 @@ describe("blueprint state machine: reject/revise", () => {
     expect(state.history.length).toBe(historyLengthAtReview + 1);
 
     const newEntry = state.history[state.history.length - 1];
-    expect(newEntry.node).toBe("plan");
+    expect(newEntry.node).toBe("understand_review");
     expect(newEntry.exited_at).toBeNull();
   });
 
-  test("full revise cycle goes through plan pipeline -> implement -> lint -> ci -> review again", () => {
+  test("full revise cycle (large) goes through plan pipeline -> implement -> lint -> ci -> review again", () => {
     let state = advanceToReview();
 
-    // Revise
-    state = advanceState(state, "revise"); // -> plan
-    state = advanceThroughPlanPipeline(state); // -> implement
+    // Revise via large path
+    state = advanceState(state, "revise"); // -> understand_review
+    state = advanceState(state, "large"); // -> review_large_feedback
+    state = advanceState(state, "done"); // -> scrutinize
+    state = advanceThroughPlanPipeline(state); // scrutinize -> ... -> implement
     state = advanceState(state, "done"); // -> lint
     state = advanceState(state, "clean"); // -> ci
     state = advanceState(state, "pass"); // -> review
     expect(state.current_node).toBe("review");
-
-    // History should have two plan entries, two implement entries, etc.
-    const planEntries = state.history.filter((h) => h.node === "plan");
-    expect(planEntries.length).toBe(2);
 
     const implementEntries = state.history.filter((h) => h.node === "implement");
     expect(implementEntries.length).toBe(2);
@@ -177,22 +193,22 @@ describe("blueprint state machine: reject/revise", () => {
   test("multiple revise cycles are tracked", () => {
     let state = advanceToReview();
 
-    // First revise
-    state = advanceState(state, "revise");
-    state = advanceThroughPlanPipeline(state);
+    // First revise (small path)
+    state = advanceState(state, "revise"); // -> understand_review
+    state = advanceState(state, "small"); // -> review_small_feedback
+    state = advanceState(state, "done"); // -> implement
     state = advanceState(state, "done"); // -> lint
     state = advanceState(state, "clean"); // -> ci
     state = advanceState(state, "pass"); // -> review
 
-    // Second revise
-    state = advanceState(state, "revise");
-    state = advanceThroughPlanPipeline(state);
+    // Second revise (large path)
+    state = advanceState(state, "revise"); // -> understand_review
+    state = advanceState(state, "large"); // -> review_large_feedback
+    state = advanceState(state, "done"); // -> scrutinize
+    state = advanceThroughPlanPipeline(state); // -> implement
     state = advanceState(state, "done"); // -> lint
     state = advanceState(state, "clean"); // -> ci
     state = advanceState(state, "pass"); // -> review
-
-    const planEntries = state.history.filter((h) => h.node === "plan");
-    expect(planEntries.length).toBe(3);
 
     const implementEntries = state.history.filter((h) => h.node === "implement");
     expect(implementEntries.length).toBe(3);
@@ -268,27 +284,25 @@ describe("buildTimelineNodes: normal flow", () => {
 });
 
 describe("buildTimelineNodes: reject/revise cycles", () => {
-  test("after revise, shows new plan in timeline", () => {
+  test("after revise, shows understand_review in timeline", () => {
     let state = advanceToReview();
-    state = advanceState(state, "revise"); // -> plan
+    state = advanceState(state, "revise"); // -> understand_review
 
     const nodes = buildTimelineNodes(state);
-    const planCount = nodes.filter((n) => n === "plan").length;
-    expect(planCount).toBe(2);
+    expect(nodes).toContain("understand_review");
   });
 
-  test("after revise cycle completes, timeline shows full second cycle", () => {
+  test("after revise cycle (large) completes, timeline shows full second cycle", () => {
     let state = advanceToReview();
-    state = advanceState(state, "revise");
-    state = advanceThroughPlanPipeline(state);
+    state = advanceState(state, "revise"); // -> understand_review
+    state = advanceState(state, "large"); // -> review_large_feedback
+    state = advanceState(state, "done"); // -> scrutinize
+    state = advanceThroughPlanPipeline(state); // -> implement
     state = advanceState(state, "done"); // -> lint
     state = advanceState(state, "clean"); // -> ci
     state = advanceState(state, "pass"); // -> review
 
     const nodes = buildTimelineNodes(state);
-
-    const planCount = nodes.filter((n) => n === "plan").length;
-    expect(planCount).toBe(2);
 
     const implementCount = nodes.filter((n) => n === "implement").length;
     expect(implementCount).toBe(2);
@@ -302,22 +316,24 @@ describe("buildTimelineNodes: reject/revise cycles", () => {
   test("multiple revise cycles all appear in timeline", () => {
     let state = advanceToReview();
 
+    // First revise (small)
     state = advanceState(state, "revise");
-    state = advanceThroughPlanPipeline(state);
-    state = advanceState(state, "done");
+    state = advanceState(state, "small");
+    state = advanceState(state, "done"); // -> implement
+    state = advanceState(state, "done"); // -> lint
     state = advanceState(state, "clean");
     state = advanceState(state, "pass");
 
+    // Second revise (large)
     state = advanceState(state, "revise");
+    state = advanceState(state, "large");
+    state = advanceState(state, "done"); // -> scrutinize
     state = advanceThroughPlanPipeline(state);
     state = advanceState(state, "done");
     state = advanceState(state, "clean");
     state = advanceState(state, "pass");
 
     const nodes = buildTimelineNodes(state);
-
-    const planCount = nodes.filter((n) => n === "plan").length;
-    expect(planCount).toBe(3);
 
     const implementCount = nodes.filter((n) => n === "implement").length;
     expect(implementCount).toBe(3);
@@ -326,7 +342,8 @@ describe("buildTimelineNodes: reject/revise cycles", () => {
   test("revise mid-cycle shows correct upcoming nodes", () => {
     let state = advanceToReview();
     state = advanceState(state, "revise");
-    state = advanceThroughPlanPipeline(state);
+    state = advanceState(state, "small");
+    state = advanceState(state, "done"); // -> implement
     state = advanceState(state, "done"); // -> lint
 
     const nodes = buildTimelineNodes(state);

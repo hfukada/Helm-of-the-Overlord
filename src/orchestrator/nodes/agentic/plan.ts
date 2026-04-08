@@ -4,6 +4,7 @@ import { runClaude } from "../../subprocess";
 import { buildPlanPrompt, buildSystemPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
+import type { SandboxOptions } from "./types";
 
 export async function executePlan(
   task: Task,
@@ -12,6 +13,7 @@ export async function executePlan(
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
   promptOverride?: string,
+  sandbox?: SandboxOptions,
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
   const prompt = promptOverride ?? await buildPlanPrompt(task, repo);
@@ -39,6 +41,8 @@ export async function executePlan(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();

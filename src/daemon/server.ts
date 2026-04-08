@@ -47,6 +47,14 @@ export async function startDaemon(): Promise<void> {
     idleTimeout: 120,
   });
 
+  // Start MCP HTTP server if sandbox mode is enabled
+  let mcpHttpStop: (() => void) | null = null;
+  if (config.sandboxClaude) {
+    const { startMcpHttpServer } = await import("../mcp/http-server");
+    const mcpHttp = startMcpHttpServer();
+    mcpHttpStop = mcpHttp.stop;
+  }
+
   // Verify ChromaDB is available (required for vector search)
   const { isChromaAvailable } = await import("../knowledge/chromadb");
   const chromaReady = await isChromaAvailable();
@@ -132,6 +140,7 @@ export async function startDaemon(): Promise<void> {
     if (manager) {
       try { await manager.stop(); } catch {}
     }
+    if (mcpHttpStop) mcpHttpStop();
     server.stop();
     try {
       await unlink(config.pidFile);

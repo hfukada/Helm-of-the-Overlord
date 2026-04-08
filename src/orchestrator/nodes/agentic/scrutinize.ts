@@ -6,6 +6,7 @@ import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { renderTemplate } from "../../../prompts/loader";
 import { search } from "../../../knowledge/search";
+import type { SandboxOptions } from "./types";
 
 /**
  * Run the scrutinize phase: review a plan against the 10-point checklist.
@@ -17,6 +18,7 @@ export async function executeScrutinize(
   plan: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -63,6 +65,8 @@ export async function executeScrutinize(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();
@@ -108,6 +112,7 @@ export async function executePlanAgain(
   scrutinyResults: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -163,6 +168,8 @@ export async function executePlanAgain(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();
@@ -208,6 +215,7 @@ export async function executeFinalizePlan(
   scrutinyResults: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -259,6 +267,8 @@ export async function executeFinalizePlan(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();

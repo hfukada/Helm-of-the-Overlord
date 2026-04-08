@@ -40,6 +40,10 @@ export interface ClaudeOptions {
   mcpConfigPath?: string;
   addDirs?: string[];
   env?: Record<string, string>;
+  /** If set, run claude inside this Docker container via `docker exec`. */
+  containerName?: string;
+  /** Working directory inside the container (default: /workspace). */
+  containerWorkDir?: string;
 }
 
 export interface ClaudeUsage {
@@ -105,6 +109,30 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
 }
 
 function spawnClaude(args: string[], opts: ClaudeOptions) {
+  if (opts.containerName) {
+    // Run claude inside a Docker container
+    const containerWorkDir = opts.containerWorkDir ?? "/workspace";
+    const dockerArgs = [
+      "docker", "exec", "-i",
+      "-w", containerWorkDir,
+    ];
+    // Pass environment overrides
+    if (opts.env) {
+      for (const [k, v] of Object.entries(opts.env)) {
+        dockerArgs.push("-e", `${k}=${v}`);
+      }
+    }
+    dockerArgs.push(opts.containerName, ...args);
+
+    return Bun.spawn(dockerArgs, {
+      stdin: new TextEncoder().encode(opts.prompt),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: process.env as Record<string, string>,
+    });
+  }
+
+  // Run claude on the host
   return Bun.spawn(args, {
     cwd: opts.cwd,
     stdin: new TextEncoder().encode(opts.prompt),

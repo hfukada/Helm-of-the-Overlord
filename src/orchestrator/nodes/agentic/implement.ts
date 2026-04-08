@@ -5,6 +5,7 @@ import { buildImplementPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { logger } from "../../../shared/logger";
+import type { SandboxOptions } from "./types";
 
 const MIN_TURNS = 15;
 const MAX_TURNS = 50;
@@ -35,13 +36,15 @@ export async function executeImplement(
   plan: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
 
   const prompt = await buildImplementPrompt(task, repos, plan);
 
   const repoNames = repos.map((r) => r.name).join(", ");
-  const systemPrompt = `You are working on: ${repoNames}. Your working directory is ${workDir}. ALL file paths for Write/Edit/Read MUST be absolute paths under ${workDir}. For example: ${workDir}/src/foo.ts. Do NOT create files outside of ${workDir} -- files outside the repo worktree will not be committed. You have access to Read, Write, Edit, Glob, Grep, and Bash tools. Do not run destructive commands. Do not push to git.`;
+  const effectiveWorkDir = sandbox?.containerWorkDir ?? workDir;
+  const systemPrompt = `You are working on: ${repoNames}. Your working directory is ${effectiveWorkDir}. ALL file paths for Write/Edit/Read MUST be absolute paths under ${effectiveWorkDir}. For example: ${effectiveWorkDir}/src/foo.ts. Do NOT create files outside of ${effectiveWorkDir} -- files outside the repo worktree will not be committed. You have access to Read, Write, Edit, Glob, Grep, and Bash tools. Do not run destructive commands. Do not push to git.`;
 
   const model = config.defaultModel;
 
@@ -66,10 +69,12 @@ export async function executeImplement(
     maxTurns,
     allowedTools,
     mcpConfigPath,
-    addDirs: [workDir],
+    addDirs: sandbox ? [sandbox.containerWorkDir] : [workDir],
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();

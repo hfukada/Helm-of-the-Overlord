@@ -20,6 +20,10 @@ export interface SubprocessOptions {
   agentRunId: string;
   taskId?: string;
   onEvent?: (eventType: StreamEventType, content: string) => void;
+  /** If set, run claude inside this Docker container. */
+  containerName?: string;
+  /** Working directory inside the container. */
+  containerWorkDir?: string;
 }
 
 export interface SubprocessResult {
@@ -90,12 +94,14 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
     {
       prompt: opts.prompt,
       systemPrompt: opts.systemPrompt,
-      cwd: opts.workDir,
+      cwd: opts.containerName ? undefined : opts.workDir,
       model,
       maxTurns: opts.maxTurns,
       allowedTools: opts.allowedTools,
       mcpConfigPath: opts.mcpConfigPath,
       addDirs: opts.addDirs,
+      containerName: opts.containerName,
+      containerWorkDir: opts.containerWorkDir,
     },
     (evt: ClaudeEvent) => {
       storeStreamEvent(opts.agentRunId, evt.type, evt.content);
@@ -124,26 +130,44 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
 export async function generateMcpConfig(
   taskId: string,
   workDir: string,
-  repoName: string
+  repoName: string,
+  opts?: { sandboxed?: boolean; containerWorkDir?: string }
 ): Promise<string> {
-  const serverScript = resolve(join(import.meta.dir, "../mcp/server.ts"));
   const configPath = join(taskDir(taskId), "mcp-config.json");
 
-  const mcpConfig = {
-    mcpServers: {
-      hoto: {
-        command: "bun",
-        args: ["run", serverScript],
-        env: {
-          HOTO_WORK_DIR: workDir,
-          HOTO_REPO_NAME: repoName,
-          HOTO_DAEMON_URL: `http://127.0.0.1:${config.daemonPort}`,
+  let mcpConfig: Record<string, unknown>;
+
+  if (opts?.sandboxed) {
+    // Inside a container, use HTTP transport to reach MCP server on the host.
+    // host.docker.internal resolves to the host from inside Docker.
+    const mcpUrl = `http://host.docker.internal:${config.mcpHttpPort}`;
+    mcpConfig = {
+      mcpServers: {
+        hoto: {
+          type: "sse",
+          url: `${mcpUrl}/sse?repo=${repoName}&workDir=${encodeURIComponent(opts.containerWorkDir ?? workDir)}`,
         },
       },
-    },
-  };
+    };
+  } else {
+    // On the host, use stdio transport as before.
+    const serverScript = resolve(join(import.meta.dir, "../mcp/server.ts"));
+    mcpConfig = {
+      mcpServers: {
+        hoto: {
+          command: "bun",
+          args: ["run", serverScript],
+          env: {
+            HOTO_WORK_DIR: workDir,
+            HOTO_REPO_NAME: repoName,
+            HOTO_DAEMON_URL: `http://127.0.0.1:${config.daemonPort}`,
+          },
+        },
+      },
+    };
+  }
 
   await Bun.write(configPath, JSON.stringify(mcpConfig, null, 2));
-  logger.info("Generated MCP config", { taskId, configPath });
+  logger.info("Generated MCP config", { taskId, configPath, sandboxed: !!opts?.sandboxed });
   return configPath;
 }

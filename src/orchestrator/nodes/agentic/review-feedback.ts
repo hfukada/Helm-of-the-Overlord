@@ -7,6 +7,7 @@ import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { search } from "../../../knowledge/search";
 import { logger } from "../../../shared/logger";
+import type { SandboxOptions } from "./types";
 
 async function getKnowledgeContext(query: string, repoId: number): Promise<string> {
   try {
@@ -90,6 +91,7 @@ export async function executeUnderstandReview(
   previousPlan: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ verdict: "small" | "large"; output: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -117,6 +119,8 @@ export async function executeUnderstandReview(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   finishAgentRun(agentRunId, result, model);
@@ -144,6 +148,7 @@ export async function executeReviewSmallFeedback(
   previousPlan: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -171,6 +176,8 @@ export async function executeReviewSmallFeedback(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   finishAgentRun(agentRunId, result, model);
@@ -188,6 +195,7 @@ export async function executeReviewLargeFeedback(
   previousPlan: string,
   mcpConfigPath?: string,
   onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -240,6 +248,8 @@ export async function executeReviewLargeFeedback(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   finishAgentRun(agentRunId, result, model);

@@ -1,5 +1,6 @@
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
+import { config } from "../shared/config";
 import type { Task, Repo, BlueprintState, TaskStatus } from "../shared/types";
 import { createInitialState, advanceState } from "./blueprint";
 import { executePlan } from "./nodes/agentic/plan";
@@ -15,7 +16,8 @@ import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
-import { setupTaskContainer, teardownTaskContainer, isSandboxContainer } from "../workspace/docker-exec";
+import { setupTaskContainer, teardownTaskContainer, isSandboxContainer, startSandboxContainer } from "../workspace/docker-exec";
+import type { SandboxOptions } from "./nodes/agentic/types";
 import { discoverSecrets } from "../workspace/secret-discovery";
 import { getMessagingManager } from "../messaging/manager";
 import { indexTaskChatHistory } from "../messaging/indexer";
@@ -478,10 +480,32 @@ export async function runTask(taskId: string): Promise<void> {
   const primaryRepo = repos[0];
   const primaryWorkDir = workDirs.get(primaryRepo.name) ?? "";
 
+  // Start sandbox container if configured
+  let sandbox: SandboxOptions | undefined;
+  if (config.sandboxClaude) {
+    try {
+      const sandboxName = await startSandboxContainer(task.id, taskDir(task.id));
+      if (sandboxName) {
+        const containerWorkDir = repos.length > 1
+          ? "/workspace"
+          : `/workspace/${primaryRepo.name}`;
+        sandbox = { containerName: sandboxName, containerWorkDir };
+        logger.info("Sandbox container started for task", { taskId: task.id, containerName: sandboxName });
+      } else {
+        logger.warn("Sandbox container failed to start, falling back to host execution", { taskId: task.id });
+      }
+    } catch (err) {
+      logger.warn("Sandbox container setup failed, falling back to host execution", { taskId: task.id, error: String(err) });
+    }
+  }
+
   // Generate MCP config for agent nodes (using primary repo)
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(task.id, primaryWorkDir, primaryRepo.name);
+    mcpConfigPath = await generateMcpConfig(
+      task.id, primaryWorkDir, primaryRepo.name,
+      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+    );
   } catch (err) {
     logger.warn("Failed to generate MCP config, agents will use direct tools", { error: String(err) });
   }
@@ -527,7 +551,7 @@ export async function runTask(taskId: string): Promise<void> {
   const planPrompt = await buildPlanPrompt(task, repos);
 
   const planResult = await executePlan(
-    task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt
+    task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt, sandbox
   );
 
   if (planResult.error || planResult.plan.length < 200) {
@@ -552,7 +576,7 @@ export async function runTask(taskId: string): Promise<void> {
   updateTaskStatus(task.id, "scrutinizing", state);
   logger.info("Scrutinizing plan (round 1)", { taskId: task.id });
 
-  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking);
+  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox);
 
   if (scrutiny1.error) {
     if (isTaskCancelled(task.id)) return;
@@ -566,7 +590,7 @@ export async function runTask(taskId: string): Promise<void> {
     logger.info("Revising plan based on scrutiny", { taskId: task.id });
 
     const planAgainResult = await executePlanAgain(
-      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking, sandbox
     );
 
     if (planAgainResult.error) {
@@ -580,7 +604,7 @@ export async function runTask(taskId: string): Promise<void> {
       updateTaskStatus(task.id, "scrutinizing", state);
       logger.info("Scrutinizing plan (round 2)", { taskId: task.id });
 
-      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking);
+      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking, sandbox);
 
       if (scrutiny2.error) {
         if (isTaskCancelled(task.id)) return;
@@ -594,7 +618,7 @@ export async function runTask(taskId: string): Promise<void> {
         logger.info("Finalizing plan", { taskId: task.id });
 
         const finalPlan = await executeFinalizePlan(
-          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking, sandbox
         );
 
         if (!finalPlan.error && finalPlan.plan.length > 200) {
@@ -628,7 +652,7 @@ export async function runTask(taskId: string): Promise<void> {
   const implWorkDir = repos.length > 1 ? taskDir(task.id) : workDirs.get(repos[0].name)!;
 
   const implResult = await executeImplement(
-    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking
+    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox
   );
 
   if (implResult.error) {
@@ -649,24 +673,28 @@ export async function runTask(taskId: string): Promise<void> {
 
     logger.info("Running CI/lint for repo", { taskId: task.id, repo: repo.name });
 
-    // Set up Docker container per repo if applicable
-    let containerName: string | null = null;
-    try {
-      containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
-    } catch (err) {
-      logger.error({ err, taskId: task.id }, "failed to set up task container");
-      containerName = null;
-    }
+    // Use sandbox container if active, otherwise set up per-repo container
+    let containerName: string | null = sandbox?.containerName ?? null;
+    let containerWorkDir = sandbox ? `/workspace/${repo.name}` : "/workspace";
 
-    // For sandbox containers, the task directory is mounted at /workspace and each
-    // repo is a subdirectory. For repo-specific containers, workDir is /workspace.
-    const containerWorkDir = (containerName && isSandboxContainer(containerName))
-      ? `/workspace/${repo.name}`
-      : "/workspace";
+    if (!containerName) {
+      try {
+        containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
+      } catch (err) {
+        logger.error({ err, taskId: task.id }, "failed to set up task container");
+        containerName = null;
+      }
+      containerWorkDir = (containerName && isSandboxContainer(containerName))
+        ? `/workspace/${repo.name}`
+        : "/workspace";
+    }
 
     let repoMcpConfigPath: string | undefined;
     try {
-      repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name);
+      repoMcpConfigPath = await generateMcpConfig(
+        task.id, workDir, repo.name,
+        sandbox ? { sandboxed: true, containerWorkDir } : undefined
+      );
     } catch {}
 
     // --- CI (test/build with fix loop) ---
@@ -700,7 +728,7 @@ export async function runTask(taskId: string): Promise<void> {
           state = advanceState(state, "fail");
           updateTaskStatus(task.id, "ci_fixing", state);
 
-          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath, undefined, sandbox);
           if (fixResult.error) {
             if (isTaskCancelled(task.id)) return;
             break;
@@ -747,7 +775,7 @@ export async function runTask(taskId: string): Promise<void> {
           state = advanceState(state, "errors");
           updateTaskStatus(task.id, "fix_linting", state);
 
-          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
+          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath, undefined, sandbox);
           if (fixResult.error) {
             if (isTaskCancelled(task.id)) return;
             break;
@@ -765,13 +793,18 @@ export async function runTask(taskId: string): Promise<void> {
       if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
     }
 
-    // Tear down Docker container
-    if (containerName) {
+    // Tear down per-repo container (not the sandbox -- that lives for the whole task)
+    if (containerName && !sandbox) {
       try { await teardownTaskContainer(task.id); } catch {}
     }
   }
 
   if (isTaskCancelled(task.id)) return;
+
+  // Tear down sandbox container after all CI/lint is done
+  if (sandbox) {
+    try { await teardownTaskContainer(task.id); } catch {}
+  }
 
   // === REVIEW: COMMIT + PUSH + CREATE PR PER REPO ===
   logger.info("Task ready for review", { taskId: task.id });
@@ -936,10 +969,25 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   const primaryRepo = repos[0];
   const primaryWorkDir = workDirs.get(primaryRepo.name)!;
 
+  // Start sandbox container if configured
+  let sandbox: SandboxOptions | undefined;
+  if (config.sandboxClaude) {
+    try {
+      const sandboxName = await startSandboxContainer(task.id, taskDir(task.id));
+      if (sandboxName) {
+        const containerWorkDir = repos.length > 1 ? "/workspace" : `/workspace/${primaryRepo.name}`;
+        sandbox = { containerName: sandboxName, containerWorkDir };
+      }
+    } catch {}
+  }
+
   // Restore MCP config
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(task.id, primaryWorkDir, primaryRepo.name);
+    mcpConfigPath = await generateMcpConfig(
+      task.id, primaryWorkDir, primaryRepo.name,
+      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+    );
   } catch (err) {
     logger.warn("Failed to generate MCP config for revision", { error: String(err) });
   }
@@ -982,7 +1030,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   }
 
   const triageResult = await executeUnderstandReview(
-    task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking
+    task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking, sandbox
   );
 
   if (triageResult.error) {
@@ -1007,7 +1055,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     }
 
     const smallResult = await executeReviewSmallFeedback(
-      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking
+      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking, sandbox
     );
 
     if (smallResult.error || smallResult.plan.length < 50) {
@@ -1036,7 +1084,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     }
 
     const largeResult = await executeReviewLargeFeedback(
-      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking
+      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking, sandbox
     );
 
     if (largeResult.error || largeResult.plan.length < 200) {
@@ -1055,7 +1103,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     // --- Scrutinize loop (same as runTask) ---
     updateTaskStatus(task.id, "scrutinizing", state);
 
-    const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking);
+    const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox);
 
     if (!scrutiny1.error) {
       if (isTaskCancelled(task.id)) return;
@@ -1063,7 +1111,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       updateTaskStatus(task.id, "replanning", state);
 
       const planAgainResult = await executePlanAgain(
-        task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking
+        task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking, sandbox
       );
 
       if (!planAgainResult.error) {
@@ -1071,7 +1119,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
         state = advanceState(state, "done");
         updateTaskStatus(task.id, "scrutinizing", state);
 
-        const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking);
+        const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking, sandbox);
 
         if (!scrutiny2.error) {
           if (isTaskCancelled(task.id)) return;
@@ -1079,7 +1127,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
           updateTaskStatus(task.id, "finalizing_plan", state);
 
           const finalPlan = await executeFinalizePlan(
-            task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking
+            task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking, sandbox
           );
 
           planResult.plan = (!finalPlan.error && finalPlan.plan.length > 200) ? finalPlan.plan : planAgainResult.plan;
@@ -1105,7 +1153,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   const implWorkDir = repos.length > 1 ? taskDir(task.id) : workDirs.get(repos[0].name)!;
 
   const implResult = await executeImplement(
-    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking
+    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox
   );
 
   if (implResult.error) {
@@ -1124,22 +1172,28 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   for (const repo of repos) {
     const workDir = workDirs.get(repo.name)!;
 
-    let containerName: string | null = null;
-    try {
-      containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
-    } catch (err) {
-      logger.error({ err, taskId: task.id }, "failed to set up task container");
-      containerName = null;
+    let containerName: string | null = sandbox?.containerName ?? null;
+    let containerWorkDir = sandbox ? `/workspace/${repo.name}` : "/workspace";
+
+    if (!containerName) {
+      try {
+        containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
+      } catch (err) {
+        logger.error({ err, taskId: task.id }, "failed to set up task container");
+        containerName = null;
+      }
+      containerWorkDir = (containerName && isSandboxContainer(containerName))
+        ? `/workspace/${repo.name}`
+        : "/workspace";
     }
 
-    // For sandbox containers, the task directory is mounted at /workspace and each
-    // repo is a subdirectory. For repo-specific containers, workDir is /workspace.
-    const containerWorkDir = (containerName && isSandboxContainer(containerName))
-      ? `/workspace/${repo.name}`
-      : "/workspace";
-
     let repoMcpConfigPath: string | undefined;
-    try { repoMcpConfigPath = await generateMcpConfig(task.id, workDir, repo.name); } catch {}
+    try {
+      repoMcpConfigPath = await generateMcpConfig(
+        task.id, workDir, repo.name,
+        sandbox ? { sandboxed: true, containerWorkDir } : undefined
+      );
+    } catch {}
 
     // --- CI ---
     if (repo.test_cmd || repo.build_cmd) {
@@ -1169,7 +1223,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
           state = advanceState(state, "fail");
           updateTaskStatus(task.id, "ci_fixing", state);
 
-          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath);
+          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath, undefined, sandbox);
           if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
 
           state = advanceState(state, "done");
@@ -1205,7 +1259,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
           state = advanceState(state, "errors");
           updateTaskStatus(task.id, "fix_linting", state);
 
-          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath);
+          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath, undefined, sandbox);
           if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
 
           state = advanceState(state, "done");
@@ -1215,12 +1269,17 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
       }
     }
 
-    if (containerName) {
+    if (containerName && !sandbox) {
       try { await teardownTaskContainer(task.id); } catch {}
     }
   }
 
   if (isTaskCancelled(task.id)) return;
+
+  // Tear down sandbox container
+  if (sandbox) {
+    try { await teardownTaskContainer(task.id); } catch {}
+  }
 
   // === REVIEW: COMMIT + PUSH PER REPO ===
   logger.info("Revision ready for review", { taskId: task.id });

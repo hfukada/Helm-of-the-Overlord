@@ -6,6 +6,7 @@ import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { renderTemplate } from "../../../prompts/loader";
 import { logger } from "../../../shared/logger";
+import type { SandboxOptions } from "./types";
 
 function recordRun(
   agentRunId: string,
@@ -52,7 +53,8 @@ export async function executeFixCi(
   workDir: string,
   ciOutput: string,
   mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void
+  onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ output: string; error: string | null }> {
   const model = config.defaultModel;
   const db = getDb();
@@ -85,6 +87,8 @@ export async function executeFixCi(
     agentRunId: planRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   recordRun(planRunId, task.id, "fix_ci_plan", planPrompt, model, planResult);
@@ -121,6 +125,8 @@ export async function executeFixCi(
     agentRunId: implRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   recordRun(implRunId, task.id, "fix_ci", implPrompt, model, implResult);

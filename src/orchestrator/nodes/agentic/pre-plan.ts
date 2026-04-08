@@ -5,6 +5,7 @@ import { buildPrePlanPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { logger } from "../../../shared/logger";
+import type { SandboxOptions } from "./types";
 
 /**
  * Runs a lightweight pre-plan phase to determine which repos need changes.
@@ -13,6 +14,7 @@ import { logger } from "../../../shared/logger";
 export async function executePrePlan(
   task: Task,
   mcpConfigPath?: string,
+  sandbox?: SandboxOptions,
 ): Promise<{ repoNames: string[]; error: string | null }> {
   const agentRunId = ulid();
   const prompt = await buildPrePlanPrompt(task);
@@ -37,6 +39,8 @@ export async function executePrePlan(
     mcpConfigPath,
     agentRunId,
     taskId: task.id,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();

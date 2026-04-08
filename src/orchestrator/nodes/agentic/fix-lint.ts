@@ -5,6 +5,7 @@ import { buildSystemPrompt, getChatContext } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { renderTemplate } from "../../../prompts/loader";
+import type { SandboxOptions } from "./types";
 
 export async function executeFixLint(
   task: Task,
@@ -13,7 +14,8 @@ export async function executeFixLint(
   lintOutput: string,
   lintCommand: string,
   mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void
+  onEvent?: (type: string, content: string) => void,
+  sandbox?: SandboxOptions,
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
   const model = config.defaultModel;
@@ -49,6 +51,8 @@ export async function executeFixLint(
     agentRunId,
     taskId: task.id,
     onEvent,
+    containerName: sandbox?.containerName,
+    containerWorkDir: sandbox?.containerWorkDir,
   });
 
   const now = new Date().toISOString();

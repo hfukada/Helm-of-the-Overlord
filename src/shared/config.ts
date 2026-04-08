@@ -22,6 +22,8 @@ export interface Config {
   giteaBotPassword: string;
   giteaOrg: string;
   giteaPollIntervalMs: number;
+  sandboxClaude: boolean;
+  mcpHttpPort: number;
 }
 
 function expandHome(p: string): string {
@@ -52,6 +54,8 @@ function loadConfig(): Config {
   const giteaBotPassword = process.env.GITEA_BOT_PASSWORD ?? "hoto-bot-default";
   const giteaOrg = process.env.GITEA_ORG ?? "hoto";
   const giteaPollIntervalMs = parseInt(process.env.GITEA_POLL_INTERVAL_MS ?? "15000", 10);
+  const sandboxClaude = process.env.HOTO_SANDBOX_CLAUDE === "true" || process.env.HOTO_SANDBOX_CLAUDE === "1";
+  const mcpHttpPort = parseInt(process.env.HOTO_MCP_HTTP_PORT ?? "7778", 10);
 
   return {
     workspaceDir,
@@ -73,6 +77,8 @@ function loadConfig(): Config {
     giteaBotPassword,
     giteaOrg,
     giteaPollIntervalMs,
+    sandboxClaude,
+    mcpHttpPort,
   };
 }
 
