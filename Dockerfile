@@ -9,7 +9,7 @@ RUN bun install --frozen-lockfile
 # Stage 2: Runtime
 FROM oven/bun:1-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl docker.io \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code CLI
@@ -20,6 +20,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules node_modules
 COPY package.json bunfig.toml ./
 COPY src/ src/
+COPY Dockerfile.sandbox ./
+
+COPY global_claude.md /root/.claude/CLAUDE.md
 
 ENV HOTO_HOST=0.0.0.0
 ENV HOTO_PORT=7777

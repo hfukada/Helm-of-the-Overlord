@@ -1,26 +1,37 @@
 services:
-  #hoto:
-  #  build: .
-  #  ports:
-  #    - "7777:7777"
-  #  volumes:
-  #    - hoto-data:/data
-  #    - gitea-data:/gitea-data:ro
-  #    # Mount host credentials for Claude Code
-  #    - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
-  #  env_file:
-  #    - .env
-  #  environment:
-  #    HOTO_HOST: "0.0.0.0"
-  #    HOTO_PORT: "7777"
-  #    HOTO_WORKSPACE: /data
-  #    CHROMA_URL: http://chromadb:8033
-  #    MATRIX_HOMESERVER_URL: http://synapse:8098
-  #    GITEA_URL: http://gitea:3777
-  #  depends_on:
-  #    - chromadb
-  #    - synapse
-  #    - gitea
+  hoto:
+    build: .
+    ports:
+      - "7777:7777"
+    volumes:
+      - hoto-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+    env_file:
+      - .env
+    environment:
+      # Override URLs to use Docker internal service names
+      HOTO_HOST: "0.0.0.0"
+      HOTO_PORT: "7777"
+      HOTO_WORKSPACE: /data
+      CHROMA_URL: http://chromadb:8000
+      MATRIX_HOMESERVER_URL: http://synapse:8008
+      GITEA_URL: http://gitea:3777
+      OLLAMA_HOST: http://ollama:11434
+    depends_on:
+      - chromadb
+      - synapse
+      - gitea
+      - ollama
+
+  ollama:
+    image: ollama/ollama:latest
+    entrypoint: ["/bin/sh", "/scripts/ollama-init.sh"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./scripts/ollama-init.sh:/scripts/ollama-init.sh:ro
 
   chromadb:
     image: ghcr.io/chroma-core/chroma:1.5.5
@@ -62,6 +73,7 @@ services:
 
 volumes:
   hoto-data:
+  ollama-data:
   chroma-data:
   synapse-data:
   gitea-data:

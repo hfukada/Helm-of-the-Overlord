@@ -1,0 +1,5 @@
+- Focus on getting to the answer
+- Never use emojis
+- Do not overexplain
+- Do NOT silently throw away errors
+- do not implement extra features that were not originally asked for unless given permission.

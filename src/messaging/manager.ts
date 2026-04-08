@@ -3,7 +3,6 @@ import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
 import type { Task, TaskStatus } from "../shared/types";
-import { claudeText } from "../shared/claude-cli";
 
 const COMMAND_HELP: Record<string, string> = {
   list: [
@@ -265,16 +264,31 @@ export class MessagingManager {
   private async guessIntent(text: string): Promise<"run" | "ask" | "cancel"> {
     const prompt =
       "Classify the following user message into exactly one of these intents: run, ask, cancel.\n" +
-      "- run: the user wants to start a task or is asking if hoto can do something for them.\n" +
+      "- run: the user wants to start a task or make a change to code.\n" +
       "- ask: the user has a question about how something works.\n" +
       "- cancel: the user wants to cancel something.\n" +
       "Reply with a single lowercase word: run, ask, or cancel.\n\n" +
       `Message: ${text}`;
+
+    const ollamaHost = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
+    const ollamaModel = process.env.HOTO_INTENT_MODEL ?? "llama3.2:3b";
+
     try {
-      const reply = (await claudeText({ prompt })).trim().toLowerCase();
-      if (reply === "run" || reply === "ask" || reply === "cancel") {
-        return reply;
+      const res = await fetch(`${ollamaHost}/api/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: ollamaModel, prompt, stream: false }),
+      });
+
+      if (!res.ok) {
+        logger.warn("Ollama intent classification failed, defaulting to ask", { status: res.status });
+        return "ask";
       }
+
+      const data = await res.json() as { response?: string };
+      const reply = (data.response ?? "").trim().toLowerCase();
+      const match = reply.match(/\b(run|ask|cancel)\b/);
+      if (match) return match[1] as "run" | "ask" | "cancel";
       return "ask";
     } catch (err) {
       logger.error("guessIntent failed, defaulting to ask", { error: String(err) });
