@@ -7,6 +7,7 @@ import type { SearchResult } from "../../knowledge/search";
 import { indexRepo } from "../../knowledge/indexer";
 import { parseRepo } from "../../knowledge/repo-parser";
 import { logger } from "../../shared/logger";
+import { getMessagingManager } from "../../messaging/manager";
 import { config } from "../../shared/config";
 import type { Repo } from "../../shared/types";
 import { claudeStream } from "../../shared/claude-cli";
@@ -118,6 +119,7 @@ knowledge.post("/repos/:name/reindex", async (c) => {
   // Return 202 immediately, run indexing in background
   indexRepo(repo, { force }).then((result) => {
     logger.info("Reindex complete", { name, chunks: result.chunks, embeddings: result.embeddings });
+    getMessagingManager()?.notifyIndexingComplete(name, result.chunks, result.embeddings);
   }).catch((err) => {
     logger.error("Reindex failed", { name, error: String(err) });
   });
