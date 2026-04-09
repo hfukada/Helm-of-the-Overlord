@@ -441,6 +441,29 @@ export class MessagingManager {
     }
   }
 
+  async notifyIndexingComplete(
+    repoName: string,
+    chunks: number,
+    embeddings: number,
+    skipProviderChannel?: { providerName: string; channelId: string }
+  ): Promise<void> {
+    const msg = `Indexed ${repoName}: ${chunks} chunks, ${embeddings} embeddings.`;
+    for (const [providerName, p] of this.providers) {
+      const mainChannelId = this.mainChannelIds.get(providerName);
+      if (!mainChannelId) continue;
+      if (
+        skipProviderChannel &&
+        skipProviderChannel.providerName === providerName &&
+        skipProviderChannel.channelId === mainChannelId
+      ) continue;
+      try {
+        await p.sendMessage(mainChannelId, msg);
+      } catch (err) {
+        logger.warn("Failed to send indexing notification", { provider: providerName, error: String(err) });
+      }
+    }
+  }
+
   async notifyInputRequest(taskId: string, question: string): Promise<void> {
     await this.sendToTaskChannels(
       taskId,
@@ -825,6 +848,14 @@ export class MessagingManager {
     const senderProvider = this.getSenderProvider(cmd);
     indexRepo(repo, { force }).then(async (result) => {
       await senderProvider?.sendMessage(cmd.channelId, `Reindexed ${repoName}: ${result.chunks} chunks, ${result.embeddings} embeddings.`);
+      try {
+        await this.notifyIndexingComplete(repoName, result.chunks, result.embeddings, {
+          providerName: cmd.providerName,
+          channelId: cmd.channelId,
+        });
+      } catch (err) {
+        logger.warn("Failed to send indexing notification from cmdReindex", { error: String(err) });
+      }
     }).catch(async (err) => {
       await senderProvider?.sendMessage(cmd.channelId, `Reindex failed: ${err}`);
     });

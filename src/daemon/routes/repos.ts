@@ -9,6 +9,7 @@ import { parseRepo } from "../../knowledge/repo-parser";
 import { indexRepo } from "../../knowledge/indexer";
 import type { Repo } from "../../shared/types";
 import { embedGiteaCredentials } from "../../gitea/client";
+import { getMessagingManager } from "../../messaging/manager";
 
 const repos = new Hono();
 
@@ -131,9 +132,13 @@ repos.post("/", async (c) => {
     ci_on_host: body.ci_on_host ?? false,
     metadata: null,
   };
-  indexRepo(repo).catch((err) => {
-    logger.warn("Auto-indexing failed", { repo: name, error: String(err) });
-  });
+  indexRepo(repo)
+    .then((result) => {
+      getMessagingManager()?.notifyIndexingComplete(repo.name, result.chunks, result.embeddings);
+    })
+    .catch((err) => {
+      logger.warn("Auto-indexing failed", { repo: name, error: String(err) });
+    });
 
   return c.json({
     id: repoId, name, path: repoPath,
