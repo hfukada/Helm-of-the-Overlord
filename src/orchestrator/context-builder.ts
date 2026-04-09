@@ -322,9 +322,9 @@ export function buildSystemPrompt(repo: Repo, opts?: { hasMcp?: boolean; hasDock
   const lines = [`You are working on the "${repo.name}" repository.`];
 
   if (opts?.hasMcp) {
-    lines.push("You have access to Read, Glob, and Grep for direct file access. Use these for reading and searching files.");
-    lines.push("You also have a knowledge base MCP tool (search_knowledge) for semantic search across indexed documentation and code. Use it when you need to find relevant context by topic rather than filename.");
-    lines.push("IMPORTANT: Use Read and Glob directly for file operations. Do NOT use ToolSearch to look up MCP tools for reading files -- Read and Glob are faster and don't cost extra turns.");
+    lines.push("You have these tools: Read, Glob, Grep (direct file access), and search_knowledge (MCP knowledge base search).");
+    lines.push("START by calling search_knowledge to find relevant indexed documentation and code patterns. This is faster than reading files one by one.");
+    lines.push("Then use Read/Glob/Grep for specific files you need to examine in detail.");
   } else {
     lines.push("You have access to Read, Write, Edit, Glob, Grep, and Bash tools.");
   }
