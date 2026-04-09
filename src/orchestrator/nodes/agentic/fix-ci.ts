@@ -80,7 +80,7 @@ export async function executeFixCi(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 5,
+    maxTurns: 10,
     allowedTools: readTools,
     mcpConfigPath,
     addDirs: [workDir],

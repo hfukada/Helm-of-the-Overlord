@@ -138,6 +138,7 @@ export async function startSandboxContainer(
     ...volumeArgs,
     "-w", sandboxWorkspace,
     "-v", "/var/run/docker.sock:/var/run/docker.sock",
+    "--add-host", "host.docker.internal:host-gateway",
     "hoto-sandbox:latest",
     "sleep", "infinity",
   ];
