@@ -207,6 +207,8 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE repos ADD COLUMN docker_image TEXT",
   "ALTER TABLE repos ADD COLUMN ci_on_host INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE tasks ADD COLUMN source_sender_id TEXT",
+  "ALTER TABLE tasks ADD COLUMN source_provider TEXT",
 ];
 
 export function runMigrations(db: Database): void {

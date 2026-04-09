@@ -88,10 +88,16 @@ async function buildSandboxImage(dockerfilePath: string): Promise<boolean> {
   return true;
 }
 
+export interface SandboxContainerResult {
+  containerName: string;
+  /** Base workspace path inside the sandbox container */
+  workspacePath: string;
+}
+
 export async function startSandboxContainer(
   taskId: string,
   taskDirectory: string,
-): Promise<string | null> {
+): Promise<SandboxContainerResult | null> {
   // Resolve Dockerfile.sandbox two levels up from src/workspace/ to the repo root
   const dockerfilePath = join(import.meta.dir, "../../Dockerfile.sandbox");
 
@@ -101,27 +107,47 @@ export async function startSandboxContainer(
     return null;
   }
 
-  const credentialsPath = join(homedir(), ".claude", ".credentials.json");
-  if (!existsSync(credentialsPath)) {
-    logger.error(
-      { taskId },
-      "claude credentials not found at ~/.claude/.credentials.json -- sandbox container will not have claude access"
-    );
-    return null;
+  const name = containerName(taskId);
+
+  // Determine how to mount the workspace into the sandbox.
+  // When hoto runs in Docker, /data is a named volume -- we can't bind-mount a path
+  // inside it. Instead, use --volumes-from to share the hoto container's volumes,
+  // or mount the named volume directly.
+  const hotoContainerName = process.env.HOSTNAME; // Docker sets this to the container ID
+  const hotoVolume = process.env.HOTO_DATA_VOLUME; // e.g. "helm-of-the-overlord_hoto-data"
+
+  let volumeArgs: string[];
+  if (hotoVolume) {
+    // Mount the named volume at the same path so /data/tasks/<id> resolves
+    volumeArgs = ["-v", `${hotoVolume}:/data`];
+  } else if (hotoContainerName && taskDirectory.startsWith("/data")) {
+    // Share volumes from the hoto container
+    volumeArgs = ["--volumes-from", hotoContainerName];
+  } else {
+    // Running on bare metal -- bind mount the task directory directly
+    volumeArgs = ["-v", `${taskDirectory}:/workspace`];
   }
 
-  const name = containerName(taskId);
+  // Map workspace path: if using shared /data volume, workspace is /data/tasks/<id>
+  // If using direct bind mount, workspace is /workspace
+  const sandboxWorkspace = (hotoVolume || hotoContainerName) ? taskDirectory : "/workspace";
 
   const args = [
     "docker", "run", "-d",
     "--name", name,
-    "-v", `${taskDirectory}:/workspace`,
-    "-w", "/workspace",
+    ...volumeArgs,
+    "-w", sandboxWorkspace,
     "-v", "/var/run/docker.sock:/var/run/docker.sock",
-    "-v", `${credentialsPath}:/root/.claude/.credentials.json:ro`,
     "hoto-sandbox:latest",
     "sleep", "infinity",
   ];
+
+  // Mount credentials if the host path is known, otherwise copy them in after start
+  const hostCredentials = process.env.HOTO_HOST_CREDENTIALS_PATH;
+  if (hostCredentials) {
+    const imgIdx = args.indexOf("hoto-sandbox:latest");
+    args.splice(imgIdx, 0, "-v", `${hostCredentials}:/root/.claude/.credentials.json:ro`);
+  }
 
   const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
   if (runResult.exitCode !== 0) {
@@ -132,9 +158,25 @@ export async function startSandboxContainer(
     return null;
   }
 
+  // If credentials weren't bind-mounted, copy them from the hoto container's filesystem
+  if (!hostCredentials) {
+    const credentialsPath = join(homedir(), ".claude", ".credentials.json");
+    if (existsSync(credentialsPath)) {
+      const copyResult = Bun.spawnSync(
+        ["docker", "cp", credentialsPath, `${name}:/root/.claude/.credentials.json`],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+      if (copyResult.exitCode !== 0) {
+        logger.warn("Failed to copy credentials into sandbox", { taskId, error: new TextDecoder().decode(copyResult.stderr) });
+      }
+    } else {
+      logger.warn("No credentials found to copy into sandbox", { taskId });
+    }
+  }
+
   sandboxContainerNames.add(name);
-  logger.info({ taskId, name, taskDirectory }, "sandbox container started");
-  return name;
+  logger.info("Sandbox container started", { taskId, name, taskDirectory, sandboxWorkspace });
+  return { containerName: name, workspacePath: sandboxWorkspace };
 }
 
 export async function setupTaskContainer(
@@ -279,8 +321,9 @@ export async function setupTaskContainer(
   }
 
   // No repo-specific container config found; fall back to sandbox
-  logger.info({ taskId, taskDirectory }, "no repo-specific container config found; falling back to sandbox");
-  return startSandboxContainer(taskId, taskDirectory);
+  logger.info("No repo-specific container config found; falling back to sandbox", { taskId, taskDirectory });
+  const sandboxResult = await startSandboxContainer(taskId, taskDirectory);
+  return sandboxResult?.containerName ?? null;
 }
 
 export async function teardownTaskContainer(taskId: string): Promise<void> {

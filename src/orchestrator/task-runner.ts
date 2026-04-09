@@ -484,13 +484,14 @@ export async function runTask(taskId: string): Promise<void> {
   let sandbox: SandboxOptions | undefined;
   if (config.sandboxClaude) {
     try {
-      const sandboxName = await startSandboxContainer(task.id, taskDir(task.id));
-      if (sandboxName) {
+      const sandboxResult = await startSandboxContainer(task.id, taskDir(task.id));
+      if (sandboxResult) {
+        const workspaceBase = sandboxResult.workspacePath;
         const containerWorkDir = repos.length > 1
-          ? "/workspace"
-          : `/workspace/${primaryRepo.name}`;
-        sandbox = { containerName: sandboxName, containerWorkDir };
-        logger.info("Sandbox container started for task", { taskId: task.id, containerName: sandboxName });
+          ? workspaceBase
+          : `${workspaceBase}/${primaryRepo.name}`;
+        sandbox = { containerName: sandboxResult.containerName, containerWorkDir, workspaceBase };
+        logger.info("Sandbox container started for task", { taskId: task.id, containerName: sandboxResult.containerName, workspacePath: workspaceBase });
       } else {
         logger.warn("Sandbox container failed to start, falling back to host execution", { taskId: task.id });
       }
@@ -675,7 +676,7 @@ export async function runTask(taskId: string): Promise<void> {
 
     // Use sandbox container if active, otherwise set up per-repo container
     let containerName: string | null = sandbox?.containerName ?? null;
-    let containerWorkDir = sandbox ? `/workspace/${repo.name}` : "/workspace";
+    let containerWorkDir = sandbox ? `${sandbox.workspaceBase}/${repo.name}` : "/workspace";
 
     if (!containerName) {
       try {
@@ -973,10 +974,13 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
   let sandbox: SandboxOptions | undefined;
   if (config.sandboxClaude) {
     try {
-      const sandboxName = await startSandboxContainer(task.id, taskDir(task.id));
-      if (sandboxName) {
-        const containerWorkDir = repos.length > 1 ? "/workspace" : `/workspace/${primaryRepo.name}`;
-        sandbox = { containerName: sandboxName, containerWorkDir };
+      const sandboxResult = await startSandboxContainer(task.id, taskDir(task.id));
+      if (sandboxResult) {
+        const workspaceBase = sandboxResult.workspacePath;
+        const containerWorkDir = repos.length > 1
+          ? workspaceBase
+          : `${workspaceBase}/${primaryRepo.name}`;
+        sandbox = { containerName: sandboxResult.containerName, containerWorkDir, workspaceBase };
       }
     } catch {}
   }
@@ -1173,7 +1177,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
     const workDir = workDirs.get(repo.name)!;
 
     let containerName: string | null = sandbox?.containerName ?? null;
-    let containerWorkDir = sandbox ? `/workspace/${repo.name}` : "/workspace";
+    let containerWorkDir = sandbox ? `${sandbox.workspaceBase}/${repo.name}` : "/workspace";
 
     if (!containerName) {
       try {

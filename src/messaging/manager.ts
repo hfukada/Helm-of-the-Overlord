@@ -263,12 +263,13 @@ export class MessagingManager {
 
   private async guessIntent(text: string): Promise<"run" | "ask" | "cancel"> {
     const prompt =
-      "Classify the following user message into exactly one of these intents: run, ask, cancel.\n" +
-      "- run: the user wants to start a task or make a change to code.\n" +
-      "- ask: the user has a question about how something works.\n" +
-      "- cancel: the user wants to cancel something.\n" +
-      "Reply with a single lowercase word: run, ask, or cancel.\n\n" +
-      `Message: ${text}`;
+      "Classify the user message as exactly one intent.\n\n" +
+      "run = the user wants to change code, fix something, add a feature, update something, or do any task that modifies files\n" +
+      "ask = the user is asking a question and does NOT want code changes\n" +
+      "cancel = the user wants to stop or cancel something\n\n" +
+      "If the message mentions fixing, adding, changing, updating, or implementing anything, classify as: run\n\n" +
+      `Message: ${text}\n\n` +
+      "Intent (one word):";
 
     const ollamaHost = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
     const ollamaModel = process.env.HOTO_INTENT_MODEL ?? "llama3.2:3b";
@@ -277,7 +278,7 @@ export class MessagingManager {
       const res = await fetch(`${ollamaHost}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: ollamaModel, prompt, stream: false }),
+        body: JSON.stringify({ model: ollamaModel, prompt, stream: false, options: { temperature: 0 } }),
       });
 
       if (!res.ok) {
@@ -288,8 +289,9 @@ export class MessagingManager {
       const data = await res.json() as { response?: string };
       const reply = (data.response ?? "").trim().toLowerCase();
       const match = reply.match(/\b(run|ask|cancel)\b/);
-      if (match) return match[1] as "run" | "ask" | "cancel";
-      return "ask";
+      const intent = match ? match[1] as "run" | "ask" | "cancel" : "ask";
+      logger.info("Intent classified", { text: text.slice(0, 80), reply, intent });
+      return intent;
     } catch (err) {
       logger.error("guessIntent failed, defaulting to ask", { error: String(err) });
       return "ask";
@@ -447,7 +449,17 @@ export class MessagingManager {
   }
 
   async createTaskChannel(task: Task, branchName?: string): Promise<string | null> {
-    const creator = this.taskCreators.get(task.id);
+    // Try in-memory map first, then fall back to DB (handles race condition)
+    let creator = this.taskCreators.get(task.id) ?? null;
+    if (!creator) {
+      const db = getDb();
+      const row = db.query(
+        "SELECT source_sender_id, source_provider FROM tasks WHERE id = ?"
+      ).get(task.id) as { source_sender_id: string | null; source_provider: string | null } | null;
+      if (row?.source_sender_id && row?.source_provider) {
+        creator = { senderId: row.source_sender_id, providerName: row.source_provider };
+      }
+    }
     let firstChannelId: string | null = null;
 
     const summary = [
@@ -555,6 +567,12 @@ export class MessagingManager {
     } else if (repoNames.length === 1) {
       body.repo_name = repoNames[0];
     }
+
+    // Pass creator info through the API so task-runner can use it for channel invites.
+    // We include source_sender_id and source_provider so createTaskChannel knows who to invite
+    // without relying on the in-memory taskCreators map (which has a race condition).
+    body.source_sender_id = cmd.senderId;
+    body.source_provider = cmd.providerName;
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks`, {
       method: "POST",
@@ -1123,27 +1141,31 @@ export class MessagingManager {
       "Hoto Bot Commands",
       "",
       "General (any channel):",
-      "  !list                     List recent tasks (last 20)",
-      "  !status [id]              Show task details (status, branch, timestamps)",
-      "  !cancel [id]              Cancel a running task and clean up its worktree",
-      "  !delete-task <id>         Delete a task and remove all associated data",
-      "  !clean-done               Delete all finished tasks (committed, cancelled, failed)",
-      "  !run <description>        Submit a new task",
-      "  !repos                    List all registered repos with language/framework",
-      "  !repo add <url> [--name]  Clone and register a repo from a git URL",
-      "  !reindex <repo>           Reindex a repo's knowledge base (docs, code, config)",
-      "  !tokens                   Show today's token usage and cost per model",
-      "  !ask <question>           Query the knowledge base using AI (or just type in the main channel)",
-      "  !relate <a> <b> <desc>   Define a relationship between two repos",
-      "  !unrelate <a> <b> [type] Remove a repo relationship",
-      "  !relationships [repo]    List repo relationships",
-      "  !help [command]           Show this help, or details for a specific command",
+      "  !run <description> [-r repo]   Submit a new task",
+      "  !list                          List recent tasks (last 20)",
+      "  !status [id]                   Show task details",
+      "  !cancel [id]                   Cancel a running task",
+      "  !delete-task <id>              Delete a task and all data",
+      "  !clean-done                    Delete all finished tasks",
+      "  !repos                         List registered repos",
+      "  !repo add <url> [--name] [--allow-ci-on-host]",
+      "                                 Clone and register a repo",
+      "  !repo remove <name>            Unregister a repo",
+      "  !reindex <repo> [--force]      Reindex repo knowledge base",
+      "  !tokens                        Show token usage and cost",
+      "  !ask <question>                Query the knowledge base",
+      "  !relate <a> <b> <desc>         Define a repo relationship",
+      "  !unrelate <a> <b> [type]       Remove a repo relationship",
+      "  !relationships [repo]          List repo relationships",
+      "  !help [command]                Show this help",
       "",
       "In task channels:",
-      "  !approve                  Accept the implementation (merge via Gitea)",
-      "  !revise <feedback>        Request changes with specific feedback",
-      "  !delete-task              Delete this task and close the channel",
-      "  (plain messages)          Answer questions from the agent",
+      "  !approve                       Accept and merge via Gitea",
+      "  !revise <feedback>             Request changes with feedback",
+      "  !delete-task                   Delete task and close channel",
+      "  (plain messages)               Answer questions from the agent",
+      "",
+      "Plain text in the main channel is auto-classified as a task or question.",
     ];
     await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, help.join("\n"));
   }

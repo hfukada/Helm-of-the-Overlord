@@ -9,11 +9,20 @@ RUN bun install --frozen-lockfile
 # Stage 2: Runtime
 FROM oven/bun:1-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl docker.io \
-    && rm -rf /var/lib/apt/lists/*
+USER root
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && git config --global user.email "hoto@localhost" \
+    && git config --global user.name "hoto"
+
+# Install Docker CLI (static binary -- no daemon, just the client for docker exec)
+RUN curl -fsSL https://download.docker.com/linux/static/stable/$(uname -m)/docker-27.5.1.tgz \
+    | tar xz --strip-components=1 -C /usr/local/bin docker/docker
 
 # Install Claude Code CLI
-RUN bun install -g @anthropic-ai/claude-code
+RUN bun install -g @anthropic-ai/claude-code \
+    && ln -s $(which bun) /usr/local/bin/node
 
 WORKDIR /app
 

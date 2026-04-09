@@ -25,6 +25,7 @@
  */
 
 import { config } from "./config";
+import { logger } from "./logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,11 +125,16 @@ function spawnClaude(args: string[], opts: ClaudeOptions) {
     }
     dockerArgs.push(opts.containerName, ...args);
 
+    logger.info("Spawning containerized claude", {
+      cmd: dockerArgs.slice(0, 8).join(" "),
+      containerName: opts.containerName,
+      containerWorkDir,
+    });
+
     return Bun.spawn(dockerArgs, {
       stdin: new TextEncoder().encode(opts.prompt),
       stdout: "pipe",
       stderr: "pipe",
-      env: process.env as Record<string, string>,
     });
   }
 

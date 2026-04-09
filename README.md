@@ -148,6 +148,13 @@ All configuration is via environment variables. The daemon reads these at startu
 | `GITEA_BOT_PASSWORD` | `hoto-bot-default` | Gitea bot password |
 | `GITEA_ORG` | `hoto` | Gitea organization for repos |
 | `GITEA_POLL_INTERVAL_MS` | `15000` | Interval for polling PR review status (ms) |
+| `HOTO_SANDBOX_CLAUDE` | `false` | Run Claude subprocesses in sandboxed Docker containers |
+| `HOTO_MCP_HTTP_PORT` | `7778` | Port for MCP HTTP/SSE server (sandbox mode) |
+| `HOTO_DATA_VOLUME` | — | Docker named volume for workspace (containerized deployment) |
+| `HOTO_HOST_CREDENTIALS_PATH` | — | Host path to Claude credentials for sandbox bind mount |
+| `HOTO_HOSTNAME` | `localhost` | Hostname for external URLs (Gitea PR links) |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL for intent classification |
+| `HOTO_INTENT_MODEL` | `llama3.2:3b` | Ollama model for classifying chat messages |
 
 ## Chat integration
 
@@ -166,40 +173,54 @@ Set `DISCORD_BOT_TOKEN` and `DISCORD_GUILD_ID`. Create a bot at [discord.com/dev
 Both providers respond to the same `!` commands in their main channel:
 
 ```
-!run <description> [-r repo]          Submit a task
-!status [id]                          List tasks or show task detail
-!cancel <id>                          Cancel a task
-!list                                 List recent tasks
-!repos                                List registered repos
-!repo add <git-url> [--name <name>]   Clone and register a repo
-!repo remove <name>                   Unregister a repo
-!ask <question>                       Query the knowledge base
-!relate <a> <b> <description>         Record a relationship between two repos
-!unrelate <a> <b> [type]              Remove a repo relationship
-!help [command]                       Show help
+General (any channel):
+  !run <description> [-r repo]          Submit a task
+  !list                                 List recent tasks
+  !status [id]                          Show task details
+  !cancel [id]                          Cancel a running task
+  !delete-task <id>                     Delete a task and all data
+  !clean-done                           Delete all finished tasks
+  !repos                                List registered repos
+  !repo add <url> [--name] [--allow-ci-on-host]   Clone and register a repo
+  !repo remove <name>                   Unregister a repo
+  !reindex <repo> [--force]             Reindex repo knowledge base
+  !tokens                               Show token usage and cost
+  !ask <question>                       Query the knowledge base
+  !relate <a> <b> <desc>                Define a repo relationship
+  !unrelate <a> <b> [type]              Remove a repo relationship
+  !relationships [repo]                 List repo relationships
+  !help [command]                       Show help
+
+In task channels:
+  !approve                              Accept the implementation (merge via Gitea)
+  !revise <feedback>                    Request changes with specific feedback
+  !delete-task                          Delete this task and close the channel
+  (plain messages)                      Answer questions from the agent
 ```
 
-Plain-text messages in the main channel are treated as `!ask` queries.
+Plain-text messages in the main channel are classified by intent (via Ollama) and routed to either `!run` or `!ask` automatically.
 
 ## MCP server
 
-The daemon exposes an MCP server (stdio JSON-RPC) used by Claude CLI agents during task execution to access the knowledge base. The following tools are available:
+The knowledge base is accessible to Claude agents via MCP (Model Context Protocol):
 
-- `search_knowledge` - Semantic and keyword search across indexed repo content
-- `list_files` - List files in an indexed repo
-- `read_file` - Read a specific indexed file's content
+- **stdio transport** (default): Spawned per-agent by the orchestrator. No configuration needed.
+- **HTTP/SSE transport** (sandbox mode): Started on `HOTO_MCP_HTTP_PORT` (default 7778) when `HOTO_SANDBOX_CLAUDE=true`. Sandboxed Claude containers connect via `http://host.docker.internal:<port>/sse`.
 
-The MCP server is started automatically by the orchestrator for each agent subprocess; no manual configuration is required.
+Available tool: `search_knowledge` -- semantic and keyword search across indexed repo content. Agents use native `Read`/`Glob`/`Grep` for direct file access.
 
 ## Tech stack
 
 - **Runtime**: Bun (bun:sqlite, Bun.spawn, Bun.serve)
 - **HTTP**: Hono
 - **Database**: SQLite (WAL mode)
-- **AI**: Claude CLI subagents with streaming JSON output
-- **Embeddings**: Ollama + nomic-embed-text (optional)
-- **Vector search**: ChromaDB (optional, falls back to keyword search)
+- **AI**: Claude CLI subagents with streaming JSON output (sandboxed in Docker)
+- **Intent classification**: Ollama + llama3.2:3b (local, no API cost)
+- **Vector search**: ChromaDB (falls back to keyword search)
+- **Chat**: Matrix (Synapse) + Discord
+- **Code review**: Gitea (self-hosted)
 - **Web UI**: Svelte 5 + Vite + Tailwind CSS 4 (separate `hoto-ui` repo)
+- **Containers**: Docker (sandbox execution, CI/lint isolation)
 
 ## License
 

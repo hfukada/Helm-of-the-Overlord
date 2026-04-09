@@ -18,11 +18,21 @@ services:
       MATRIX_HOMESERVER_URL: http://synapse:8008
       GITEA_URL: http://gitea:3777
       OLLAMA_HOST: http://ollama:11434
+      HOTO_HOST_CREDENTIALS_PATH: ${HOME}/.claude/.credentials.json
+      HOTO_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-helm-of-the-overlord}_hoto-data
     depends_on:
       - chromadb
       - synapse
       - gitea
       - ollama
+
+  sandbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.sandbox
+    image: hoto-sandbox:latest
+    entrypoint: ["true"]
+    restart: "no"
 
   ollama:
     image: ollama/ollama:latest

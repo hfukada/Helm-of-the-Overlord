@@ -2,12 +2,15 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git bash ca-certificates docker.io unzip \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && git config --global user.email "hoto@localhost" \
+    && git config --global user.name "hoto"
 
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"
 
-RUN bun install -g @anthropic-ai/claude-code
+RUN bun install -g @anthropic-ai/claude-code \
+    && ln -s /root/.bun/bin/bun /usr/local/bin/node
 
 COPY global_claude.md /root/.claude/CLAUDE.md
 
