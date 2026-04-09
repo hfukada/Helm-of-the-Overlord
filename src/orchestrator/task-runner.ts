@@ -1299,6 +1299,7 @@ export async function reviseTask(taskId: string, feedback: string): Promise<void
         await $`git -C ${workDir} commit -m ${`hoto: revision for ${task.title}`}`.quiet();
         logger.info("Committed revision changes", { taskId: task.id, repo: repo.name });
       } else {
+        logger.warn("No revision changes to commit", { taskId: task.id, repo: repo.name, workDir });
         continue;
       }
     } catch (err) {
