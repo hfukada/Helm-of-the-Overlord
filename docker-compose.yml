@@ -4,6 +4,7 @@ services:
       context: .
     ports:
       - "7777:7777"
+      - "7778:7778"
     volumes:
       - hoto-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
