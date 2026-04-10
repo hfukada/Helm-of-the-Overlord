@@ -158,6 +158,33 @@ function getPrResolution(taskId: string): { allResolved: boolean; allMerged: boo
   };
 }
 
+/** Collect feedback from a single rejected PR. */
+async function collectRejectedFeedbackForRepo(repoName: string, prNumber: number): Promise<string> {
+  const feedbackParts: string[] = [];
+  const botUser = config.giteaBotUser;
+
+  const reviews = await listPullRequestReviews(repoName, prNumber);
+  const changeRequests = reviews.filter(
+    (r) => r.state.toLowerCase() === "request_changes" || r.state.toLowerCase() === "rejected"
+  );
+
+  for (const review of changeRequests) {
+    if (review.body?.trim()) feedbackParts.push(review.body);
+    const inlineComments = await listReviewComments(repoName, prNumber, review.id);
+    for (const c of inlineComments) {
+      if (c.body?.trim()) feedbackParts.push(`[${c.path}:${c.line}] ${c.body}`);
+    }
+  }
+
+  const comments = await listPullRequestComments(repoName, prNumber);
+  const newComments = comments.filter((c) => c.user.login !== botUser);
+  for (const c of newComments) {
+    if (c.body?.trim()) feedbackParts.push(c.body);
+  }
+
+  return feedbackParts.join("\n\n").trim() || "Changes requested (no specific feedback provided).";
+}
+
 /** Collect feedback from rejected PRs only. */
 async function collectRejectedFeedback(taskId: string): Promise<string> {
   const db = getDb();
@@ -325,14 +352,25 @@ async function pollPR(state: PollerState): Promise<void> {
     const db = getDb();
     db.run("UPDATE task_prs SET status = 'merged' WHERE task_id = ? AND repo_id = ?", [taskId, repoId]);
 
+    // Update child task if this is a multi-repo task
+    const now = new Date().toISOString();
+    db.run(
+      "UPDATE child_tasks SET status = 'committed', updated_at = ? WHERE parent_task_id = ? AND repo_id = ?",
+      [now, taskId, repoId]
+    );
+
     // Notify chat
     const { getMessagingManager } = await import("../messaging/manager");
     const manager = getMessagingManager();
     if (manager) {
-      manager.notifyAgentOutput(taskId, `PR merged: ${repoName} (#${prNumber})`).catch(() => {});
+      manager.notifyAgentOutput(taskId, `[${repoName}] PR merged (#${prNumber})`).catch(() => {});
     }
 
-    // Check if all PRs are now resolved
+    // Check parent completion for child tasks
+    const { checkParentCompletion } = await import("../orchestrator/child-task-runner");
+    checkParentCompletion(taskId);
+
+    // Check if all PRs are now resolved (legacy multi-repo and single-repo flow)
     const { allResolved } = getPrResolution(taskId);
     if (allResolved) {
       await handleAllPrsResolved(taskId);
@@ -368,11 +406,39 @@ async function pollPR(state: PollerState): Promise<void> {
   if (changeRequests.length > 0) {
     logger.info("PR rejected", { taskId, repoName, prNumber });
 
-    // Mark this PR as rejected but DON'T revise yet -- wait for all PRs
     const db = getDb();
-    db.run("UPDATE task_prs SET status = 'rejected' WHERE task_id = ? AND repo_id = ?", [taskId, repoId]);
     saveCursors(taskId, repoId, lastReviewId, lastCommentId);
     stopReviewPoller(taskId, repoName);
+
+    // Check if this is a child task PR
+    const childRow = db.query(
+      "SELECT id FROM child_tasks WHERE parent_task_id = ? AND repo_id = ?"
+    ).get(taskId, repoId) as { id: string } | null;
+
+    if (childRow) {
+      // Child task: handle revision independently for this repo
+      logger.info("Child task PR rejected, triggering child revision", { taskId, repoName, childId: childRow.id });
+      const { getMessagingManager } = await import("../messaging/manager");
+      const manager = getMessagingManager();
+      if (manager) {
+        manager.notifyAgentOutput(taskId, `[${repoName}] PR rejected (#${prNumber}). Starting revision...`).catch(() => {});
+      }
+
+      // Collect feedback for this specific PR
+      const feedback = await collectRejectedFeedbackForRepo(repoName, prNumber);
+      db.run("UPDATE child_tasks SET status = 'implementing', updated_at = datetime('now') WHERE id = ?", [childRow.id]);
+
+      // Trigger child revision (import lazily to avoid circular)
+      const { reviseChildTask } = await import("../orchestrator/child-task-runner");
+      reviseChildTask(childRow.id, feedback).catch((err) => {
+        logger.error("Child task revision failed", { childId: childRow.id, error: String(err) });
+        db.run("UPDATE child_tasks SET status = 'error', updated_at = datetime('now') WHERE id = ?", [childRow.id]);
+      });
+      return;
+    }
+
+    // Legacy/single-repo: mark rejected and wait for all PRs
+    db.run("UPDATE task_prs SET status = 'rejected' WHERE task_id = ? AND repo_id = ?", [taskId, repoId]);
 
     // Notify chat
     const { getMessagingManager } = await import("../messaging/manager");

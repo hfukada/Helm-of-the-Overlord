@@ -145,6 +145,17 @@ tasks.get("/:id", async (c) => {
 
   fixDates(task, "created_at", "updated_at");
 
+  // Include child tasks if any exist
+  const children = db.query(
+    `SELECT ct.id, ct.status, ct.pr_number, ct.pr_url, ct.ci_passed, ct.lint_passed,
+            ct.created_at, ct.updated_at, r.name as repo_name, r.language
+     FROM child_tasks ct
+     JOIN repos r ON r.id = ct.repo_id
+     WHERE ct.parent_task_id = ?
+     ORDER BY r.name`
+  ).all(id) as Array<Record<string, unknown>>;
+  fixDatesAll(children, "created_at", "updated_at");
+
   return c.json({
     ...task,
     blueprint_state: blueprintState,
@@ -153,6 +164,7 @@ tasks.get("/:id", async (c) => {
     agent_runs: agentRuns,
     repos: taskRepos,
     prs: taskPrs,
+    children,
   });
 });
 

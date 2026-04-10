@@ -15,11 +15,19 @@ Multi-repo, multi-agent one-shot task manager. Describe a task in plain text, an
 3. Submit a task: `hoto run "add a retry mechanism to the HTTP client"`
 4. Hoto creates a worktree branch and runs a pipeline:
 
+**Single-repo:**
 ```
-pre-plan (multi-repo only) -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
 ```
 
-5. When the pipeline reaches **review**, Hoto opens a Gitea pull request. Approve or reject the PR in Gitea. Rejection triggers a revision cycle; approval marks the task committed.
+**Multi-repo:** Planning is unified, then each repo gets its own child task running in parallel:
+```
+Parent: pre-plan -> plan -> scrutinize -> finalize -> spawn children -> wait
+  Child A (repo-a): implement -> CI/lint -> PR -> review
+  Child B (repo-b): implement -> CI/lint -> PR -> review
+```
+
+5. When the pipeline reaches **review**, Hoto opens a Gitea pull request per repo. Approve or reject each PR independently. Rejection triggers a revision cycle on that specific repo only; the task completes when all PRs are merged.
 
 ## Prerequisites
 
@@ -106,8 +114,10 @@ src/
     discord/client.ts        Discord provider
   orchestrator/
     blueprint.ts             Pipeline state machine
-    task-runner.ts           Runs blueprint nodes in sequence
-    subprocess.ts            Spawns Claude subagents
+    task-runner.ts           Runs parent task pipeline (plan -> children or implement)
+    child-task-runner.ts     Runs child tasks (implement -> CI -> review per repo)
+    plan-splitter.ts         Extracts per-repo plan excerpts from [repo-name] tags
+    subprocess.ts            Spawns Claude subagents (host or sandboxed)
     context-builder.ts       Assembles prompts from knowledge base
     nodes/
       agentic/               plan, implement, fix-lint, fix-ci (Claude-driven)

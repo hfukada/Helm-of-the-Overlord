@@ -131,8 +131,6 @@ export class MessagingManager {
   private mainChannelIds = new Map<string, string>(); // providerName -> channelId
   private taskCreators = new Map<string, { senderId: string; providerName: string }>();
 
-  constructor() {}
-
   registerProvider(provider: MessagingProvider): void {
     this.providers.set(provider.providerName, provider);
 

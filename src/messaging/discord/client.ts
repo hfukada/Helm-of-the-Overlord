@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, ChannelType, PermissionFlagsBits, type TextChannel } from "discord.js";
+import { Client, GatewayIntentBits, ChannelType, type TextChannel } from "discord.js";
 import { getDb } from "../../knowledge/db";
 import { logger } from "../../shared/logger";
 import type { MessagingProvider, CommandEvent, MessageEvent } from "../interface";

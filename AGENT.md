@@ -20,16 +20,37 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `src/knowledge/` - SQLite DB, schema, search, indexing
 - `src/mcp/` - MCP server (stdio + HTTP/SSE) for knowledge base access
 - `src/messaging/` - Chat bot integration (Matrix, Discord)
-- `src/orchestrator/` - Blueprint engine, subprocess management, agent nodes
+- `src/orchestrator/` - Blueprint engine, task/child-task runners, agent nodes
+- `src/orchestrator/child-task-runner.ts` - Per-repo child task execution
+- `src/orchestrator/plan-splitter.ts` - Extracts per-repo plan excerpts
 - `src/prompts/` - Markdown prompt templates per pipeline stage
 - `src/workspace/` - Workspace directory, git operations, Docker container management
 - `src/shared/` - Types, config, logger
 
-## Key Commands
+## Architecture
 
-- `bun run src/index.ts daemon start` - Start daemon
-- `bun run src/index.ts run "task description"` - Submit task
-- `bun run src/index.ts status` - List tasks
+### Single-repo tasks
+```
+plan -> scrutinize -> finalize -> implement -> CI/lint -> review -> commit
+```
+
+### Multi-repo tasks (child task architecture)
+```
+Parent: pre-plan -> plan -> scrutinize -> finalize -> spawn children -> wait
+  Child A: implement -> CI/lint -> PR -> review (independent)
+  Child B: implement -> CI/lint -> PR -> review (independent)
+```
+
+- Children run in parallel, fail independently
+- Each child gets a `plan_excerpt` (its repo's portion of the parent plan)
+- Parent completes when all children are committed
+- Individual children can be retried or cancelled
+
+### Key tables
+- `tasks` - Parent tasks (planning + orchestration)
+- `child_tasks` - Per-repo execution (implement + CI + review)
+- `task_repos` - Which repos a parent task targets
+- `repos` - Registered repositories with auto-detected commands
 
 ## Docker Deployment
 
@@ -42,7 +63,7 @@ Services: hoto, chromadb, synapse (Matrix), gitea, ollama, sandbox (image build 
 
 ## Sandboxed Execution
 
-When `HOTO_SANDBOX_CLAUDE=true`, Claude subprocesses run inside Docker sandbox containers. One sandbox per task. CI/lint also runs inside the sandbox via Docker-in-Docker.
+When `HOTO_SANDBOX_CLAUDE=true`, Claude subprocesses run inside Docker sandbox containers. CI/lint also runs inside the sandbox via Docker-in-Docker.
 
 ## Container Secrets
 
@@ -54,3 +75,6 @@ When `HOTO_SANDBOX_CLAUDE=true`, Claude subprocesses run inside Docker sandbox c
 - `POST /repos/:name/secrets` - add a secret
 - `PATCH /repos/:name/secrets/:id` - update
 - `DELETE /repos/:name/secrets/:id` - remove
+- `GET /tasks/:id/children` - list child tasks
+- `POST /tasks/:id/children/:childId/cancel` - cancel a child
+- `POST /tasks/:id/children/:childId/retry` - retry a failed child

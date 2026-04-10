@@ -212,7 +212,7 @@ function generatePrMetadata(
   // Derive title from the Summary section content, or fall back to task.title.
   // Never use raw agent preamble -- only use structured content.
   let title = task.title;
-  const summarySection = planOutput.match(/^#{1,3}\s*Summary\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|\Z)/m);
+  const summarySection = planOutput.match(/^#{1,3}\s*Summary\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|Z)/m);
   if (summarySection) {
     // Use the first non-empty line of the summary section
     const summaryLines = summarySection[1].trim().split("\n");
@@ -253,7 +253,7 @@ function generatePrMetadata(
   const bodyParts: string[] = [];
 
   // Summary from the "### Summary" section if it exists, otherwise first non-filler paragraph
-  const summaryMatch = planOutput.match(/^#{1,3}\s*Summary\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|\Z)/m);
+  const summaryMatch = planOutput.match(/^#{1,3}\s*Summary\n+([\s\S]*?)(?=\n#{1,3}\s|\n---|Z)/m);
   if (summaryMatch) {
     const summaryText = summaryMatch[1].trim();
     const summary = summaryText.length > 500 ? `${summaryText.slice(0, 500)}...` : summaryText;
@@ -640,17 +640,69 @@ export async function runTask(taskId: string): Promise<void> {
 
   if (isTaskCancelled(task.id)) return;
 
-  // === IMPLEMENT (once, across all repos) ===
+  // === MULTI-REPO: Spawn child tasks ===
+  if (repos.length > 1) {
+    const { extractRepoExcerpts } = await import("./plan-splitter");
+    const { runChildTask, checkParentCompletion } = await import("./child-task-runner");
+    const { ulid } = await import("ulid");
+
+    const db = getDb();
+    updateTaskStatus(task.id, "spawning_children", state);
+    logger.info("Spawning child tasks for multi-repo execution", { taskId: task.id, repoCount: repos.length });
+
+    if (manager) {
+      manager.notifyAgentOutput(task.id, `Spawning ${repos.length} child tasks: ${repos.map((r) => r.name).join(", ")}`).catch(() => {});
+    }
+
+    const excerpts = extractRepoExcerpts(planResult.plan, repos);
+
+    // Create child task rows
+    const childIds: string[] = [];
+    for (const repo of repos) {
+      const childId = ulid();
+      const excerpt = excerpts.get(repo.name) ?? planResult.plan;
+      db.run(
+        `INSERT INTO child_tasks (id, parent_task_id, repo_id, status, branch_name, plan_excerpt)
+         VALUES (?, ?, ?, 'pending', ?, ?)`,
+        [childId, task.id, repo.id, branchName, excerpt]
+      );
+      childIds.push(childId);
+      logger.info("Created child task", { childId, parentTaskId: task.id, repo: repo.name });
+    }
+
+    updateTaskStatus(task.id, "waiting_for_children", state);
+
+    // Launch all children in parallel
+    const results = await Promise.allSettled(
+      childIds.map((id) => runChildTask(id))
+    );
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === "rejected") {
+        logger.error("Child task runner crashed", { childId: childIds[i], error: String(result.reason) });
+        const now = new Date().toISOString();
+        db.run("UPDATE child_tasks SET status = 'error', updated_at = ? WHERE id = ?", [now, childIds[i]]);
+      }
+    }
+
+    // Check if all children are done
+    checkParentCompletion(task.id);
+
+    // Tear down sandbox if we started one for planning
+    if (sandbox) {
+      try { await teardownTaskContainer(task.id); } catch {}
+    }
+
+    return; // Parent task is done orchestrating
+  }
+
+  // === SINGLE-REPO: Direct implementation (existing flow) ===
   updateTaskStatus(task.id, "implementing", state);
   logger.info("Starting implement phase", { taskId: task.id, repoCount: repos.length });
 
-  if (manager && repos.length > 1) {
-    manager.notifyAgentOutput(task.id, `Implementing across ${repos.length} repos: ${repos.map((r) => r.name).join(", ")}`).catch(() => {});
-  }
-
-  // For multi-repo, run from task dir so agent sees all repos as subdirs
   // For single-repo, run from the repo's workDir directly
-  const implWorkDir = repos.length > 1 ? taskDir(task.id) : workDirs.get(repos[0].name)!;
+  const implWorkDir = workDirs.get(repos[0].name)!;
 
   const implResult = await executeImplement(
     task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox

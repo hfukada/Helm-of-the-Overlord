@@ -193,6 +193,30 @@ const MIGRATIONS_V3 = [
   )`,
 ];
 
+const MIGRATIONS_V4 = [
+  `CREATE TABLE IF NOT EXISTS child_tasks (
+    id TEXT PRIMARY KEY,
+    parent_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    repo_id INTEGER NOT NULL REFERENCES repos(id),
+    status TEXT NOT NULL DEFAULT 'pending',
+    blueprint_state TEXT,
+    branch_name TEXT,
+    plan_excerpt TEXT NOT NULL,
+    pr_number INTEGER,
+    pr_url TEXT,
+    ci_output TEXT,
+    ci_passed INTEGER,
+    lint_output TEXT,
+    lint_passed INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(parent_task_id, repo_id)
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_child_tasks_parent ON child_tasks(parent_task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_child_tasks_status ON child_tasks(parent_task_id, status)`,
+];
+
 const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
   "ALTER TABLE tasks ADD COLUMN lint_output TEXT",
@@ -224,6 +248,10 @@ export function runMigrations(db: Database): void {
   }
 
   for (const sql of MIGRATIONS_V3) {
+    db.exec(sql);
+  }
+
+  for (const sql of MIGRATIONS_V4) {
     db.exec(sql);
   }
 

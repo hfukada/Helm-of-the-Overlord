@@ -13,10 +13,24 @@ export type TaskStatus =
   | "ci_fixing"
   | "review"
   | "waiting_for_input"
+  | "spawning_children"
+  | "waiting_for_children"
   | "accepted"
   | "committed"
   | "error"
   | "failed"
+  | "cancelled";
+
+export type ChildTaskStatus =
+  | "pending"
+  | "implementing"
+  | "linting"
+  | "fix_linting"
+  | "ci_running"
+  | "ci_fixing"
+  | "review"
+  | "committed"
+  | "error"
   | "cancelled";
 
 export type TaskSource = "cli" | "web";
@@ -31,6 +45,24 @@ export interface Task {
   branch_name: string | null;
   source: TaskSource;
   use_full_copy: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChildTask {
+  id: string;
+  parent_task_id: string;
+  repo_id: number;
+  status: ChildTaskStatus;
+  blueprint_state: BlueprintState | null;
+  branch_name: string | null;
+  plan_excerpt: string;
+  pr_number: number | null;
+  pr_url: string | null;
+  ci_output: string | null;
+  ci_passed: boolean | null;
+  lint_output: string | null;
+  lint_passed: boolean | null;
   created_at: string;
   updated_at: string;
 }

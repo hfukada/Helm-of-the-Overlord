@@ -1,0 +1,616 @@
+/**
+ * Child task runner for multi-repo tasks.
+ *
+ * Each child task owns one repo's implementation, CI/lint, and review cycle.
+ * The parent task handles planning; children handle execution.
+ */
+
+import { getDb } from "../knowledge/db";
+import { logger } from "../shared/logger";
+import { config } from "../shared/config";
+import type { Repo, BlueprintState, ChildTaskStatus } from "../shared/types";
+import { createChildInitialState, advanceState } from "./blueprint";
+import { executeImplement } from "./nodes/agentic/implement";
+import { executeFixLint } from "./nodes/agentic/fix-lint";
+import { executeFixCi } from "./nodes/agentic/fix-ci";
+import { executeLint } from "./nodes/deterministic/lint";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { worktreeDir, taskDir } from "../workspace/manager";
+import { generateMcpConfig } from "./subprocess";
+import { setupTaskContainer, teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
+import { isSandboxContainer } from "../workspace/docker-exec";
+import { discoverSecrets } from "../workspace/secret-discovery";
+import { getMessagingManager } from "../messaging/manager";
+import { isGiteaConfigured, createPullRequest, rewriteGiteaUrl } from "../gitea/client";
+import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
+import { startReviewPoller, seedCursors } from "../gitea/review-poller";
+import { $ } from "bun";
+import type { SandboxOptions } from "./nodes/agentic/types";
+
+const MAX_LINT_ROUNDS = 2;
+const MAX_CI_ROUNDS = 2;
+
+function updateChildStatus(childId: string, status: ChildTaskStatus, blueprintState?: BlueprintState) {
+  const db = getDb();
+  const now = new Date().toISOString();
+  if (blueprintState) {
+    db.run(
+      "UPDATE child_tasks SET status = ?, blueprint_state = ?, updated_at = ? WHERE id = ?",
+      [status, JSON.stringify(blueprintState), now, childId]
+    );
+  } else {
+    db.run(
+      "UPDATE child_tasks SET status = ?, updated_at = ? WHERE id = ?",
+      [status, now, childId]
+    );
+  }
+}
+
+function saveChildNodeOutput(childId: string, node: "lint" | "ci", output: string, passed: boolean) {
+  const db = getDb();
+  if (node === "lint") {
+    db.run("UPDATE child_tasks SET lint_output = ?, lint_passed = ? WHERE id = ?", [output, passed ? 1 : 0, childId]);
+  } else {
+    db.run("UPDATE child_tasks SET ci_output = ?, ci_passed = ? WHERE id = ?", [output, passed ? 1 : 0, childId]);
+  }
+}
+
+function isChildCancelled(childId: string): boolean {
+  const db = getDb();
+  const row = db.query("SELECT status FROM child_tasks WHERE id = ?").get(childId) as { status: string } | null;
+  return row?.status === "cancelled";
+}
+
+/** Notify parent's messaging channels with [repo-name] prefix. */
+function notifyParent(parentTaskId: string, repoName: string, message: string) {
+  const manager = getMessagingManager();
+  if (manager) {
+    manager.notifyAgentOutput(parentTaskId, `[${repoName}] ${message}`).catch(() => {});
+  }
+}
+
+function detectInstallCmd(workDir: string): string | null {
+  if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bunfig.toml"))) {
+    return "bun install --frozen-lockfile";
+  }
+  if (existsSync(join(workDir, "package-lock.json"))) return "npm ci";
+  if (existsSync(join(workDir, "yarn.lock"))) return "yarn install --frozen-lockfile";
+  if (existsSync(join(workDir, "pnpm-lock.yaml"))) return "pnpm install --frozen-lockfile";
+  if (existsSync(join(workDir, "package.json"))) return "npm install";
+  if (existsSync(join(workDir, "requirements.txt"))) return "pip install -r requirements.txt";
+  if (existsSync(join(workDir, "pyproject.toml"))) return "pip install -e .";
+  if (existsSync(join(workDir, "go.mod"))) return "go mod download";
+  return null;
+}
+
+function parseRepoRow(row: Record<string, unknown>): Repo {
+  return {
+    id: row.id as number,
+    name: row.name as string,
+    path: row.path as string,
+    description: row.description as string | null,
+    build_cmd: row.build_cmd as string | null,
+    test_cmd: row.test_cmd as string | null,
+    run_cmd: row.run_cmd as string | null,
+    lint_cmd: row.lint_cmd as string | null,
+    language: row.language as string | null,
+    framework: row.framework as string | null,
+    docker_compose_path: row.docker_compose_path as string | null,
+    docker_image: row.docker_image as string | null,
+    ci_on_host: !!(row.ci_on_host as number),
+    metadata: null,
+  };
+}
+
+/**
+ * Run a child task: implement -> CI/lint -> commit/push/PR -> review.
+ * Called in parallel for each repo in a multi-repo task.
+ */
+export async function runChildTask(childId: string): Promise<void> {
+  const db = getDb();
+
+  const childRow = db.query("SELECT * FROM child_tasks WHERE id = ?").get(childId) as Record<string, unknown> | null;
+  if (!childRow) {
+    logger.error("Child task not found", { childId });
+    return;
+  }
+
+  const parentTaskId = childRow.parent_task_id as string;
+  const repoId = childRow.repo_id as number;
+  const planExcerpt = childRow.plan_excerpt as string;
+  const branchName = childRow.branch_name as string;
+
+  const repoRow = db.query("SELECT * FROM repos WHERE id = ?").get(repoId) as Record<string, unknown> | null;
+  if (!repoRow) {
+    logger.error("Repo not found for child task", { childId, repoId });
+    updateChildStatus(childId, "error");
+    return;
+  }
+
+  const repo = parseRepoRow(repoRow);
+  const workDir = worktreeDir(parentTaskId, repo.name);
+
+  // Get parent task info for context
+  const parentRow = db.query("SELECT title, description FROM tasks WHERE id = ?").get(parentTaskId) as { title: string; description: string } | null;
+  if (!parentRow) {
+    logger.error("Parent task not found", { childId, parentTaskId });
+    updateChildStatus(childId, "error");
+    return;
+  }
+
+  logger.info("Starting child task", { childId, parentTaskId, repo: repo.name });
+  notifyParent(parentTaskId, repo.name, "Starting implementation...");
+
+  // Set up sandbox if configured
+  let sandbox: SandboxOptions | undefined;
+  if (config.sandboxClaude) {
+    try {
+      const parentTaskDir = taskDir(parentTaskId);
+      const sandboxResult = await startSandboxContainer(childId, parentTaskDir);
+      if (sandboxResult) {
+        sandbox = {
+          containerName: sandboxResult.containerName,
+          containerWorkDir: `${sandboxResult.workspacePath}/${repo.name}`,
+          workspaceBase: sandboxResult.workspacePath,
+        };
+        logger.info("Sandbox started for child task", { childId, containerName: sandboxResult.containerName });
+      }
+    } catch (err) {
+      logger.warn("Sandbox setup failed for child task, falling back to host", { childId, error: String(err) });
+    }
+  }
+
+  // Generate MCP config
+  let mcpConfigPath: string | undefined;
+  try {
+    mcpConfigPath = await generateMcpConfig(
+      parentTaskId, workDir, repo.name,
+      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+    );
+  } catch {}
+
+  // Build the implement prompt with parent context
+  const parentPlanRow = db.query(
+    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('finalize_plan', 'plan') ORDER BY finished_at DESC LIMIT 1"
+  ).get(parentTaskId) as { output: string } | null;
+
+  const implementPrompt = [
+    `Implement the changes for the **${repo.name}** repository as described below.`,
+    "",
+    "## Task",
+    parentRow.description,
+    "",
+    "## Your Assignment (this repo only)",
+    planExcerpt,
+    "",
+    parentPlanRow ? `## Full Cross-Repo Plan (for context)\n${parentPlanRow.output.slice(0, 3000)}` : "",
+  ].join("\n");
+
+  let state = createChildInitialState();
+
+  // === IMPLEMENT ===
+  updateChildStatus(childId, "implementing", state);
+
+  const implResult = await executeImplement(
+    { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "implementing", blueprint_state: null, branch_name: branchName, source: "cli", use_full_copy: false, created_at: "", updated_at: "" },
+    [repo],
+    workDir,
+    implementPrompt,
+    mcpConfigPath,
+    undefined,
+    sandbox
+  );
+
+  if (implResult.error) {
+    if (isChildCancelled(childId)) return;
+    logger.error("Child task implementation failed", { childId, repo: repo.name, error: implResult.error });
+    notifyParent(parentTaskId, repo.name, `Implementation failed: ${implResult.error}`);
+    state = advanceState(state, "error");
+    updateChildStatus(childId, "error", state);
+    return;
+  }
+
+  if (isChildCancelled(childId)) return;
+
+  // === CI/LINT ===
+  state = advanceState(state, "done"); // implement -> lint
+
+  let containerName: string | null = sandbox?.containerName ?? null;
+  let containerWorkDir = sandbox ? `${sandbox.workspaceBase}/${repo.name}` : "/workspace";
+
+  if (!containerName) {
+    try {
+      containerName = await setupTaskContainer(repo, workDir, childId, taskDir(parentTaskId));
+    } catch {
+      containerName = null;
+    }
+    containerWorkDir = (containerName && isSandboxContainer(containerName))
+      ? `/workspace/${repo.name}`
+      : "/workspace";
+  }
+
+  // --- CI ---
+  if (repo.test_cmd || repo.build_cmd) {
+    if (!repo.test_cmd && repo.build_cmd) {
+      notifyParent(parentTaskId, repo.name, `No test command -- using build as CI check: ${repo.build_cmd}`);
+    }
+    if (!containerName && !repo.ci_on_host) {
+      const msg = "CI skipped: no Docker container and ci_on_host not enabled.";
+      saveChildNodeOutput(childId, "ci", msg, false);
+      notifyParent(parentTaskId, repo.name, msg);
+    } else {
+      updateChildStatus(childId, "ci_running", state);
+
+      for (let round = 0; round < MAX_CI_ROUNDS; round++) {
+        const ciResult = await runCiCommand(repo, workDir, containerName ?? undefined, containerWorkDir);
+        saveChildNodeOutput(childId, "ci", ciResult.output, ciResult.success);
+
+        if (ciResult.success) break;
+        if (containerName) discoverSecrets(repo.id, ciResult.output);
+        if (round >= MAX_CI_ROUNDS - 1) break;
+        if (isChildCancelled(childId)) return;
+
+        state = advanceState(state, "fail");
+        updateChildStatus(childId, "ci_fixing", state);
+        notifyParent(parentTaskId, repo.name, `CI failed (round ${round + 1}), fixing...`);
+
+        const fixResult = await executeFixCi(
+          { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "ci_fixing", blueprint_state: null, branch_name: branchName, source: "cli", use_full_copy: false, created_at: "", updated_at: "" },
+          repo, workDir, ciResult.output, mcpConfigPath, undefined, sandbox
+        );
+        if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
+
+        state = advanceState(state, "done");
+        state.ci_rounds++;
+        updateChildStatus(childId, "ci_running", state);
+      }
+    }
+  }
+
+  if (isChildCancelled(childId)) return;
+
+  // --- Lint ---
+  if (repo.lint_cmd) {
+    if (!containerName && !repo.ci_on_host) {
+      const msg = "Lint skipped: no Docker container and ci_on_host not enabled.";
+      saveChildNodeOutput(childId, "lint", msg, false);
+      notifyParent(parentTaskId, repo.name, msg);
+    } else {
+      updateChildStatus(childId, "linting", state);
+
+      for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
+        const lintResult = await executeLint(repo, workDir, containerName ?? undefined, containerWorkDir);
+        saveChildNodeOutput(childId, "lint", lintResult.output, lintResult.success);
+
+        if (lintResult.success) break;
+        if (containerName) discoverSecrets(repo.id, lintResult.output);
+        if (round >= MAX_LINT_ROUNDS) break;
+        if (isChildCancelled(childId)) return;
+
+        state = advanceState(state, "errors");
+        updateChildStatus(childId, "fix_linting", state);
+
+        const fixResult = await executeFixLint(
+          { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "fix_linting", blueprint_state: null, branch_name: branchName, source: "cli", use_full_copy: false, created_at: "", updated_at: "" },
+          repo, workDir, lintResult.output, lintResult.command, mcpConfigPath, undefined, sandbox
+        );
+        if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
+
+        state = advanceState(state, "done");
+        state.lint_rounds++;
+        updateChildStatus(childId, "linting", state);
+      }
+    }
+  }
+
+  // Tear down container (not sandbox -- that lives for the child's lifetime)
+  if (containerName && !sandbox) {
+    try { await teardownTaskContainer(childId); } catch {}
+  }
+  if (sandbox) {
+    try { await teardownTaskContainer(childId); } catch {}
+  }
+
+  if (isChildCancelled(childId)) return;
+
+  // === COMMIT + PUSH + PR ===
+  notifyParent(parentTaskId, repo.name, "Committing and pushing...");
+
+  try {
+    await $`git -C ${workDir} add -A`.quiet();
+    const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
+    if (hasChanges.exitCode !== 0) {
+      await $`git -C ${workDir} commit -m ${`hoto: ${parentRow.title}`}`.quiet();
+      logger.info("Child task committed changes", { childId, repo: repo.name });
+    } else {
+      logger.warn("Child task has no changes to commit", { childId, repo: repo.name });
+      notifyParent(parentTaskId, repo.name, "No changes to commit.");
+      updateChildStatus(childId, "committed", state);
+      return;
+    }
+  } catch (err) {
+    logger.error("Child task commit failed", { childId, repo: repo.name, error: String(err) });
+    notifyParent(parentTaskId, repo.name, `Commit failed: ${err}`);
+    updateChildStatus(childId, "error", state);
+    return;
+  }
+
+  if (isGiteaConfigured()) {
+    try {
+      await ensureRepoOnGitea(repo.path, repo.name);
+      const { getDefaultBranch } = await import("../workspace/git");
+      const baseBranch = await getDefaultBranch(repo.path);
+      await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
+
+      const pr = await createPullRequest(
+        repo.name, branchName, baseBranch,
+        `hoto: ${parentRow.title}`,
+        `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt.slice(0, 2000)}`
+      );
+
+      const prUrl = rewriteGiteaUrl(pr.html_url);
+
+      db.run("UPDATE child_tasks SET pr_number = ?, pr_url = ? WHERE id = ?", [pr.number, prUrl, childId]);
+
+      logger.info("Child task PR created", { childId, repo: repo.name, prNumber: pr.number, url: prUrl });
+      notifyParent(parentTaskId, repo.name, `PR created: ${prUrl}`);
+
+      // Start review poller (uses parent task ID for channel notifications)
+      await seedCursors(parentTaskId, repo.name, pr.number);
+      startReviewPoller(parentTaskId, repo.name, repo.path, branchName, pr.number);
+
+    } catch (err) {
+      logger.error("Child task push/PR failed", { childId, repo: repo.name, error: String(err) });
+      notifyParent(parentTaskId, repo.name, `Push/PR failed: ${err}`);
+      updateChildStatus(childId, "error", state);
+      return;
+    }
+  }
+
+  // Set review status
+  state = advanceState(state, "pass"); // ci -> review (or lint -> ci -> review depending on path)
+  updateChildStatus(childId, "review", state);
+  notifyParent(parentTaskId, repo.name, "Ready for review.");
+}
+
+/** Simple CI command runner (same as task-runner's runCi but without the parent-task coupling). */
+async function runCiCommand(
+  repo: Repo,
+  workDir: string,
+  containerName?: string,
+  containerWorkDir: string = "/workspace",
+): Promise<{ success: boolean; output: string }> {
+  const commands: string[] = [];
+
+  if (containerName) {
+    const installCmd = detectInstallCmd(workDir);
+    if (installCmd) commands.push(installCmd);
+  }
+
+  if (repo.build_cmd) commands.push(repo.build_cmd);
+  if (repo.test_cmd) commands.push(repo.test_cmd);
+
+  let allOutput = "";
+  const decoder = new TextDecoder();
+
+  for (const cmd of commands) {
+    logger.info("Running CI command (child)", { cmd, containerName });
+    allOutput += `\n$ ${cmd}\n`;
+
+    try {
+      const argv = containerName
+        ? ["docker", "exec", "-w", containerWorkDir, containerName, "sh", "-c", cmd]
+        : ["sh", "-c", cmd];
+
+      const proc = Bun.spawn(argv, {
+        cwd: containerName ? undefined : workDir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const readStream = async (stream: ReadableStream<Uint8Array>) => {
+        const reader = stream.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          allOutput += decoder.decode(value, { stream: true });
+        }
+      };
+
+      await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
+      await proc.exited;
+
+      if (proc.exitCode !== 0) {
+        return { success: false, output: allOutput };
+      }
+    } catch (err) {
+      allOutput += `Error: ${err}`;
+      return { success: false, output: allOutput };
+    }
+  }
+
+  return { success: true, output: allOutput };
+}
+
+/**
+ * Revise a child task after PR rejection.
+ * Simplified revision: understand-review -> plan fix -> implement -> CI/lint -> re-push.
+ */
+export async function reviseChildTask(childId: string, feedback: string): Promise<void> {
+  const db = getDb();
+
+  const childRow = db.query("SELECT * FROM child_tasks WHERE id = ?").get(childId) as Record<string, unknown> | null;
+  if (!childRow) {
+    logger.error("Child task not found for revision", { childId });
+    return;
+  }
+
+  const parentTaskId = childRow.parent_task_id as string;
+  const repoId = childRow.repo_id as number;
+  const planExcerpt = childRow.plan_excerpt as string;
+  const branchName = childRow.branch_name as string;
+
+  const repoRow = db.query("SELECT * FROM repos WHERE id = ?").get(repoId) as Record<string, unknown> | null;
+  if (!repoRow) return;
+
+  const repo = parseRepoRow(repoRow);
+  const workDir = worktreeDir(parentTaskId, repo.name);
+
+  const parentRow = db.query("SELECT title, description FROM tasks WHERE id = ?").get(parentTaskId) as { title: string; description: string } | null;
+  if (!parentRow) return;
+
+  logger.info("Starting child task revision", { childId, repo: repo.name });
+  notifyParent(parentTaskId, repo.name, "Starting revision based on review feedback...");
+
+  // Build a simple task object for the agentic nodes
+  const taskProxy = {
+    id: parentTaskId, title: parentRow.title, description: parentRow.description,
+    repo_id: repo.id, status: "implementing" as const, blueprint_state: null,
+    branch_name: branchName, source: "cli" as const, use_full_copy: false,
+    created_at: "", updated_at: "",
+  };
+
+  // Set up sandbox
+  let sandbox: SandboxOptions | undefined;
+  if (config.sandboxClaude) {
+    try {
+      const sandboxResult = await startSandboxContainer(childId, taskDir(parentTaskId));
+      if (sandboxResult) {
+        sandbox = {
+          containerName: sandboxResult.containerName,
+          containerWorkDir: `${sandboxResult.workspacePath}/${repo.name}`,
+          workspaceBase: sandboxResult.workspacePath,
+        };
+      }
+    } catch {}
+  }
+
+  let mcpConfigPath: string | undefined;
+  try {
+    mcpConfigPath = await generateMcpConfig(
+      parentTaskId, workDir, repo.name,
+      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+    );
+  } catch {}
+
+  // Triage + plan fix
+  const { executeUnderstandReview, executeReviewSmallFeedback, executeReviewLargeFeedback } = await import("./nodes/agentic/review-feedback");
+
+  const triageResult = await executeUnderstandReview(
+    taskProxy, repo, workDir, feedback, planExcerpt, mcpConfigPath, undefined, sandbox
+  );
+
+  let fixPlan: string;
+  if (triageResult.verdict === "small") {
+    notifyParent(parentTaskId, repo.name, "Small fix -- planning targeted changes.");
+    const result = await executeReviewSmallFeedback(
+      taskProxy, repo, workDir, feedback, planExcerpt, mcpConfigPath, undefined, sandbox
+    );
+    fixPlan = result.plan;
+  } else {
+    notifyParent(parentTaskId, repo.name, "Large fix -- replanning.");
+    const result = await executeReviewLargeFeedback(
+      taskProxy, repo, workDir, feedback, planExcerpt, mcpConfigPath, undefined, sandbox
+    );
+    fixPlan = result.plan;
+  }
+
+  if (!fixPlan || fixPlan.length < 30) {
+    logger.error("Child revision plan failed", { childId });
+    notifyParent(parentTaskId, repo.name, "Revision planning failed.");
+    updateChildStatus(childId, "error");
+    return;
+  }
+
+  // Implement fix
+  updateChildStatus(childId, "implementing");
+  const implResult = await executeImplement(
+    taskProxy, [repo], workDir, fixPlan, mcpConfigPath, undefined, sandbox
+  );
+
+  if (implResult.error) {
+    notifyParent(parentTaskId, repo.name, `Revision implementation failed: ${implResult.error}`);
+    updateChildStatus(childId, "error");
+    return;
+  }
+
+  // CI/lint (simplified -- run once, no fix loop for revisions)
+  // TODO: could add fix loops here too
+
+  // Tear down sandbox
+  if (sandbox) {
+    try { await teardownTaskContainer(childId); } catch {}
+  }
+
+  // Commit + force push
+  try {
+    await $`git -C ${workDir} add -A`.quiet();
+    const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
+    if (hasChanges.exitCode !== 0) {
+      await $`git -C ${workDir} commit -m ${`hoto: revision for ${parentRow.title}`}`.quiet();
+    }
+  } catch (err) {
+    notifyParent(parentTaskId, repo.name, `Revision commit failed: ${err}`);
+    updateChildStatus(childId, "error");
+    return;
+  }
+
+  if (isGiteaConfigured()) {
+    try {
+      await pushBranchToGitea(workDir, repo.path, repo.name, branchName, true);
+      notifyParent(parentTaskId, repo.name, "Revision pushed. Please re-review.");
+    } catch (err) {
+      notifyParent(parentTaskId, repo.name, `Revision push failed: ${err}`);
+      updateChildStatus(childId, "error");
+      return;
+    }
+  }
+
+  // Back to review
+  updateChildStatus(childId, "review");
+
+  // Restart review poller
+  const prNumber = childRow.pr_number as number | null;
+  if (prNumber) {
+    await seedCursors(parentTaskId, repo.name, prNumber);
+    startReviewPoller(parentTaskId, repo.name, repo.path, branchName, prNumber);
+  }
+}
+
+/**
+ * Check if all children of a parent task are in terminal state.
+ * If all committed, mark parent committed.
+ */
+export function checkParentCompletion(parentTaskId: string): void {
+  const db = getDb();
+
+  const children = db.query(
+    "SELECT status FROM child_tasks WHERE parent_task_id = ?"
+  ).all(parentTaskId) as Array<{ status: string }>;
+
+  if (children.length === 0) return;
+
+  const allTerminal = children.every((c) =>
+    ["committed", "error", "cancelled"].includes(c.status)
+  );
+  if (!allTerminal) return;
+
+  const allCommitted = children.every((c) => c.status === "committed");
+  const allCancelled = children.every((c) => c.status === "cancelled");
+
+  const now = new Date().toISOString();
+
+  if (allCommitted) {
+    db.run("UPDATE tasks SET status = 'committed', updated_at = ? WHERE id = ?", [now, parentTaskId]);
+    logger.info("All child tasks committed, parent task complete", { parentTaskId });
+    const manager = getMessagingManager();
+    if (manager) {
+      manager.notifyAgentOutput(parentTaskId, "All repos committed. Task complete.").catch(() => {});
+    }
+  } else if (allCancelled) {
+    db.run("UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE id = ?", [now, parentTaskId]);
+    logger.info("All child tasks cancelled, parent task cancelled", { parentTaskId });
+  }
+  // Mixed state (some committed, some error/cancelled): parent stays waiting_for_children
+}

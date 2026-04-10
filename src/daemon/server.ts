@@ -9,6 +9,7 @@ import { comments } from "./routes/comments";
 import { commits } from "./routes/commits";
 import { secrets } from "./routes/secrets";
 import { relationships } from "./routes/relationships";
+import { childTasks } from "./routes/child-tasks";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
@@ -26,6 +27,7 @@ app.get("/health", (c) => c.json({ status: "ok", pid: process.pid }));
 
 app.route("/tasks", tasks);
 app.route("/tasks", agents); // /tasks/:id/agents
+app.route("/tasks", childTasks); // /tasks/:id/children
 app.route("/tasks", comments); // /tasks/:id/comments
 app.route("/tasks", commits); // /tasks/:id/accept, /tasks/:id/commit
 // Top-level comment routes (PATCH/DELETE use /comments/:id)

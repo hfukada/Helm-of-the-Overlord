@@ -54,21 +54,35 @@ bun run lint                # Lint with Biome
 
 ## Blueprint Flow
 
-Tasks follow this pipeline:
+### Single-repo tasks
 
 ```
-pre-plan (scope repos) -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+pre-plan (skipped) -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
 ```
 
-On review rejection, feedback is triaged:
+### Multi-repo tasks (child task architecture)
+
+```
+Parent: pre-plan -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> spawn children -> wait
+  |
+  +-- Child A (repo-a): implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+  +-- Child B (repo-b): implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+  (children run in parallel, independent failure)
+```
+
+After finalize-plan, the parent extracts per-repo plan excerpts using `[repo-name]` tags from the plan steps, creates a `child_tasks` row per repo, and launches them in parallel via `Promise.allSettled`.
+
+### Review rejection triage (both single and child tasks)
 
 ```
 review -> understand_review -> [small] review_small_feedback -> implement (skip scrutiny)
                             -> [large] review_large_feedback -> scrutinize -> ... -> implement
 ```
 
+### Node details
+
 - **Pre-plan**: Runs only when multiple repos are registered. Determines which repos need changes.
-- **Plan**: Produces an implementation plan (maxTurns: 12).
+- **Plan**: Produces an implementation plan (maxTurns: 15).
 - **Scrutinize**: Reviews the plan against a checklist (maxTurns: 10).
 - **Plan-again/Finalize-plan**: Revises and finalizes the plan (maxTurns: 10).
 - **Implement**: Follows the plan mechanically. Turns estimated dynamically from plan complexity (15-50).
@@ -91,19 +105,24 @@ When `HOTO_SANDBOX_CLAUDE=true`, all Claude subprocesses run inside Docker sandb
 Key env vars for containerized deployment:
 - `HOTO_SANDBOX_CLAUDE=true` - Enable sandboxed execution
 - `HOTO_DATA_VOLUME` - Docker named volume for workspace (e.g. `helm-of-the-overlord_hoto-data`)
-- `HOTO_HOST_CREDENTIALS_PATH` - Host path to `.credentials.json` for bind mounting
 - `HOTO_MCP_HTTP_PORT` - Port for MCP HTTP server (default: 7778)
 
-## Multi-Repo Tasks
+## Multi-Repo Tasks (Child Task Architecture)
 
 Tasks can span multiple repositories. When no `-r` flag is specified, all registered repos are assigned and the pre-plan phase narrows them.
 
 - **Task creation**: `hoto run "desc" -r repo1 -r repo2` or `!run desc -r repo1 -r repo2`
-- **Data model**: `task_repos` junction table tracks which repos a task targets. `task_prs` tracks one PR per repo.
-- **Execution**: Plan runs once across all repos. Implement/lint/CI run per-repo sequentially.
-- **PRs**: One PR per repo, all with the same branch name. Review pollers track each independently.
-- **Revision**: Rejection on any PR triggers revision across all repos. Feedback is aggregated from all PRs.
-- **Completion**: Task marked "committed" only when ALL PRs are merged.
+- **Data model**: `task_repos` tracks which repos a parent task targets. `child_tasks` table stores one child per repo with its own status, blueprint state, PR, and plan excerpt.
+- **Planning**: Parent task runs unified plan/scrutinize/finalize across all repos.
+- **Execution**: After finalize, parent spawns child tasks (one per repo) that run in parallel. Each child independently implements, runs CI/lint, commits, pushes, and creates its own PR.
+- **Plan splitting**: `plan-splitter.ts` extracts per-repo plan excerpts from `[repo-name]` tagged steps. Each child gets the summary + its repo-specific steps + any untagged cross-cutting steps.
+- **Context**: Each child carries a `plan_excerpt` (its assignment) and can query the parent's full plan via `parent_task_id` for cross-repo context. Knowledge base and repo relationships are also available.
+- **PRs**: One PR per child task, all using the same branch name.
+- **Review**: Each child has its own review poller. Rejection triggers revision on that specific child only -- siblings are unaffected.
+- **Completion**: Parent marked "committed" when ALL children are "committed". Mixed state (some committed, some error) keeps parent in "waiting_for_children".
+- **Retry/Cancel**: Individual children can be retried or cancelled via `POST /tasks/:id/children/:childId/retry` or `/cancel`.
+- **Messaging**: Children share the parent's chat channels. Updates are prefixed with `[repo-name]`.
+- **Single-repo**: Tasks targeting one repo skip the child system entirely -- existing flow unchanged.
 
 ## Repo Relationships
 
@@ -122,7 +141,7 @@ Services: hoto, chromadb, synapse (Matrix), gitea, ollama, sandbox (image build 
 
 The hoto container needs:
 - Docker socket mount (`/var/run/docker.sock`) for sandbox/CI containers
-- Claude credentials mount (`~/.claude/.credentials.json`)
+- Claude credentials directory mount (`~/.claude:/root/.claude`) -- read-write so claude can refresh tokens
 - Named volume `hoto-data` for workspace persistence
 
 Environment overrides in docker-compose use Docker service names (e.g. `gitea:3777`, `chromadb:8000`, `ollama:11434`).

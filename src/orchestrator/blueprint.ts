@@ -109,6 +109,21 @@ export function createInitialState(): BlueprintState {
   };
 }
 
+/** Create initial state for a child task (starts at implement, skips plan/scrutinize). */
+export function createChildInitialState(): BlueprintState {
+  return {
+    current_node: "implement",
+    history: [{
+      node: "implement",
+      entered_at: new Date().toISOString(),
+      exited_at: null,
+      result: null,
+    }],
+    ci_rounds: 0,
+    lint_rounds: 0,
+  };
+}
+
 export function advanceState(
   state: BlueprintState,
   result: string
