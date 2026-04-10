@@ -80,7 +80,7 @@ export async function executeFixCi(
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 10,
+    maxTurns: 12,
     allowedTools: readTools,
     mcpConfigPath,
     addDirs: [workDir],
@@ -111,14 +111,18 @@ export async function executeFixCi(
     [implRunId, task.id, implPrompt, model]
   );
 
-  logger.info("Implementing CI fix", { taskId: task.id });
+  // Estimate turns from the fix plan (same heuristic as implement phase)
+  const fileRefs = planResult.output.match(/`[^`]+\.\w+`/g) ?? [];
+  const uniqueFiles = new Set(fileRefs.map((f: string) => f.replace(/`/g, ""))).size;
+  const estimatedTurns = Math.max(10, Math.min(30, 3 + Math.ceil(uniqueFiles * 2.5)));
+  logger.info("Implementing CI fix", { taskId: task.id, uniqueFiles, estimatedTurns });
 
   const implResult = await runClaude({
     prompt: implPrompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
-    maxTurns: 10,
+    maxTurns: estimatedTurns,
     allowedTools: [...readTools, "Write", "Edit", "Bash"],
     mcpConfigPath,
     addDirs: [workDir],

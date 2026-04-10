@@ -143,11 +143,12 @@ export async function startSandboxContainer(
     "sleep", "infinity",
   ];
 
-  // Mount credentials if the host path is known, otherwise copy them in after start
-  const hostCredentials = process.env.HOTO_HOST_CREDENTIALS_PATH;
-  if (hostCredentials) {
+  // Mount the .claude directory (not the credentials file) so token refreshes are visible.
+  // Bind-mounting a single file breaks when the file is replaced via atomic write (new inode).
+  const hostCredentialsDir = process.env.HOTO_HOST_CLAUDE_DIR;
+  if (hostCredentialsDir) {
     const imgIdx = args.indexOf("hoto-sandbox:latest");
-    args.splice(imgIdx, 0, "-v", `${hostCredentials}:/root/.claude/.credentials.json:ro`);
+    args.splice(imgIdx, 0, "-v", `${hostCredentialsDir}:/root/.claude:ro`);
   }
 
   const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
@@ -160,7 +161,7 @@ export async function startSandboxContainer(
   }
 
   // If credentials weren't bind-mounted, copy them from the hoto container's filesystem
-  if (!hostCredentials) {
+  if (!hostCredentialsDir) {
     const credentialsPath = join(homedir(), ".claude", ".credentials.json");
     if (existsSync(credentialsPath)) {
       const copyResult = Bun.spawnSync(

@@ -6,7 +6,7 @@ services:
     volumes:
       - hoto-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${HOME}/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+      - ${HOME}/.claude:/root/.claude:ro
     env_file:
       - .env
     environment:
@@ -18,7 +18,7 @@ services:
       MATRIX_HOMESERVER_URL: http://synapse:8008
       GITEA_URL: http://moxy:3777
       OLLAMA_HOST: http://ollama:11434
-      HOTO_HOST_CREDENTIALS_PATH: ${HOME}/.claude/.credentials.json
+      HOTO_HOST_CLAUDE_DIR: ${HOME}/.claude
       HOTO_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-helm-of-the-overlord}_hoto-data
     depends_on:
       - chromadb

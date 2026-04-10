@@ -191,11 +191,11 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("Read, Write, Edit, Glob, Grep, and Bash");
   });
 
-  test("with MCP: prefers knowledge base tools", () => {
+  test("with MCP: includes search_knowledge and directs to use it first", () => {
     const prompt = buildSystemPrompt(makeRepo(), { hasMcp: true });
     expect(prompt).toContain("search_knowledge");
-    expect(prompt).toContain("list_files");
-    expect(prompt).toContain("read_file");
+    expect(prompt).toContain("Read, Glob, Grep");
+    expect(prompt).toContain("START by calling search_knowledge");
   });
 
   test("with Docker: warns not to run build/test commands", () => {
