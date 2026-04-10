@@ -40,13 +40,15 @@ export async function executeFixLint(
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
+  const allowedTools = [...mcpReadTools, "Write", "Edit", "Bash"];
+
   const result = await runClaude({
     prompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
     model,
     maxTurns: 10,
-    allowedTools: [...mcpReadTools, "Write", "Edit"],
+    allowedTools,
     mcpConfigPath,
     agentRunId,
     taskId: task.id,

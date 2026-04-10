@@ -27,8 +27,8 @@ export async function executePlan(
   );
 
   const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
-    : ["Read", "Glob", "Grep"];
+    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep", "Bash"]
+    : ["Read", "Glob", "Grep", "Bash"];
 
   const result = await runClaude({
     prompt,
