@@ -20,8 +20,6 @@ ENV PATH="/root/.bun/bin:$PATH"
 RUN bun install -g @anthropic-ai/claude-code \
     && ln -s /root/.bun/bin/bun /usr/local/bin/node
 
-COPY global_claude.md /root/.claude/CLAUDE.md
-
 WORKDIR /workspace
 
 CMD ["sleep", "infinity"]

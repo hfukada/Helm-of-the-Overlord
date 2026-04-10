@@ -151,7 +151,6 @@ All configuration is via environment variables. The daemon reads these at startu
 | `HOTO_SANDBOX_CLAUDE` | `false` | Run Claude subprocesses in sandboxed Docker containers |
 | `HOTO_MCP_HTTP_PORT` | `7778` | Port for MCP HTTP/SSE server (sandbox mode) |
 | `HOTO_DATA_VOLUME` | — | Docker named volume for workspace (containerized deployment) |
-| `HOTO_HOST_CREDENTIALS_PATH` | — | Host path to Claude credentials for sandbox bind mount |
 | `HOTO_HOSTNAME` | `localhost` | Hostname for external URLs (Gitea PR links) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL for intent classification |
 | `HOTO_INTENT_MODEL` | `llama3.2:3b` | Ollama model for classifying chat messages |

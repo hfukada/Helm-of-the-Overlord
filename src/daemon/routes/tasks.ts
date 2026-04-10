@@ -262,8 +262,8 @@ async function deleteTask(taskId: string): Promise<void> {
 tasks.delete("/done", async (c) => {
   const db = getDb();
 
-  const ALL_VALID_STATUSES = ["committed", "cancelled", "failed", "implementing", "planning", "scrutinizing", "linting", "ci", "review", "accepted"];
-  const FINISHED_STATUSES = ["committed", "cancelled", "failed"];
+  const ALL_VALID_STATUSES = ["committed", "cancelled", "failed", "error", "implementing", "planning", "scrutinizing", "linting", "ci", "review", "accepted"];
+  const FINISHED_STATUSES = ["committed", "cancelled", "failed", "error"];
 
   const statusParam = c.req.query("status");
   let statusesToQuery: string[];

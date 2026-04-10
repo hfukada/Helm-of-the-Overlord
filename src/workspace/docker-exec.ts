@@ -143,13 +143,13 @@ export async function startSandboxContainer(
     "sleep", "infinity",
   ];
 
-  // Mount the .claude directory (not the credentials file) so token refreshes are visible.
-  // Bind-mounting a single file breaks when the file is replaced via atomic write (new inode).
-  const hostCredentialsDir = process.env.HOTO_HOST_CLAUDE_DIR;
-  if (hostCredentialsDir) {
-    const imgIdx = args.indexOf("hoto-sandbox:latest");
-    args.splice(imgIdx, 0, "-v", `${hostCredentialsDir}:/root/.claude:ro`);
-  }
+  // Seed credentials into the sandbox via docker cp, then let claude CLI
+  // manage its own token refreshes inside the container (read-write).
+  // We don't bind-mount because:
+  // - Mounting the file RO prevents claude from refreshing expired tokens
+  // - Mounting the whole ~/.claude dir exposes host state and causes config conflicts
+  // - Mounting the file RW breaks on inode change (host atomic writes)
+  // docker cp gives the container its own writable copy with the current token.
 
   const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
   if (runResult.exitCode !== 0) {
@@ -160,19 +160,20 @@ export async function startSandboxContainer(
     return null;
   }
 
-  // If credentials weren't bind-mounted, copy them from the hoto container's filesystem
-  if (!hostCredentialsDir) {
-    const credentialsPath = join(homedir(), ".claude", ".credentials.json");
-    if (existsSync(credentialsPath)) {
-      const copyResult = Bun.spawnSync(
-        ["docker", "cp", credentialsPath, `${name}:/root/.claude/.credentials.json`],
-        { stdout: "pipe", stderr: "pipe" }
-      );
-      if (copyResult.exitCode !== 0) {
-        logger.warn("Failed to copy credentials into sandbox", { taskId, error: new TextDecoder().decode(copyResult.stderr) });
-      }
-    } else {
-      logger.warn("No credentials found to copy into sandbox", { taskId });
+  // Copy credentials into the sandbox from this container's filesystem.
+  // The hoto container has ~/.claude mounted from the host via docker-compose.
+  {
+    const srcPath = join(homedir(), ".claude", ".credentials.json");
+
+    // Ensure the target directory exists inside the sandbox
+    Bun.spawnSync(["docker", "exec", name, "mkdir", "-p", "/root/.claude"], { stdout: "pipe", stderr: "pipe" });
+
+    const copyResult = Bun.spawnSync(
+      ["docker", "cp", srcPath, `${name}:/root/.claude/.credentials.json`],
+      { stdout: "pipe", stderr: "pipe" }
+    );
+    if (copyResult.exitCode !== 0) {
+      logger.warn("Failed to copy credentials into sandbox", { taskId, error: new TextDecoder().decode(copyResult.stderr) });
     }
   }
 
