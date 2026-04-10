@@ -256,6 +256,9 @@ export class MessagingManager {
       case "help":
         await this.cmdHelp(cmd);
         break;
+      case "health":
+        await this.cmdHealth(cmd);
+        break;
       default:
         await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Unknown command: !${cmd.command}. Type !help for available commands.`);
     }
@@ -1155,6 +1158,103 @@ export class MessagingManager {
     await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
+  private async cmdHealth(cmd: CommandEvent): Promise<void> {
+    const results: string[] = ["Service Health Check", ""];
+
+    // Gitea
+    try {
+      const giteaUrl = config.giteaUrl;
+      if (giteaUrl) {
+        const res = await fetch(`${giteaUrl}/api/v1/version`, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const data = await res.json() as { version?: string };
+          results.push(`Gitea: OK (v${data.version ?? "?"})`);
+        } else {
+          results.push(`Gitea: ERROR (HTTP ${res.status})`);
+        }
+      } else {
+        results.push("Gitea: not configured");
+      }
+    } catch (err) {
+      results.push(`Gitea: UNREACHABLE (${String(err).slice(0, 80)})`);
+    }
+
+    // ChromaDB
+    try {
+      const res = await fetch(`${config.chromaUrl}/api/v1/heartbeat`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        results.push("ChromaDB: OK");
+      } else {
+        results.push(`ChromaDB: ERROR (HTTP ${res.status})`);
+      }
+    } catch (err) {
+      results.push(`ChromaDB: UNREACHABLE (${String(err).slice(0, 80)})`);
+    }
+
+    // Ollama
+    try {
+      const ollamaHost = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
+      const res = await fetch(`${ollamaHost}/api/tags`, { signal: AbortSignal.timeout(5000) });
+      if (res.ok) {
+        const data = await res.json() as { models?: Array<{ name: string }> };
+        const models = data.models?.map((m) => m.name).join(", ") ?? "none";
+        results.push(`Ollama: OK (models: ${models})`);
+      } else {
+        results.push(`Ollama: ERROR (HTTP ${res.status})`);
+      }
+    } catch (err) {
+      results.push(`Ollama: UNREACHABLE (${String(err).slice(0, 80)})`);
+    }
+
+    // Matrix
+    const matrixProvider = this.providers.get("matrix");
+    if (matrixProvider) {
+      results.push(`Matrix: connected (main: ${this.mainChannelIds.get("matrix") ?? "none"})`);
+    } else if (config.matrixHomeserverUrl) {
+      results.push("Matrix: configured but not connected");
+    } else {
+      results.push("Matrix: not configured");
+    }
+
+    // Discord
+    const discordProvider = this.providers.get("discord");
+    if (discordProvider) {
+      results.push(`Discord: connected (main: ${this.mainChannelIds.get("discord") ?? "none"})`);
+    } else if (config.discordBotToken) {
+      results.push("Discord: configured but not connected");
+    } else {
+      results.push("Discord: not configured");
+    }
+
+    // MCP HTTP (sandbox mode)
+    if (config.sandboxClaude) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${config.mcpHttpPort}/health`, { signal: AbortSignal.timeout(3000) });
+        if (res.ok) {
+          results.push(`MCP HTTP: OK (port ${config.mcpHttpPort})`);
+        } else {
+          results.push(`MCP HTTP: ERROR (HTTP ${res.status})`);
+        }
+      } catch (err) {
+        results.push(`MCP HTTP: UNREACHABLE (${String(err).slice(0, 80)})`);
+      }
+    } else {
+      results.push("MCP HTTP: disabled (sandbox not enabled)");
+    }
+
+    // Sandbox image
+    if (config.sandboxClaude) {
+      try {
+        const proc = Bun.spawnSync(["docker", "image", "inspect", "hoto-sandbox:latest"], { stdout: "pipe", stderr: "pipe" });
+        results.push(proc.exitCode === 0 ? "Sandbox image: OK" : "Sandbox image: NOT FOUND");
+      } catch {
+        results.push("Sandbox image: docker not available");
+      }
+    }
+
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, results.join("\n"));
+  }
+
   private async cmdHelp(cmd: CommandEvent): Promise<void> {
     const topic = cmd.args[0];
 
@@ -1188,6 +1288,7 @@ export class MessagingManager {
       "  !relate <a> <b> <desc>         Define a repo relationship",
       "  !unrelate <a> <b> [type]       Remove a repo relationship",
       "  !relationships [repo]          List repo relationships",
+      "  !health                        Check service connectivity",
       "  !help [command]                Show this help",
       "",
       "In task channels:",
