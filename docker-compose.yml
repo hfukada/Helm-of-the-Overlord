@@ -2,9 +2,6 @@ services:
   hoto:
     build:
       context: .
-      args:
-        GIT_COMMIT: "${GIT_COMMIT:-}"
-        GIT_DATETIME: "${GIT_DATETIME:-}"
     ports:
       - "7777:7777"
     volumes:
@@ -23,6 +20,8 @@ services:
       GITEA_URL: http://moxy:3777
       OLLAMA_HOST: http://ollama:11434
       HOTO_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-helm-of-the-overlord}_hoto-data
+      GIT_COMMIT: "${GIT_COMMIT:-}"
+      GIT_DATETIME: "${GIT_DATETIME:-}"
     depends_on:
       - chromadb
       - synapse
