@@ -17,7 +17,8 @@ Multi-repo, multi-agent one-shot task manager. Describe a task in plain text, an
 
 **Single-repo:**
 ```
-plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> spawn 1 child -> wait
+  Child (repo): implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
 ```
 
 **Multi-repo:** Planning is unified, then each repo gets its own child task running in parallel:
@@ -230,6 +231,235 @@ Available tool: `search_knowledge` -- semantic and keyword search across indexed
 - **Code review**: Gitea (self-hosted)
 - **Web UI**: Svelte 5 + Vite + Tailwind CSS 4 (separate `hoto-ui` repo)
 - **Containers**: Docker (sandbox execution, CI/lint isolation)
+
+## API Reference
+
+The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO_HOST`/`HOTO_PORT`). All request and response bodies are JSON. Timestamps are ISO 8601 strings. Error responses use `{ "error": "<message>" }` with an appropriate HTTP status code.
+
+### Health & Version
+
+**`GET /health`**
+- Response: `{ "status": "ok", "pid": number }`
+
+**`GET /version`**
+- Response: `{ "version": string, "commit": string | null, "datetime": string | null }`
+
+---
+
+### Tasks
+
+**`GET /tasks`**
+- Response: Array of task objects with fields `id, title, status, repo_id, branch_name, source, created_at, updated_at`.
+
+**`POST /tasks`**
+- Request body:
+  ```json
+  {
+    "description": "string (required)",
+    "title": "string (optional)",
+    "repo_name": "string (optional, target a single repo by name)",
+    "repo_names": ["string (optional, target multiple repos by name)"],
+    "source": "string (optional, e.g. 'cli', 'matrix', 'discord')",
+    "source_sender_id": "string (optional)",
+    "source_provider": "string (optional)"
+  }
+  ```
+- Response (201): `{ "id": string, "title": string, "status": "pending", "repo_count": number }`
+
+**`GET /tasks/:id`**
+- Response: Full task object including:
+  - `blueprint_state`: object | null
+  - `agent_runs`: array of agent run records
+  - `repos`: array of `{ id, name, language, framework, role }`
+  - `prs`: array of `{ id, repo_id, pr_number, pr_url, status, repo_name }`
+  - `children`: array of child task summaries
+
+**`DELETE /tasks/:id`**
+- Response: `{ "id": string, "deleted": true }`
+
+**`DELETE /tasks/done`**
+- Query params: `status` (optional, filter by status)
+- Response: `{ "deleted": string[], "errors": [{ "id": string, "error": string }] }`
+
+**`POST /tasks/:id/cancel`**
+- Response: `{ "id": string, "status": "cancelled" }`
+
+**`GET /tasks/:id/diff`**
+- Response: `{ "diff": string | null }`
+
+**`GET /tasks/:id/diff/summary`**
+- Response: `{ "summary": [{ "file": string, "insertions": number, "deletions": number }] | null }`
+
+---
+
+### Child Tasks
+
+**`GET /tasks/:taskId/children`**
+- Response: Array of child task objects with fields `id, status, repo_name, language, pr_number, pr_url, ci_passed, lint_passed, created_at, updated_at`.
+
+**`POST /tasks/:taskId/children/:childId/retry`**
+- Response: `{ "id": string, "status": "pending" }`
+
+**`POST /tasks/:taskId/children/:childId/cancel`**
+- Response: `{ "id": string, "status": "cancelled" }`
+
+---
+
+### Review & Commit
+
+**`POST /tasks/:id/accept`**
+- Marks task as accepted (merges PR via Gitea if configured).
+- Response: `{ "id": string, "status": "accepted" }`
+
+**`POST /tasks/:id/commit`**
+- Commits and pushes changes for a task.
+- Request body:
+  ```json
+  {
+    "message": "string (required)",
+    "branch_name": "string (optional)"
+  }
+  ```
+- Response: `{ "id": string, "status": "committed", "branch": string }`
+
+---
+
+### Agent Runs
+
+**`GET /tasks/:taskId/agents`**
+- Response: Array of agent run records with fields `id, node_name, agent_type, status, prompt, output, token_input, token_output, cost_usd, model, started_at, finished_at, error`.
+
+---
+
+### Comments
+
+**`GET /tasks/:taskId/comments`**
+- Response: Array of diff comment objects ordered by `file_path, line_number`.
+
+**`POST /tasks/:taskId/comments`**
+- Request body:
+  ```json
+  {
+    "file_path": "string (required)",
+    "line_number": "number (optional)",
+    "side": "string (optional, default 'right')",
+    "body": "string (required)"
+  }
+  ```
+- Response (201): `{ "id": string, "task_id": string, "file_path": string, "line_number": number | null, "side": string, "body": string, "resolved": boolean }`
+
+**`PATCH /comments/:commentId`**
+- Request body: `{ "body": "string (optional)", "resolved": "boolean (optional)" }`
+- Response: Full updated comment object.
+
+**`DELETE /comments/:commentId`**
+- Response: `{ "deleted": true }`
+
+---
+
+### Repositories
+
+**`GET /repos`**
+- Response: Array of repo objects (non-archived) with all fields.
+
+**`POST /repos`**
+- Request body:
+  ```json
+  {
+    "url": "string (git clone URL, required if path not provided)",
+    "path": "string (local path, required if url not provided)",
+    "name": "string (optional, derived from path/url if omitted)",
+    "description": "string (optional)",
+    "language": "string (optional)",
+    "framework": "string (optional)",
+    "build_cmd": "string (optional)",
+    "test_cmd": "string (optional)",
+    "run_cmd": "string (optional)",
+    "lint_cmd": "string (optional)",
+    "ci_on_host": "boolean (optional, allow CI to run on host without Docker)"
+  }
+  ```
+- Response (201): `{ "id": number, "name": string, "path": string, "language": string | null, "framework": string | null }`
+
+**`GET /repos/:name`**
+- Response: Full repo object.
+
+**`PATCH /repos/:name`**
+- Request body: Any subset of `{ description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, ci_on_host }`.
+- Response: Updated repo object.
+
+**`DELETE /repos/:name`**
+- Response: `{ "deleted": string }` (the repo name)
+
+---
+
+### Repository Secrets
+
+**`GET /repos/:repoName/secrets`**
+- Response: Array of container secret objects ordered by `key`.
+
+**`POST /repos/:repoName/secrets`**
+- Request body:
+  ```json
+  {
+    "secret_type": "env_var | auth_file (required)",
+    "key": "string (required)",
+    "value_source": "host_env | host_file (required)",
+    "host_path": "string (required for auth_file type)",
+    "container_path": "string (optional)",
+    "description": "string (optional)"
+  }
+  ```
+- Response (201): `{ "id": number, "key": string }`
+
+**`PATCH /repos/:repoName/secrets/:secretId`**
+- Request body: `{ "verified": "boolean (optional)", "description": "string (optional)" }`
+- Response: `{ "updated": number }`
+
+**`DELETE /repos/:repoName/secrets/:secretId`**
+- Response: `{ "removed": number }`
+
+---
+
+### Repository Relationships
+
+**`GET /repos/:repoName/relationships`**
+- Response: Array of relationship objects where the repo is source or target, with fields `source_repo_id, target_repo_id, relationship, description, source_name, target_name`.
+
+**`POST /repos/:repoName/relationships`**
+- Request body:
+  ```json
+  {
+    "target_repo": "string (required)",
+    "relationship": "string (required, e.g. 'depends-on', 'shared-types')",
+    "description": "string (optional)"
+  }
+  ```
+- Response (201): `{ "source_repo": string, "target_repo": string, "relationship": string, "description": string | null }`
+
+**`DELETE /repos/relationships/:id`**
+- Response: `{ "removed": true }`
+
+---
+
+### Token Usage
+
+**`GET /tokens`**
+- Response:
+  ```json
+  {
+    "daily": [{ "date": string, "model": string, "input_tokens": number, "output_tokens": number, "cost_usd": number }],
+    "totals": { "total_input": number, "total_output": number, "total_cost": number }
+  }
+  ```
+
+---
+
+### Knowledge Base
+
+**`GET /knowledge/search`**
+- Query params: `q` (required, search query), `repo` (optional, filter by repo name), `limit` (optional, default 10)
+- Response: `{ "results": [{ "repo_name": string, "source_file": string, "chunk_type": string, "content": string, "score": number }], "count": number }`
 
 ## License
 

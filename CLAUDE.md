@@ -57,7 +57,9 @@ bun run lint                # Lint with Biome
 ### Single-repo tasks
 
 ```
-pre-plan (skipped) -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
+pre-plan (skipped) -> plan -> scrutinize -> plan-again -> scrutinize -> finalize-plan -> spawn 1 child -> wait
+  |
+  +-- Child (repo): implement -> lint -> [fix-lint] -> ci -> [fix-ci] -> review -> commit
 ```
 
 ### Multi-repo tasks (child task architecture)
@@ -122,7 +124,7 @@ Tasks can span multiple repositories. When no `-r` flag is specified, all regist
 - **Completion**: Parent marked "committed" when ALL children are "committed". Mixed state (some committed, some error) keeps parent in "waiting_for_children".
 - **Retry/Cancel**: Individual children can be retried or cancelled via `POST /tasks/:id/children/:childId/retry` or `/cancel`.
 - **Messaging**: Children share the parent's chat channels. Updates are prefixed with `[repo-name]`.
-- **Single-repo**: Tasks targeting one repo skip the child system entirely -- existing flow unchanged.
+- **Single-repo**: Tasks targeting one repo spawn exactly one child task.
 
 ## Repo Relationships
 
