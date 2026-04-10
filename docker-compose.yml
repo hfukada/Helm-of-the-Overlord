@@ -1,6 +1,10 @@
 services:
   hoto:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: "${GIT_COMMIT:-}"
+        GIT_DATETIME: "${GIT_DATETIME:-}"
     ports:
       - "7777:7777"
     volumes:
