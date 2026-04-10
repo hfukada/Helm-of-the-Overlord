@@ -262,10 +262,27 @@ async function deleteTask(taskId: string): Promise<void> {
 tasks.delete("/done", async (c) => {
   const db = getDb();
 
+  const ALL_VALID_STATUSES = ["committed", "cancelled", "failed", "implementing", "planning", "scrutinizing", "linting", "ci", "review", "accepted"];
   const FINISHED_STATUSES = ["committed", "cancelled", "failed"];
+
+  const statusParam = c.req.query("status");
+  let statusesToQuery: string[];
+
+  if (statusParam !== undefined) {
+    if (!ALL_VALID_STATUSES.includes(statusParam)) {
+      return c.json(
+        { error: `Unknown status: ${statusParam}. Valid statuses: ${ALL_VALID_STATUSES.join(", ")}` },
+        400
+      );
+    }
+    statusesToQuery = [statusParam];
+  } else {
+    statusesToQuery = FINISHED_STATUSES;
+  }
+
   const doneTasks = db.query(
-    `SELECT id FROM tasks WHERE status IN (${FINISHED_STATUSES.map(() => "?").join(",")})`
-  ).all(...FINISHED_STATUSES) as Array<{ id: string }>;
+    `SELECT id FROM tasks WHERE status IN (${statusesToQuery.map(() => "?").join(",")})`
+  ).all(...statusesToQuery) as Array<{ id: string }>;
 
   const deleted: string[] = [];
   const errors: Array<{ id: string; error: string }> = [];
@@ -275,7 +292,7 @@ tasks.delete("/done", async (c) => {
       await deleteTask(task.id);
       deleted.push(task.id);
     } catch (err) {
-      logger.error("Failed to delete finished task", { taskId: task.id, error: String(err) });
+      logger.error("Failed to delete task", { taskId: task.id, error: String(err) });
       errors.push({ id: task.id, error: String(err) });
     }
   }

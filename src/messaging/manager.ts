@@ -94,6 +94,12 @@ const COMMAND_HELP: Record<string, string> = {
     "Kicks all users from each task's Matrix channel, then removes the task and all related DB rows.",
     "Example: !clean-done",
   ].join("\n"),
+  "purge": [
+    "!purge <status>",
+    "Delete all tasks with a given status (e.g. failed, cancelled, implementing).",
+    "Calls cleanupTask for any live (non-terminal) status, stopping running orchestrator processes before deleting.",
+    "Example: !purge failed",
+  ].join("\n"),
   relate: [
     "!relate <repo-a> <repo-b> <description>",
     "Define a relationship between two repos. The description explains how they relate.",
@@ -243,6 +249,9 @@ export class MessagingManager {
         break;
       case "clean-done":
         await this.cmdCleanDone(cmd);
+        break;
+      case "purge":
+        await this.cmdPurge(cmd);
         break;
       case "relate":
         await this.cmdRelate(cmd);
@@ -1071,6 +1080,28 @@ export class MessagingManager {
     await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
+  private async cmdPurge(cmd: CommandEvent): Promise<void> {
+    if (!cmd.args[0]) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !purge <status>");
+      return;
+    }
+    const status = cmd.args[0];
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Purging tasks with status '${status}'...`);
+    const res = await fetch(
+      `http://127.0.0.1:${config.daemonPort}/tasks/done?status=${encodeURIComponent(status)}`,
+      { method: "DELETE" }
+    );
+    if (!res.ok) {
+      const body = await res.text();
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Error: ${body}`);
+      return;
+    }
+    const { deleted, errors } = await res.json() as { deleted: string[]; errors: Array<{ id: string; error: string }> };
+    const lines = [`Purged ${deleted.length} task(s) with status '${status}'.`];
+    for (const e of errors) lines.push(`Error: ${e.id.slice(0, 8)}: ${e.error}`);
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
+  }
+
   private async cmdRelate(cmd: CommandEvent): Promise<void> {
     // !relate <repo-a> <repo-b> <description...>
     if (cmd.args.length < 3) {
@@ -1278,6 +1309,7 @@ export class MessagingManager {
       "  !cancel [id]                   Cancel a running task",
       "  !delete-task <id>              Delete a task and all data",
       "  !clean-done                    Delete all finished tasks",
+      "  !purge <status>                Delete all tasks with a given status",
       "  !repos                         List registered repos",
       "  !repo add <url> [--name] [--allow-ci-on-host]",
       "                                 Clone and register a repo",

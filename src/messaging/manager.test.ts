@@ -11,6 +11,7 @@ import type { MessagingProvider } from "./interface";
 
 function makeStubProvider(): MessagingProvider {
   return {
+    providerName: "stub",
     connect: async () => {},
     disconnect: async () => {},
     getMainChannelId: () => null,
@@ -31,8 +32,8 @@ describe("MessagingManager.handleMessage", () => {
   let cmdAskSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
-    manager = new MessagingManager(makeStubProvider());
-    (manager as unknown as Record<string, unknown>).mainChannelId = "main-channel-id";
+    manager = new MessagingManager();
+    manager.setMainChannel("stub", "main-channel-id");
     cmdAskSpy = spyOn(manager as unknown as Record<string, (...args: unknown[]) => unknown>, "cmdAsk").mockResolvedValue(undefined);
   });
 
@@ -42,6 +43,7 @@ describe("MessagingManager.handleMessage", () => {
       text: "what is the status of the project?",
       senderId: "user1",
       senderName: "User One",
+      providerName: "stub",
     };
     await (manager as unknown as Record<string, (...args: unknown[]) => unknown>).handleMessage(msg);
     expect(cmdAskSpy).toHaveBeenCalledTimes(1);
@@ -57,6 +59,7 @@ describe("MessagingManager.handleMessage", () => {
       text: "hello there",
       senderId: "user1",
       senderName: "User One",
+      providerName: "stub",
     };
     await (manager as unknown as Record<string, (...args: unknown[]) => unknown>).handleMessage(msg);
     expect(cmdAskSpy).not.toHaveBeenCalled();
@@ -69,6 +72,7 @@ describe("MessagingManager.handleMessage", () => {
       text: "!ask what is the status?",
       senderId: "user1",
       senderName: "User One",
+      providerName: "stub",
     };
     await (manager as unknown as Record<string, (...args: unknown[]) => unknown>).handleMessage(msg);
     expect(cmdAskSpy).not.toHaveBeenCalled();
