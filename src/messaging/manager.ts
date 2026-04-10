@@ -1210,7 +1210,7 @@ export class MessagingManager {
 
     // ChromaDB
     try {
-      const res = await fetch(`${config.chromaUrl}/api/v1/heartbeat`, { signal: AbortSignal.timeout(5000) });
+      const res = await fetch(`${config.chromaUrl}/api/v2/heartbeat`, { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
         results.push("ChromaDB: OK");
       } else {
