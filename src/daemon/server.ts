@@ -10,6 +10,7 @@ import { commits } from "./routes/commits";
 import { secrets } from "./routes/secrets";
 import { relationships } from "./routes/relationships";
 import { childTasks } from "./routes/child-tasks";
+import { version } from "./routes/version";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
@@ -25,6 +26,7 @@ app.use("/*", cors());
 
 app.get("/health", (c) => c.json({ status: "ok", pid: process.pid }));
 
+app.route("/version", version);
 app.route("/tasks", tasks);
 app.route("/tasks", agents); // /tasks/:id/agents
 app.route("/tasks", childTasks); // /tasks/:id/children
