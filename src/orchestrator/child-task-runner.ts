@@ -353,6 +353,13 @@ export async function runChildTask(childId: string): Promise<void> {
 
       db.run("UPDATE child_tasks SET pr_number = ?, pr_url = ? WHERE id = ?", [pr.number, prUrl, childId]);
 
+      // Insert into task_prs so the review poller gets a real repo_id and messaging
+      // manager can find the PR URL for ready-for-review notifications.
+      db.run(
+        "INSERT OR REPLACE INTO task_prs (task_id, repo_id, pr_number, pr_url) VALUES (?, ?, ?, ?)",
+        [parentTaskId, repo.id, pr.number, prUrl]
+      );
+
       logger.info("Child task PR created", { childId, repo: repo.name, prNumber: pr.number, url: prUrl });
       notifyParent(parentTaskId, repo.name, `PR created: ${prUrl}`);
 
