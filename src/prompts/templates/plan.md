@@ -30,10 +30,21 @@ Do NOT implement -- only plan.
 ### Summary
 1-3 sentences: what changes and why.
 
-### Execution Plan
-Numbered checklist. Each step: the file path, what to change, and why.
-Group ALL changes to the same file into ONE step. The implementation agent has limited turns -- never split one file across multiple steps.
+### Cross-Repo Context
+(Multi-repo tasks only.) Brief description of how the repos interact -- shared contracts, APIs, ordering. Keep it short.
 
-For multi-repo tasks, prefix each step with `[repo-name]`:
-1. [ ] [my-api] In `src/auth.ts`, add logout handler
-2. [ ] [my-frontend] In `src/pages/login.tsx`, add logout button
+### Per-Repo Plans
+(Use this structure for multi-repo tasks.)
+
+For each affected repo:
+
+#### [repo-name]
+1-2 sentence summary of what this repo does in this task.
+
+1. [ ] In `path/to/file.ts`, <what to change> <why>
+2. [ ] In `path/to/other.ts`, <what to change> <why>
+
+Each per-repo section must be self-contained. The implementation agent for one repo will NOT see other repos' sections. If a contract from another repo matters (e.g. API shape), restate it inline here.
+
+### Execution Plan
+(Single-repo tasks only.) Numbered checklist. Each step: the file path, what to change, and why. Group ALL changes to the same file into ONE step.

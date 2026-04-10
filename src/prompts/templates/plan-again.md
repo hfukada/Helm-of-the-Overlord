@@ -13,4 +13,7 @@ Revise the plan below to address the scrutiny issues. Keep what passed. Same out
 - Fix every ISSUE in the scrutiny results.
 - Keep steps that had no issues.
 - Do not add scope beyond what was requested.
-- Output the revised plan in the same format (Summary + Execution Plan).
+- Preserve the output structure from the previous plan:
+  - Multi-repo: Summary, Cross-Repo Context, Per-Repo Plans (with `#### [repo-name]` sections)
+  - Single-repo: Summary, Execution Plan
+- For multi-repo tasks, keep each `#### [repo-name]` section self-contained. Do not reference changes in other repos' sections -- restate shared contracts inline.

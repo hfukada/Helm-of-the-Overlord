@@ -29,7 +29,51 @@ function makeRepo(name: string): Repo {
 }
 
 describe("extractRepoExcerpts", () => {
-  test("splits steps by [repo-name] prefix", () => {
+  test("structured format: uses #### [repo-name] sections", () => {
+    const plan = [
+      "### Summary",
+      "Add auth to both repos.",
+      "",
+      "### Cross-Repo Context",
+      "The API exposes POST /login returning { token }. Frontend stores in localStorage.",
+      "",
+      "### Per-Repo Plans",
+      "",
+      "#### api",
+      "Add a login endpoint.",
+      "",
+      "1. [ ] In `src/auth.ts`, add POST /login handler",
+      "2. [ ] In `src/server.ts`, register the route",
+      "",
+      "#### frontend",
+      "Add a login form.",
+      "",
+      "1. [ ] In `src/Login.tsx`, create form component",
+      "2. [ ] In `src/api.ts`, add login() function",
+    ].join("\n");
+
+    const repos = [makeRepo("api"), makeRepo("frontend")];
+    const excerpts = extractRepoExcerpts(plan, repos);
+
+    // api gets its own section plus summary + cross-repo context
+    const apiExcerpt = excerpts.get("api")!;
+    expect(apiExcerpt).toContain("Add auth to both repos");
+    expect(apiExcerpt).toContain("POST /login");
+    expect(apiExcerpt).toContain("src/auth.ts");
+    expect(apiExcerpt).toContain("src/server.ts");
+    // Should NOT see frontend details
+    expect(apiExcerpt).not.toContain("src/Login.tsx");
+    expect(apiExcerpt).not.toContain("src/api.ts");
+
+    // frontend gets its own section
+    const frontendExcerpt = excerpts.get("frontend")!;
+    expect(frontendExcerpt).toContain("src/Login.tsx");
+    expect(frontendExcerpt).toContain("src/api.ts");
+    expect(frontendExcerpt).not.toContain("src/auth.ts");
+    expect(frontendExcerpt).not.toContain("src/server.ts");
+  });
+
+  test("legacy format: splits steps by [repo-name] prefix", () => {
     const plan = [
       "### Summary",
       "Add logging to both repos.",

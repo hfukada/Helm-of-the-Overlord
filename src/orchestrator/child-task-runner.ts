@@ -170,21 +170,20 @@ export async function runChildTask(childId: string): Promise<void> {
     );
   } catch {}
 
-  // Build the implement prompt with parent context
-  const parentPlanRow = db.query(
-    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('finalize_plan', 'plan') ORDER BY finished_at DESC LIMIT 1"
-  ).get(parentTaskId) as { output: string } | null;
-
+  // Build the implement prompt. The plan_excerpt already contains:
+  // - The shared Summary and Cross-Repo Context (from the parent's finalize-plan)
+  // - This repo's specific Execution Plan
+  // The child does NOT see other repos' implementation details -- that's the point.
   const implementPrompt = [
-    `Implement the changes for the **${repo.name}** repository as described below.`,
+    `Implement the changes for the **${repo.name}** repository.`,
     "",
-    "## Task",
+    "## Original Task",
     parentRow.description,
     "",
-    "## Your Assignment (this repo only)",
+    "## Your Plan",
     planExcerpt,
     "",
-    parentPlanRow ? `## Full Cross-Repo Plan (for context)\n${parentPlanRow.output.slice(0, 3000)}` : "",
+    "You are responsible for ONLY the changes in this repo. Other repos in this task have their own implementations running in parallel.",
   ].join("\n");
 
   let state = createChildInitialState();
