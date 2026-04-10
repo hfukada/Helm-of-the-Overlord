@@ -1,4 +1,7 @@
+export GIT_COMMIT=$(git rev-parse HEAD)
+export GIT_DATETIME=$(git log -1 --format=%cI)
 docker compose up -d --build hoto
+
 while true; do
   if git pull | grep -qv "Already up to date"; then
     git push origin
