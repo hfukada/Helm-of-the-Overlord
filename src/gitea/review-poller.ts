@@ -93,7 +93,18 @@ export function startReviewPoller(
   const prRow = db.query(
     "SELECT repo_id FROM task_prs WHERE task_id = ? AND pr_number = ?"
   ).get(taskId, prNumber) as { repo_id: number } | null;
-  const repoId = prRow?.repo_id ?? 0;
+  let repoId = prRow?.repo_id ?? 0;
+
+  // Defensive fallback: for child task PRs that may have been created before the
+  // task_prs insert was added, resolve repo_id via child_tasks table.
+  if (repoId === 0) {
+    const childRow = db.query(
+      "SELECT repo_id FROM child_tasks WHERE parent_task_id = ? AND pr_number = ?"
+    ).get(taskId, prNumber) as { repo_id: number } | null;
+    if (childRow) {
+      repoId = childRow.repo_id;
+    }
+  }
 
   const state: PollerState = {
     taskId,
