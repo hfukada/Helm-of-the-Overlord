@@ -18,7 +18,9 @@ RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"
 
 RUN bun install -g @anthropic-ai/claude-code \
-    && ln -s /root/.bun/bin/bun /usr/local/bin/node
+    && ln -s /root/.bun/bin/bun /usr/local/bin/node \
+    && ln -s /root/.bun/install/global/node_modules/@anthropic-ai/claude-code/cli.js /root/.bun/bin/claude \
+    && chmod +x /root/.bun/bin/claude
 
 WORKDIR /workspace
 

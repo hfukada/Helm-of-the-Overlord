@@ -579,10 +579,30 @@ export async function runTask(taskId: string): Promise<void> {
 
   const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox);
 
+  const noIssuesPattern = /\bNO\s+ISSUES\b/i;
+
   if (scrutiny1.error) {
     if (isTaskCancelled(task.id)) return;
     logger.warn("Scrutiny failed, proceeding with original plan", { taskId: task.id });
     state = advanceState(state, "error");
+  } else if (noIssuesPattern.test(scrutiny1.output)) {
+    if (isTaskCancelled(task.id)) return;
+    logger.info("Scrutiny found no issues, skipping to finalize", { taskId: task.id });
+
+    state = advanceState(state, "done");
+    updateTaskStatus(task.id, "finalizing_plan", state);
+
+    const finalPlan = await executeFinalizePlan(
+      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking, sandbox
+    );
+
+    const finalHasStructure = /^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(finalPlan.plan ?? "");
+    if (!finalPlan.error && finalHasStructure) {
+      planResult.plan = finalPlan.plan;
+    } else {
+      logger.warn("Finalize output unstructured or failed, using original plan", { taskId: task.id, len: finalPlan.plan?.length });
+    }
+    state = advanceState(state, "done");
   } else {
     if (isTaskCancelled(task.id)) return;
 
