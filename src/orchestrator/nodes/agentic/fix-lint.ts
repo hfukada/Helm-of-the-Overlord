@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaude } from "../../subprocess";
+import { runClaudeTurnLoop } from "../../subprocess";
 import { buildSystemPrompt, getChatContext } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
@@ -42,7 +42,7 @@ export async function executeFixLint(
 
   const allowedTools = [...mcpReadTools, "Write", "Edit", "Bash"];
 
-  const result = await runClaude({
+  const result = await runClaudeTurnLoop({
     prompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,

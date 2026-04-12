@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { Task } from "../../../shared/types";
-import { runClaude } from "../../subprocess";
+import { runClaudeTurnLoop } from "../../subprocess";
 import { buildPrePlanPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
@@ -27,7 +27,7 @@ export async function executePrePlan(
     [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
   );
 
-  const result = await runClaude({
+  const result = await runClaudeTurnLoop({
     prompt,
     systemPrompt: "You are a scoping agent. Determine which repositories need changes. Be concise.",
     workDir: config.workspaceDir,

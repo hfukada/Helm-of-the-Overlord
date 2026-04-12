@@ -45,6 +45,10 @@ export interface ClaudeOptions {
   containerName?: string;
   /** Working directory inside the container (default: /workspace). */
   containerWorkDir?: string;
+  /** Set a session ID for the conversation (UUID format). Used on first turn. */
+  sessionId?: string;
+  /** Resume a conversation by session ID (UUID format). Used on subsequent turns. */
+  resumeId?: string;
 }
 
 export interface ClaudeUsage {
@@ -103,6 +107,18 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
     for (const dir of opts.addDirs) {
       args.push("--add-dir", dir);
     }
+  }
+
+  // Session management for turn-loop mode
+  if (opts.resumeId) {
+    args.push("--resume", opts.resumeId);
+  } else if (opts.sessionId) {
+    args.push("--session-id", opts.sessionId);
+  }
+
+  // Use bare mode for session/resume to skip hooks, LSP, etc.
+  if (opts.sessionId || opts.resumeId) {
+    args.push("--bare");
   }
 
   // Prompt passed via stdin to avoid shell arg length limits

@@ -7,6 +7,7 @@ import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
 import { claudeStream, type ClaudeEvent } from "../shared/claude-cli";
 import { taskDir } from "../workspace/manager";
+import { runTurnLoop, type TurnLoopResult, type TurnResult } from "./turn-loop";
 
 export interface SubprocessOptions {
   prompt: string;
@@ -124,6 +125,85 @@ export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResu
       cost_usd: result.usage.costUsd,
     },
     error: result.error,
+  };
+}
+
+export interface TurnLoopSubprocessOptions extends SubprocessOptions {
+  onTurnComplete?: (turn: TurnResult) => Promise<string | null>;
+  shouldStop?: (turn: TurnResult) => boolean;
+}
+
+/**
+ * Run Claude in a resume-based turn loop (--max-turns 1 per invocation).
+ *
+ * Replaces runClaude() for agentic nodes that benefit from between-turn
+ * control: nudges, loop detection, budget enforcement.
+ */
+export async function runClaudeTurnLoop(opts: TurnLoopSubprocessOptions): Promise<SubprocessResult & { turnLoop: TurnLoopResult }> {
+  const model = opts.model ?? config.defaultModel;
+
+  logger.info("Spawning claude turn loop", {
+    model,
+    workDir: opts.workDir,
+    agentRunId: opts.agentRunId,
+    maxTurns: opts.maxTurns,
+  });
+
+  // Dump prompt to task directory for debugging
+  if (opts.taskId) {
+    try {
+      const nodeName = (getDb().query(
+        "SELECT node_name FROM agent_runs WHERE id = ?"
+      ).get(opts.agentRunId) as { node_name: string } | null)?.node_name ?? "unknown";
+
+      const promptsDir = join(taskDir(opts.taskId), "prompts");
+      mkdirSync(promptsDir, { recursive: true });
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `${timestamp}_${nodeName}.md`;
+      const content = [
+        `# ${nodeName} (turn-loop)`,
+        `Agent Run: ${opts.agentRunId}`,
+        `Model: ${model}`,
+        `Max Turns: ${opts.maxTurns ?? "default"}`,
+        `Timestamp: ${new Date().toISOString()}`,
+        "",
+        "## System Prompt",
+        opts.systemPrompt ?? "(none)",
+        "",
+        "## Prompt",
+        opts.prompt,
+      ].join("\n");
+
+      writeFileSync(join(promptsDir, filename), content);
+    } catch (err) {
+      logger.warn("Failed to dump prompt", { error: String(err) });
+    }
+  }
+
+  const turnLoopResult = await runTurnLoop({
+    prompt: opts.prompt,
+    systemPrompt: opts.systemPrompt,
+    workDir: opts.workDir,
+    model,
+    maxTurns: opts.maxTurns ?? 15,
+    allowedTools: opts.allowedTools,
+    mcpConfigPath: opts.mcpConfigPath,
+    addDirs: opts.addDirs,
+    agentRunId: opts.agentRunId,
+    taskId: opts.taskId,
+    onEvent: opts.onEvent,
+    containerName: opts.containerName,
+    containerWorkDir: opts.containerWorkDir,
+    onTurnComplete: opts.onTurnComplete,
+    shouldStop: opts.shouldStop,
+  });
+
+  return {
+    output: turnLoopResult.output,
+    usage: turnLoopResult.totalUsage,
+    error: turnLoopResult.error,
+    turnLoop: turnLoopResult,
   };
 }
 

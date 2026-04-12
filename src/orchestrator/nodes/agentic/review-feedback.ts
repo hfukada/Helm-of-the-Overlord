@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaude } from "../../subprocess";
+import { runClaudeTurnLoop } from "../../subprocess";
 import { buildSystemPrompt } from "../../context-builder";
 import { renderTemplate } from "../../../prompts/loader";
 import { getDb } from "../../../knowledge/db";
@@ -109,7 +109,7 @@ export async function executeUnderstandReview(
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
-  const result = await runClaude({
+  const result = await runClaudeTurnLoop({
     prompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
@@ -166,7 +166,7 @@ export async function executeReviewSmallFeedback(
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
-  const result = await runClaude({
+  const result = await runClaudeTurnLoop({
     prompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
@@ -238,7 +238,7 @@ export async function executeReviewLargeFeedback(
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
     : ["Read", "Glob", "Grep"];
 
-  const result = await runClaude({
+  const result = await runClaudeTurnLoop({
     prompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,

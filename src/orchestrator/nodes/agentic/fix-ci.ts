@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaude } from "../../subprocess";
+import { runClaudeTurnLoop } from "../../subprocess";
 import { buildSystemPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
@@ -75,7 +75,7 @@ export async function executeFixCi(
 
   logger.info("Planning CI fix", { taskId: task.id });
 
-  const planResult = await runClaude({
+  const planResult = await runClaudeTurnLoop({
     prompt: planPrompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,
@@ -117,7 +117,7 @@ export async function executeFixCi(
   const estimatedTurns = Math.max(10, Math.min(30, 3 + Math.ceil(uniqueFiles * 2.5)));
   logger.info("Implementing CI fix", { taskId: task.id, uniqueFiles, estimatedTurns });
 
-  const implResult = await runClaude({
+  const implResult = await runClaudeTurnLoop({
     prompt: implPrompt,
     systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
     workDir,

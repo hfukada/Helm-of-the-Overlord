@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaude } from "../../subprocess";
+import { runClaudeTurnLoop } from "../../subprocess";
 import { buildImplementPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
@@ -61,7 +61,7 @@ export async function executeImplement(
 
   const maxTurns = estimateTurns(plan);
 
-  const result = await runClaude({
+  const result = await runClaudeTurnLoop({
     prompt,
     systemPrompt,
     workDir,

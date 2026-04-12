@@ -215,6 +215,21 @@ const MIGRATIONS_V4 = [
 
   `CREATE INDEX IF NOT EXISTS idx_child_tasks_parent ON child_tasks(parent_task_id)`,
   `CREATE INDEX IF NOT EXISTS idx_child_tasks_status ON child_tasks(parent_task_id, status)`,
+
+  `CREATE TABLE IF NOT EXISTS agent_turns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent_run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+    turn_number INTEGER NOT NULL,
+    has_tool_use INTEGER NOT NULL DEFAULT 0,
+    tool_names TEXT,
+    text_output TEXT,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    cost_usd REAL DEFAULT 0,
+    stop_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_turns_run ON agent_turns(agent_run_id)`,
 ];
 
 const ALTER_MIGRATIONS = [
@@ -234,6 +249,7 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN source_sender_id TEXT",
   "ALTER TABLE tasks ADD COLUMN source_provider TEXT",
   "ALTER TABLE agent_runs ADD COLUMN child_task_id TEXT",
+  "ALTER TABLE agent_runs ADD COLUMN session_id TEXT",
 ];
 
 export function runMigrations(db: Database): void {
