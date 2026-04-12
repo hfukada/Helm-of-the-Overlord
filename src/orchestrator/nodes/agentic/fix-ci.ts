@@ -68,9 +68,9 @@ export async function executeFixCi(
   const planPrompt = await renderTemplate("fix-ci-plan", { ciOutput });
 
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'fix_ci_plan', 'agentic', 'running', ?, ?)`,
-    [planRunId, task.id, planPrompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, 'fix_ci_plan', 'agentic', 'running', ?, ?, ?)`,
+    [planRunId, task.id, planPrompt, model, task.child_task_id ?? null]
   );
 
   logger.info("Planning CI fix", { taskId: task.id });
@@ -106,9 +106,9 @@ export async function executeFixCi(
   });
 
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'fix_ci', 'agentic', 'running', ?, ?)`,
-    [implRunId, task.id, implPrompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, 'fix_ci', 'agentic', 'running', ?, ?, ?)`,
+    [implRunId, task.id, implPrompt, model, task.child_task_id ?? null]
   );
 
   // Estimate turns from the fix plan (same heuristic as implement phase)

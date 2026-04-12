@@ -47,6 +47,7 @@ export interface Task {
   use_full_copy: boolean;
   created_at: string;
   updated_at: string;
+  child_task_id?: string;
 }
 
 export interface ChildTask {

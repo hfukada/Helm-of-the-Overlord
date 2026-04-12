@@ -45,9 +45,9 @@ export async function executeScrutinize(
 
   const db = getDb();
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'scrutinize', 'agentic', 'running', ?, ?)`,
-    [agentRunId, task.id, prompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, 'scrutinize', 'agentic', 'running', ?, ?, ?)`,
+    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
   );
 
   const allowedTools = mcpConfigPath
@@ -148,9 +148,9 @@ export async function executePlanAgain(
 
   const db = getDb();
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'plan_again', 'agentic', 'running', ?, ?)`,
-    [agentRunId, task.id, prompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, 'plan_again', 'agentic', 'running', ?, ?, ?)`,
+    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
   );
 
   const allowedTools = mcpConfigPath
@@ -247,9 +247,9 @@ export async function executeFinalizePlan(
 
   const db = getDb();
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'finalize_plan', 'agentic', 'running', ?, ?)`,
-    [agentRunId, task.id, prompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, 'finalize_plan', 'agentic', 'running', ?, ?, ?)`,
+    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
   );
 
   const allowedTools = mcpConfigPath

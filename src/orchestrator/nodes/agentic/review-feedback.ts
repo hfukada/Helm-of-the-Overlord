@@ -35,12 +35,13 @@ function saveAgentRun(
   nodeName: string,
   prompt: string,
   model: string,
+  childTaskId?: string,
 ): void {
   const db = getDb();
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, ?, 'agentic', 'running', ?, ?)`,
-    [agentRunId, taskId, nodeName, prompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, ?, 'agentic', 'running', ?, ?, ?)`,
+    [agentRunId, taskId, nodeName, prompt, model, childTaskId ?? null]
   );
 }
 
@@ -102,7 +103,7 @@ export async function executeUnderstandReview(
     feedback,
   });
 
-  saveAgentRun(agentRunId, task.id, "understand_review", prompt, model);
+  saveAgentRun(agentRunId, task.id, "understand_review", prompt, model, task.child_task_id);
 
   const allowedTools = mcpConfigPath
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
@@ -159,7 +160,7 @@ export async function executeReviewSmallFeedback(
     feedback,
   });
 
-  saveAgentRun(agentRunId, task.id, "review_small_feedback", prompt, model);
+  saveAgentRun(agentRunId, task.id, "review_small_feedback", prompt, model, task.child_task_id);
 
   const allowedTools = mcpConfigPath
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
@@ -231,7 +232,7 @@ export async function executeReviewLargeFeedback(
     knowledgeContext: knowledgeContext || undefined,
   });
 
-  saveAgentRun(agentRunId, task.id, "review_large_feedback", prompt, model);
+  saveAgentRun(agentRunId, task.id, "review_large_feedback", prompt, model, task.child_task_id);
 
   const allowedTools = mcpConfigPath
     ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]

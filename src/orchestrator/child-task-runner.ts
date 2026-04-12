@@ -191,8 +191,10 @@ export async function runChildTask(childId: string): Promise<void> {
   // === IMPLEMENT ===
   updateChildStatus(childId, "implementing", state);
 
+  const taskObj = { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "implementing" as const, blueprint_state: null, branch_name: branchName, source: "cli" as const, use_full_copy: false, created_at: "", updated_at: "", child_task_id: childId };
+
   const implResult = await executeImplement(
-    { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "implementing", blueprint_state: null, branch_name: branchName, source: "cli", use_full_copy: false, created_at: "", updated_at: "" },
+    taskObj,
     [repo],
     workDir,
     implementPrompt,
@@ -255,7 +257,7 @@ export async function runChildTask(childId: string): Promise<void> {
         notifyParent(parentTaskId, repo.name, `CI failed (round ${round + 1}), fixing...`);
 
         const fixResult = await executeFixCi(
-          { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "ci_fixing", blueprint_state: null, branch_name: branchName, source: "cli", use_full_copy: false, created_at: "", updated_at: "" },
+          { ...taskObj, status: "ci_fixing" as const },
           repo, workDir, ciResult.output, mcpConfigPath, undefined, sandbox
         );
         if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
@@ -291,7 +293,7 @@ export async function runChildTask(childId: string): Promise<void> {
         updateChildStatus(childId, "fix_linting", state);
 
         const fixResult = await executeFixLint(
-          { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "fix_linting", blueprint_state: null, branch_name: branchName, source: "cli", use_full_copy: false, created_at: "", updated_at: "" },
+          { ...taskObj, status: "fix_linting" as const },
           repo, workDir, lintResult.output, lintResult.command, mcpConfigPath, undefined, sandbox
         );
         if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
@@ -479,7 +481,7 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
     id: parentTaskId, title: parentRow.title, description: parentRow.description,
     repo_id: repo.id, status: "implementing" as const, blueprint_state: null,
     branch_name: branchName, source: "cli" as const, use_full_copy: false,
-    created_at: "", updated_at: "",
+    created_at: "", updated_at: "", child_task_id: childId,
   };
 
   // Set up sandbox

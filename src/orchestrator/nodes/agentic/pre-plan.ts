@@ -22,9 +22,9 @@ export async function executePrePlan(
 
   const db = getDb();
   db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
-     VALUES (?, ?, 'pre-plan', 'agentic', 'running', ?, ?)`,
-    [agentRunId, task.id, prompt, model]
+    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
+     VALUES (?, ?, 'pre-plan', 'agentic', 'running', ?, ?, ?)`,
+    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
   );
 
   const result = await runClaude({

@@ -145,23 +145,46 @@ tasks.get("/:id", async (c) => {
 
   fixDates(task, "created_at", "updated_at");
 
-  // Include child tasks if any exist
-  const children = db.query(
+  // Include child tasks with their own agent runs and CI/lint output
+  const childRows = db.query(
     `SELECT ct.id, ct.status, ct.pr_number, ct.pr_url, ct.ci_passed, ct.lint_passed,
-            ct.created_at, ct.updated_at, r.name as repo_name, r.language
+            ct.ci_output, ct.lint_output, ct.created_at, ct.updated_at,
+            r.name as repo_name, r.language
      FROM child_tasks ct
      JOIN repos r ON r.id = ct.repo_id
      WHERE ct.parent_task_id = ?
      ORDER BY r.name`
   ).all(id) as Array<Record<string, unknown>>;
-  fixDatesAll(children, "created_at", "updated_at");
+  fixDatesAll(childRows, "created_at", "updated_at");
+
+  const children = childRows.map((child) => {
+    const childRuns = db.query(
+      `SELECT id, node_name, agent_type, status, prompt, output, token_input, token_output,
+              cost_usd, model, started_at, finished_at, error
+       FROM agent_runs WHERE task_id = ? AND child_task_id = ? ORDER BY started_at`
+    ).all(id, child.id as string) as Array<Record<string, unknown>>;
+    fixDatesAll(childRuns, "started_at", "finished_at");
+
+    return {
+      ...child,
+      runs: childRuns,
+    };
+  });
+
+  // Parent-level agent runs (no child_task_id)
+  const parentRuns = db.query(
+    `SELECT id, node_name, agent_type, status, prompt, output, token_input, token_output,
+            cost_usd, model, started_at, finished_at, error
+     FROM agent_runs WHERE task_id = ? AND child_task_id IS NULL ORDER BY started_at`
+  ).all(id) as Array<Record<string, unknown>>;
+  fixDatesAll(parentRuns, "started_at", "finished_at");
 
   return c.json({
     ...task,
     blueprint_state: blueprintState,
     diff,
     diff_summary: diffSummary,
-    agent_runs: agentRuns,
+    agent_runs: parentRuns,
     repos: taskRepos,
     prs: taskPrs,
     children,
