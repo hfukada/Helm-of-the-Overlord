@@ -643,15 +643,21 @@ describe("indexer integration", () => {
   });
 
   test("indexRepo creates code_symbols chunk", async () => {
-    const { getDb } = await import("../src/knowledge/db");
-    const db = getDb(); // getDb() calls runMigrations() automatically
+    // Close any existing DB singleton and reopen.
+    // config.dbPath is immutable (set at import time), so ensure its parent dir exists.
+    const { config } = await import("../src/shared/config");
+    mkdirSync(config.workspaceDir, { recursive: true });
+    const dbModule = await import("../src/knowledge/db");
+    dbModule.closeDb();
+    const db = dbModule.getDb();
 
-    // Create a repo entry
+    // Create a repo entry (use INSERT OR IGNORE in case prior test run left data)
+    const repoName = `test-repo-ts-${Date.now()}`;
     db.run(
       "INSERT INTO repos (name, path, description) VALUES (?, ?, ?)",
-      ["test-repo", repoDir, "Test repository"],
+      [repoName, repoDir, "Test repository"],
     );
-    const repo = db.query("SELECT * FROM repos WHERE name = 'test-repo'").get() as {
+    const repo = db.query("SELECT * FROM repos WHERE name = ?").get(repoName) as {
       id: number;
       name: string;
       path: string;

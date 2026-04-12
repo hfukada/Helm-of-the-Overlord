@@ -92,7 +92,8 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
   let error: string | null = null;
   let stopReason: TurnLoopResult["stopReason"] = "done";
 
-  const db = getDb();
+  let db: ReturnType<typeof getDb> | null = null;
+  try { db = getDb(); } catch {}
 
   for (let turnNum = 1; turnNum <= opts.maxTurns; turnNum++) {
     const isFirstTurn = turnNum === 1;
@@ -184,7 +185,7 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
 
     // Log turn to agent_turns table
     try {
-      db.run(
+      db?.run(
         `INSERT INTO agent_turns (agent_run_id, turn_number, has_tool_use, tool_names, text_output, input_tokens, output_tokens, cost_usd, stop_reason)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
@@ -272,7 +273,7 @@ export async function runTurnLoop(opts: TurnLoopOptions): Promise<TurnLoopResult
 
   // Store session_id on the agent_run
   try {
-    db.run("UPDATE agent_runs SET session_id = ? WHERE id = ?", [sessionId, opts.agentRunId]);
+    db?.run("UPDATE agent_runs SET session_id = ? WHERE id = ?", [sessionId, opts.agentRunId]);
   } catch {}
 
   logger.info("Turn loop: completed", {

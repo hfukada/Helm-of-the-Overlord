@@ -9,6 +9,7 @@ services:
       - hoto-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.claude.json:/root/.claude.json
     env_file:
       - .env
     environment:

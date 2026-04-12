@@ -109,16 +109,26 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
     }
   }
 
+  // Deny destructive git via Bash. Each node specifies its own allowedTools
+  // (Read, Write, Edit, Bash, MCP, etc.) which are auto-approved in --print mode.
+  // We block git write operations globally here.
+  args.push(
+    "--disallowedTools", "Bash(git commit:*)",
+    "--disallowedTools", "Bash(git push:*)",
+    "--disallowedTools", "Bash(git reset:*)",
+    "--disallowedTools", "Bash(git checkout:*)",
+    "--disallowedTools", "Bash(git rebase:*)",
+    "--disallowedTools", "Bash(git merge:*)",
+    "--disallowedTools", "Bash(git stash:*)",
+    "--disallowedTools", "Bash(git clean:*)",
+    "--disallowedTools", "Bash(git restore:*)",
+  );
+
   // Session management for turn-loop mode
   if (opts.resumeId) {
     args.push("--resume", opts.resumeId);
   } else if (opts.sessionId) {
     args.push("--session-id", opts.sessionId);
-  }
-
-  // Use bare mode for session/resume to skip hooks, LSP, etc.
-  if (opts.sessionId || opts.resumeId) {
-    args.push("--bare");
   }
 
   // Prompt passed via stdin to avoid shell arg length limits
