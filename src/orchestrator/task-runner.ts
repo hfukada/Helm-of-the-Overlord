@@ -4,30 +4,20 @@ import { config } from "../shared/config";
 import type { Task, Repo, BlueprintState, TaskStatus } from "../shared/types";
 import { createInitialState, advanceState } from "./blueprint";
 import { executePlan } from "./nodes/agentic/plan";
-import { executeImplement } from "./nodes/agentic/implement";
-import { executeFixLint } from "./nodes/agentic/fix-lint";
-import { executeFixCi } from "./nodes/agentic/fix-ci";
-import { executeLint } from "./nodes/deterministic/lint";
 import { rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createTaskClone, generateBranchName } from "../workspace/git";
-import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
+import { ensureTaskDir, taskDir, } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
-import { setupTaskContainer, teardownTaskContainer, isSandboxContainer, startSandboxContainer } from "../workspace/docker-exec";
+import { teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
 import type { SandboxOptions } from "./nodes/agentic/types";
-import { discoverSecrets } from "../workspace/secret-discovery";
 import { getMessagingManager } from "../messaging/manager";
-import { indexTaskChatHistory } from "../messaging/indexer";
-import { isGiteaConfigured, createPullRequest, updatePullRequest, rewriteGiteaUrl } from "../gitea/client";
-import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
-import { startReviewPoller, seedCursors } from "../gitea/review-poller";
-import { $ } from "bun";
 
-const MAX_LINT_ROUNDS = 2;
-const MAX_CI_ROUNDS = 2;
+const _MAX_LINT_ROUNDS = 2;
+const _MAX_CI_ROUNDS = 2;
 const INPUT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INPUT_POLL_INTERVAL_MS = 2000;
 
@@ -118,7 +108,7 @@ function updateTaskBranch(taskId: string, branchName: string) {
   db.run("UPDATE tasks SET branch_name = ? WHERE id = ?", [branchName, taskId]);
 }
 
-function saveNodeOutput(
+function _saveNodeOutput(
   taskId: string,
   node: "lint" | "ci",
   output: string,
@@ -200,7 +190,7 @@ function isFiller(line: string): boolean {
   return trimmed.length === 0;
 }
 
-function generatePrMetadata(
+function _generatePrMetadata(
   task: Task,
   planOutput: string,
   diffStat: string,
@@ -555,15 +545,25 @@ export async function runTask(taskId: string): Promise<void> {
     task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt, sandbox
   );
 
-  if (planResult.error || planResult.plan.length < 200) {
+  // A valid plan must either contain a "### Summary" section or a
+  // "### Execution Plan"/"### Per-Repo Plans" section. The length is NOT
+  // a reliable signal -- trivial tasks legitimately produce short plans.
+  // We only reject when the agent errored or produced no recognizable
+  // structured output (i.e. burned all turns reading files without writing).
+  const planHasStructure = /^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(planResult.plan);
+  if (planResult.error || !planHasStructure) {
     if (isTaskCancelled(task.id)) return;
-    logger.error("Planning failed or produced insufficient output", {
+    logger.error("Planning failed or produced no structured output", {
       taskId: task.id,
       error: planResult.error,
       outputLen: planResult.plan.length,
+      hasStructure: planHasStructure,
     });
     if (manager) {
-      manager.notifyAgentOutput(task.id, `[error] Plan output too short (${planResult.plan.length} chars). The planning agent may have run out of turns while exploring.`).catch(() => {});
+      const reason = planResult.error
+        ? `agent error: ${planResult.error}`
+        : `no structured plan sections found (agent may have run out of turns while exploring)`;
+      manager.notifyAgentOutput(task.id, `[error] Plan phase failed: ${reason}`).catch(() => {});
     }
     state = advanceState(state, "error");
     updateTaskStatus(task.id, "error", state);
@@ -622,10 +622,11 @@ export async function runTask(taskId: string): Promise<void> {
           task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking, sandbox
         );
 
-        if (!finalPlan.error && finalPlan.plan.length > 200) {
+        const finalHasStructure = /^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(finalPlan.plan ?? "");
+        if (!finalPlan.error && finalHasStructure) {
           planResult.plan = finalPlan.plan;
         } else {
-          logger.warn("Finalize output too short or failed, using revised plan", { taskId: task.id, len: finalPlan.plan?.length });
+          logger.warn("Finalize output unstructured or failed, using revised plan", { taskId: task.id, len: finalPlan.plan?.length });
           planResult.plan = planAgainResult.plan;
         }
         state = advanceState(state, "done");
@@ -633,9 +634,9 @@ export async function runTask(taskId: string): Promise<void> {
     }
   }
 
-  // Sanity check: if the best plan is too short, fall back up the chain
-  if (planResult.plan.length < 200) {
-    logger.warn("Plan output suspiciously short, task may produce poor results", { taskId: task.id, len: planResult.plan.length });
+  // Sanity check: log if the final plan lacks any structured section header.
+  if (!/^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(planResult.plan)) {
+    logger.warn("Final plan lacks structured sections, task may produce poor results", { taskId: task.id, len: planResult.plan.length });
   }
 
   if (isTaskCancelled(task.id)) return;
@@ -699,528 +700,43 @@ export async function runTask(taskId: string): Promise<void> {
 }
 
 export async function reviseTask(taskId: string, feedback: string): Promise<void> {
-  // Verify task still exists (may have been deleted while revision was queued)
-  {
-    const db = getDb();
-    if (!db.query("SELECT 1 FROM tasks WHERE id = ?").get(taskId)) {
-      logger.warn("Task deleted before revision could start, aborting", { taskId });
-      return;
-    }
-  }
-
-  const loaded = loadTaskAndRepos(taskId);
-  if (!loaded) {
-    logger.error("Task or repo not found for revision", { taskId });
-    return;
-  }
-
-  const { task, repos } = loaded;
-  const branchName = task.branch_name!;
-
-  // Build workDir map from existing clones
-  const workDirs = new Map<string, string>();
-  for (const repo of repos) {
-    workDirs.set(repo.name, worktreeDir(taskId, repo.name));
-  }
-
-  const primaryRepo = repos[0];
-  const primaryWorkDir = workDirs.get(primaryRepo.name)!;
-
-  // Start sandbox container if configured
-  let sandbox: SandboxOptions | undefined;
-  if (config.sandboxClaude) {
-    try {
-      const sandboxResult = await startSandboxContainer(task.id, taskDir(task.id));
-      if (sandboxResult) {
-        const workspaceBase = sandboxResult.workspacePath;
-        const containerWorkDir = repos.length > 1
-          ? workspaceBase
-          : `${workspaceBase}/${primaryRepo.name}`;
-        sandbox = { containerName: sandboxResult.containerName, containerWorkDir, workspaceBase };
-      }
-    } catch {}
-  }
-
-  // Restore MCP config
-  let mcpConfigPath: string | undefined;
-  try {
-    mcpConfigPath = await generateMcpConfig(
-      task.id, primaryWorkDir, primaryRepo.name,
-      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
-    );
-  } catch (err) {
-    logger.warn("Failed to generate MCP config for revision", { error: String(err) });
-  }
-
-  // Load current blueprint state
   const db = getDb();
-  const taskRow = db.query("SELECT blueprint_state FROM tasks WHERE id = ?").get(taskId) as { blueprint_state: string | null } | null;
-  if (!taskRow?.blueprint_state) {
-    logger.error("No blueprint state found for revision", { taskId });
-    updateTaskStatus(taskId, "failed");
+  if (!db.query('SELECT 1 FROM tasks WHERE id = ?').get(taskId)) {
+    logger.warn('Task deleted before revision could start, aborting', { taskId });
     return;
   }
 
-  let state: BlueprintState = JSON.parse(taskRow.blueprint_state);
+  logger.info('Revising task via child tasks', { taskId });
 
   const manager = getMessagingManager();
-  const notifyError = (msg: string) => {
-    logger.error(msg, { taskId: task.id });
-    if (manager) manager.notifyAgentOutput(task.id, `[error] ${msg}`).catch(() => {});
-  };
-
-  const onThinking = makeThinkingForwarder(task.id, manager);
-  const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
-  const { executeUnderstandReview, executeReviewSmallFeedback, executeReviewLargeFeedback } = await import("./nodes/agentic/review-feedback");
-
-  // Advance from review -> understand_review via "revise"
-  state = advanceState(state, "revise");
-
-  const previousPlanRow = db.query(
-    "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('plan', 'plan_again', 'finalize_plan', 'review_small_feedback', 'review_large_feedback') ORDER BY finished_at DESC LIMIT 1"
-  ).get(task.id) as { output: string } | null;
-  const previousPlan = previousPlanRow?.output ?? "(no previous plan found)";
-
-  // === UNDERSTAND REVIEW: triage feedback as small or large ===
-  updateTaskStatus(task.id, "planning", state);
-  logger.info("Triaging review feedback", { taskId: task.id });
-
   if (manager) {
-    manager.notifyAgentOutput(task.id, "Analyzing review feedback to determine revision scope...").catch(() => {});
+    manager.notifyAgentOutput(taskId, 'Starting revision...').catch(() => {});
   }
 
-  const triageResult = await executeUnderstandReview(
-    task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking, sandbox
-  );
+  // Find all children for this task. If none exist (legacy task), spawn them now.
+  const children = db.query(
+    'SELECT id, status FROM child_tasks WHERE parent_task_id = ?'
+  ).all(taskId) as Array<{ id: string; status: string }>;
 
-  if (triageResult.error) {
-    if (isTaskCancelled(task.id)) return;
-    logger.error("Review triage failed", { taskId: task.id, error: triageResult.error });
-    state = advanceState(state, "large"); // default to large path on error
-  } else {
-    state = advanceState(state, triageResult.verdict);
-  }
-
-  if (isTaskCancelled(task.id)) return;
-
-  const planResult = { plan: "" };
-
-  if (triageResult.verdict === "small") {
-    // === SMALL: targeted fix plan -> straight to implement ===
-    updateTaskStatus(task.id, "planning", state);
-    logger.info("Small review feedback -- planning targeted fixes", { taskId: task.id });
-
+  if (children.length === 0) {
+    logger.warn('No child tasks found for revision -- task may be from before child task architecture', { taskId });
     if (manager) {
-      manager.notifyAgentOutput(task.id, "Review feedback classified as SMALL -- planning targeted fixes (skipping full scrutiny).").catch(() => {});
+      manager.notifyAgentOutput(taskId, '[error] Cannot revise: no child tasks found. Cancel and re-submit the task.').catch(() => {});
     }
-
-    const smallResult = await executeReviewSmallFeedback(
-      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking, sandbox
-    );
-
-    if (smallResult.error || smallResult.plan.length < 50) {
-      if (isTaskCancelled(task.id)) return;
-      logger.warn("Small feedback planning failed, falling back to large path", {
-        taskId: task.id, error: smallResult.error, outputLen: smallResult.plan.length,
-      });
-      if (manager) {
-        manager.notifyAgentOutput(task.id, "Small feedback plan failed -- falling back to full revision.").catch(() => {});
-      }
-      // Fall through to the large path below
-      triageResult.verdict = "large" as typeof triageResult.verdict;
-    } else {
-      planResult.plan = smallResult.plan;
-      state = advanceState(state, "done"); // -> implement
-    }
-  }
-
-  if (triageResult.verdict === "large" && !planResult.plan) {
-    // === LARGE: revised plan -> scrutinize loop -> implement ===
-    updateTaskStatus(task.id, "planning", state);
-    logger.info("Large review feedback -- planning structural revision", { taskId: task.id });
-
-    if (manager) {
-      manager.notifyAgentOutput(task.id, "Review feedback classified as LARGE -- planning structural revision with full scrutiny.").catch(() => {});
-    }
-
-    const largeResult = await executeReviewLargeFeedback(
-      task, primaryRepo, primaryWorkDir, feedback, previousPlan, mcpConfigPath, onThinking, sandbox
-    );
-
-    if (largeResult.error || largeResult.plan.length < 200) {
-      if (isTaskCancelled(task.id)) return;
-      logger.error("Large feedback planning failed", { taskId: task.id, error: largeResult.error });
-      state = advanceState(state, "error");
-      updateTaskStatus(task.id, "error", state);
-      return;
-    }
-
-    planResult.plan = largeResult.plan;
-    state = advanceState(state, "done"); // -> scrutinize
-
-    if (isTaskCancelled(task.id)) return;
-
-    // --- Scrutinize loop (same as runTask) ---
-    updateTaskStatus(task.id, "scrutinizing", state);
-
-    const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox);
-
-    if (!scrutiny1.error) {
-      if (isTaskCancelled(task.id)) return;
-      state = advanceState(state, "done");
-      updateTaskStatus(task.id, "replanning", state);
-
-      const planAgainResult = await executePlanAgain(
-        task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking, sandbox
-      );
-
-      if (!planAgainResult.error) {
-        if (isTaskCancelled(task.id)) return;
-        state = advanceState(state, "done");
-        updateTaskStatus(task.id, "scrutinizing", state);
-
-        const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking, sandbox);
-
-        if (!scrutiny2.error) {
-          if (isTaskCancelled(task.id)) return;
-          state = advanceState(state, "done");
-          updateTaskStatus(task.id, "finalizing_plan", state);
-
-          const finalPlan = await executeFinalizePlan(
-            task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking, sandbox
-          );
-
-          planResult.plan = (!finalPlan.error && finalPlan.plan.length > 200) ? finalPlan.plan : planAgainResult.plan;
-          state = advanceState(state, "done");
-        } else {
-          planResult.plan = planAgainResult.plan;
-          state = advanceState(state, "error");
-        }
-      } else {
-        state = advanceState(state, "error");
-      }
-    } else {
-      state = advanceState(state, "error");
-    }
-  }
-
-  if (isTaskCancelled(task.id)) return;
-
-  // === IMPLEMENT (once, across all repos) ===
-  updateTaskStatus(task.id, "implementing", state);
-  logger.info("Starting revision implement phase", { taskId: task.id, repoCount: repos.length });
-
-  const implWorkDir = repos.length > 1 ? taskDir(task.id) : workDirs.get(repos[0].name)!;
-
-  const implResult = await executeImplement(
-    task, repos, implWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox
-  );
-
-  if (implResult.error) {
-    if (isTaskCancelled(task.id)) return;
-    logger.error("Revision implementation failed", { taskId: task.id, error: implResult.error });
-    state = advanceState(state, "error");
-    updateTaskStatus(task.id, "error", state);
+    updateTaskStatus(taskId, 'error');
     return;
   }
 
-  if (isTaskCancelled(task.id)) return;
+  updateTaskStatus(taskId, 'waiting_for_children');
 
-  // === PER-REPO: CI -> LINT ===
-  state = advanceState(state, "done");
+  // Revise each child task in parallel. Children handle their own triage,
+  // implementation, CI/lint, and re-push.
+  const { reviseChildTask, checkParentCompletion } = await import('./child-task-runner');
 
-  for (const repo of repos) {
-    const workDir = workDirs.get(repo.name)!;
+  await Promise.allSettled(
+    children.map((c) => reviseChildTask(c.id, feedback))
+  );
 
-    let containerName: string | null = sandbox?.containerName ?? null;
-    let containerWorkDir = sandbox ? `${sandbox.workspaceBase}/${repo.name}` : "/workspace";
-
-    if (!containerName) {
-      try {
-        containerName = await setupTaskContainer(repo, workDir, task.id, taskDir(task.id));
-      } catch (err) {
-        logger.error({ err, taskId: task.id }, "failed to set up task container");
-        containerName = null;
-      }
-      containerWorkDir = (containerName && isSandboxContainer(containerName))
-        ? `/workspace/${repo.name}`
-        : "/workspace";
-    }
-
-    let repoMcpConfigPath: string | undefined;
-    try {
-      repoMcpConfigPath = await generateMcpConfig(
-        task.id, workDir, repo.name,
-        sandbox ? { sandboxed: true, containerWorkDir } : undefined
-      );
-    } catch {}
-
-    // --- CI ---
-    if (repo.test_cmd || repo.build_cmd) {
-      if (!repo.test_cmd && repo.build_cmd) {
-        const notice = `[NOTICE] No test command for ${repo.name} -- using build command as CI check: ${repo.build_cmd}`;
-        if (manager) manager.notifyAgentOutput(task.id, notice).catch(() => {});
-      }
-      if (!containerName && !repo.ci_on_host) {
-        const msg = `[SKIPPED] CI for ${repo.name}: no Docker container available and ci_on_host is not enabled.`;
-        logger.warn(msg, { taskId: task.id, repo: repo.name });
-        saveNodeOutput(task.id, "ci", msg, false);
-        if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
-      } else {
-        updateTaskStatus(task.id, "ci_running", state);
-
-        for (let round = 0; round < MAX_CI_ROUNDS; round++) {
-          const ciResult = await runCi(repo, workDir, containerName ?? undefined, containerWorkDir, (accumulated) => {
-            saveNodeOutput(task.id, "ci", accumulated, false);
-          });
-          saveNodeOutput(task.id, "ci", ciResult.output, ciResult.success);
-
-          if (ciResult.success) break;
-          if (containerName) discoverSecrets(repo.id, ciResult.output);
-          if (round >= MAX_CI_ROUNDS - 1) break;
-          if (isTaskCancelled(task.id)) return;
-
-          state = advanceState(state, "fail");
-          updateTaskStatus(task.id, "ci_fixing", state);
-
-          const fixResult = await executeFixCi(task, repo, workDir, ciResult.output, repoMcpConfigPath, undefined, sandbox);
-          if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
-
-          state = advanceState(state, "done");
-          state.ci_rounds++;
-          updateTaskStatus(task.id, "ci_running", state);
-        }
-      }
-    }
-
-    if (isTaskCancelled(task.id)) return;
-
-    // --- Lint ---
-    if (repo.lint_cmd) {
-      if (!containerName && !repo.ci_on_host) {
-        const msg = `[SKIPPED] Lint for ${repo.name}: no Docker container available and ci_on_host is not enabled.`;
-        logger.warn(msg, { taskId: task.id, repo: repo.name });
-        saveNodeOutput(task.id, "lint", msg, false);
-        if (manager) manager.notifyAgentOutput(task.id, msg).catch(() => {});
-      } else {
-        updateTaskStatus(task.id, "linting", state);
-
-        for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
-          const lintResult = await executeLint(repo, workDir, containerName ?? undefined, containerWorkDir, (accumulated) => {
-            saveNodeOutput(task.id, "lint", accumulated, false);
-          });
-          saveNodeOutput(task.id, "lint", lintResult.output, lintResult.success);
-
-          if (lintResult.success) break;
-          if (containerName) discoverSecrets(repo.id, lintResult.output);
-          if (round >= MAX_LINT_ROUNDS) break;
-          if (isTaskCancelled(task.id)) return;
-
-          state = advanceState(state, "errors");
-          updateTaskStatus(task.id, "fix_linting", state);
-
-          const fixResult = await executeFixLint(task, repo, workDir, lintResult.output, lintResult.command, repoMcpConfigPath, undefined, sandbox);
-          if (fixResult.error) { if (isTaskCancelled(task.id)) return; break; }
-
-          state = advanceState(state, "done");
-          state.lint_rounds++;
-          updateTaskStatus(task.id, "linting", state);
-        }
-      }
-    }
-
-    if (containerName && !sandbox) {
-      try { await teardownTaskContainer(task.id); } catch {}
-    }
-  }
-
-  if (isTaskCancelled(task.id)) return;
-
-  // Tear down sandbox container
-  if (sandbox) {
-    try { await teardownTaskContainer(task.id); } catch {}
-  }
-
-  // === REVIEW: COMMIT + PUSH PER REPO ===
-  logger.info("Revision ready for review", { taskId: task.id });
-
-  for (const repo of repos) {
-    const workDir = workDirs.get(repo.name)!;
-
-    // Commit
-    try {
-      await $`git -C ${workDir} add -A`.quiet();
-      const hasChanges = await $`git -C ${workDir} diff --cached --quiet`.quiet().nothrow();
-      if (hasChanges.exitCode !== 0) {
-        await $`git -C ${workDir} commit -m ${`hoto: revision for ${task.title}`}`.quiet();
-        logger.info("Committed revision changes", { taskId: task.id, repo: repo.name });
-      } else {
-        logger.warn("No revision changes to commit", { taskId: task.id, repo: repo.name, workDir });
-        continue;
-      }
-    } catch (err) {
-      notifyError(`Failed to commit revision for ${repo.name}: ${err}`);
-      continue;
-    }
-
-    // Push (force, since we're updating existing PRs)
-    if (isGiteaConfigured()) {
-      try {
-        await pushBranchToGitea(workDir, repo.path, repo.name, branchName, true);
-        logger.info("Pushed revision", { taskId: task.id, repo: repo.name });
-      } catch (err) {
-        notifyError(`Gitea push after revision failed for ${repo.name}: ${err}`);
-      }
-
-      const db = getDb();
-      const prRow = db.query(
-        "SELECT pr_number FROM task_prs WHERE task_id = ? AND repo_id = ?"
-      ).get(task.id, repo.id) as { pr_number: number } | null;
-      const prNumber = prRow?.pr_number ?? (
-        db.query("SELECT gitea_pr_number FROM tasks WHERE id = ?").get(task.id) as { gitea_pr_number: number | null } | null
-      )?.gitea_pr_number ?? null;
-
-      if (prNumber) {
-        try {
-          const planRow = db.query(
-            "SELECT output FROM agent_runs WHERE task_id = ? AND node_name IN ('finalize-plan', 'plan') ORDER BY finished_at DESC LIMIT 1"
-          ).get(task.id) as { output: string } | null;
-          const planOutput = planRow?.output ?? "";
-
-          let diffStat = "";
-          try {
-            const diffResult = await $`git -C ${workDir} diff --stat HEAD`.quiet().nothrow();
-            diffStat = diffResult.stdout.toString().trim();
-          } catch (diffErr) {
-            logger.warn("Failed to get diff stat for PR update", { taskId: task.id, error: String(diffErr) });
-          }
-
-          const prMetadata = generatePrMetadata(task, planOutput, diffStat, null, null, null, null);
-          await updatePullRequest(repo.name, prNumber, prMetadata.title, prMetadata.body);
-          logger.info("Updated Gitea PR title and body after revision", { taskId: task.id, repo: repo.name, prNumber });
-        } catch (err) {
-          notifyError(`Failed to update PR title/body after revision for ${repo.name}: ${err}`);
-        }
-      }
-    }
-  }
-
-  // Set review status
-  updateTaskStatus(task.id, "review", state);
-
-  // Announce in main channel
-  if (manager) {
-    manager.notifyReviewReady(task).catch(() => {});
-  }
-
-  // Index chat history
-  indexTaskChatHistory(task.id).catch((err) => {
-    logger.warn("Failed to index chat history", { taskId: task.id, error: String(err) });
-  });
+  checkParentCompletion(taskId);
 }
 
-/**
- * Detect the install command for a repo based on lockfiles/manifests.
- * Returns null if no install is needed or can't be determined.
- */
-function detectInstallCmd(workDir: string): string | null {
-  if (existsSync(join(workDir, "bun.lockb")) || existsSync(join(workDir, "bunfig.toml"))) {
-    return "bun install --frozen-lockfile";
-  }
-  if (existsSync(join(workDir, "package-lock.json"))) {
-    return "npm ci";
-  }
-  if (existsSync(join(workDir, "yarn.lock"))) {
-    return "yarn install --frozen-lockfile";
-  }
-  if (existsSync(join(workDir, "pnpm-lock.yaml"))) {
-    return "pnpm install --frozen-lockfile";
-  }
-  if (existsSync(join(workDir, "package.json"))) {
-    return "npm install";
-  }
-  if (existsSync(join(workDir, "requirements.txt"))) {
-    return "pip install -r requirements.txt";
-  }
-  if (existsSync(join(workDir, "pyproject.toml"))) {
-    return "pip install -e .";
-  }
-  if (existsSync(join(workDir, "go.mod"))) {
-    return "go mod download";
-  }
-  return null;
-}
-
-async function runCi(
-  repo: Repo,
-  workDir: string,
-  containerName?: string,
-  containerWorkDir: string = "/workspace",
-  onChunk?: (accumulated: string) => void
-): Promise<{ success: boolean; output: string }> {
-  const commands: string[] = [];
-
-  // When running in a container, install dependencies first
-  if (containerName) {
-    const installCmd = detectInstallCmd(workDir);
-    if (installCmd) {
-      commands.push(installCmd);
-    }
-  }
-
-  if (repo.build_cmd) commands.push(repo.build_cmd);
-  if (repo.test_cmd) commands.push(repo.test_cmd);
-
-  let allOutput = "";
-
-  const emit = (text: string) => {
-    allOutput += text;
-    onChunk?.(allOutput);
-  };
-
-  if (!repo.test_cmd && repo.build_cmd) {
-    const notice = `[NOTICE] No test command detected for ${repo.name}. Using build command as CI check: ${repo.build_cmd}\n`;
-    logger.warn(notice, { repo: repo.name, build_cmd: repo.build_cmd });
-    emit(notice);
-  }
-
-  const decoder = new TextDecoder();
-
-  for (const cmd of commands) {
-    logger.info("Running CI command", { cmd, containerName });
-    emit(`\n$ ${cmd}\n`);
-
-    try {
-      const argv = containerName
-        ? ["docker", "exec", "-w", containerWorkDir, containerName, "sh", "-c", cmd]
-        : ["sh", "-c", cmd];
-
-      const proc = Bun.spawn(argv, {
-        cwd: containerName ? undefined : workDir,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-
-      const readStream = async (stream: ReadableStream<Uint8Array>) => {
-        const reader = stream.getReader();
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          emit(decoder.decode(value, { stream: true }));
-        }
-      };
-
-      await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
-      await proc.exited;
-
-      if (proc.exitCode !== 0) {
-        return { success: false, output: allOutput };
-      }
-    } catch (err) {
-      emit(`Error: ${err}`);
-      return { success: false, output: allOutput };
-    }
-  }
-
-  return { success: true, output: allOutput };
-}

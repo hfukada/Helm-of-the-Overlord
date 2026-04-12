@@ -335,43 +335,48 @@ export async function runChildTask(childId: string): Promise<void> {
     return;
   }
 
-  if (isGiteaConfigured()) {
-    try {
-      await ensureRepoOnGitea(repo.path, repo.name);
-      const { getDefaultBranch } = await import("../workspace/git");
-      const baseBranch = await getDefaultBranch(repo.path);
-      await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
+  if (!isGiteaConfigured()) {
+    logger.info("Gitea not configured, marking child committed without PR", { childId, repo: repo.name });
+    notifyParent(parentTaskId, repo.name, "Committed locally (no Gitea configured).");
+    updateChildStatus(childId, "committed", state);
+    checkParentCompletion(parentTaskId);
+    return;
+  }
 
-      const pr = await createPullRequest(
-        repo.name, branchName, baseBranch,
-        `hoto: ${parentRow.title}`,
-        `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt.slice(0, 2000)}`
-      );
+  try {
+    await ensureRepoOnGitea(repo.path, repo.name);
+    const { getDefaultBranch } = await import("../workspace/git");
+    const baseBranch = await getDefaultBranch(repo.path);
+    await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
 
-      const prUrl = rewriteGiteaUrl(pr.html_url);
+    const pr = await createPullRequest(
+      repo.name, branchName, baseBranch,
+      `hoto: ${parentRow.title}`,
+      `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt.slice(0, 2000)}`
+    );
 
-      db.run("UPDATE child_tasks SET pr_number = ?, pr_url = ? WHERE id = ?", [pr.number, prUrl, childId]);
+    const prUrl = rewriteGiteaUrl(pr.html_url);
 
-      // Insert into task_prs so the review poller gets a real repo_id and messaging
-      // manager can find the PR URL for ready-for-review notifications.
-      db.run(
-        "INSERT OR REPLACE INTO task_prs (task_id, repo_id, pr_number, pr_url) VALUES (?, ?, ?, ?)",
-        [parentTaskId, repo.id, pr.number, prUrl]
-      );
+    db.run("UPDATE child_tasks SET pr_number = ?, pr_url = ? WHERE id = ?", [pr.number, prUrl, childId]);
 
-      logger.info("Child task PR created", { childId, repo: repo.name, prNumber: pr.number, url: prUrl });
-      notifyParent(parentTaskId, repo.name, `PR created: ${prUrl}`);
+    // Insert into task_prs so the review poller gets a real repo_id and messaging
+    // manager can find the PR URL for ready-for-review notifications.
+    db.run(
+      "INSERT OR REPLACE INTO task_prs (task_id, repo_id, pr_number, pr_url) VALUES (?, ?, ?, ?)",
+      [parentTaskId, repo.id, pr.number, prUrl]
+    );
 
-      // Start review poller (uses parent task ID for channel notifications)
-      await seedCursors(parentTaskId, repo.name, pr.number);
-      startReviewPoller(parentTaskId, repo.name, repo.path, branchName, pr.number);
+    logger.info("Child task PR created", { childId, repo: repo.name, prNumber: pr.number, url: prUrl });
+    notifyParent(parentTaskId, repo.name, `PR created: ${prUrl}`);
 
-    } catch (err) {
-      logger.error("Child task push/PR failed", { childId, repo: repo.name, error: String(err) });
-      notifyParent(parentTaskId, repo.name, `Push/PR failed: ${err}`);
-      updateChildStatus(childId, "error", state);
-      return;
-    }
+    // Start review poller (uses parent task ID for channel notifications)
+    await seedCursors(parentTaskId, repo.name, pr.number);
+    startReviewPoller(parentTaskId, repo.name, repo.path, branchName, pr.number);
+  } catch (err) {
+    logger.error("Child task push/PR failed", { childId, repo: repo.name, error: String(err) });
+    notifyParent(parentTaskId, repo.name, `Push/PR failed: ${err}`);
+    updateChildStatus(childId, "error", state);
+    return;
   }
 
   // Set review status
