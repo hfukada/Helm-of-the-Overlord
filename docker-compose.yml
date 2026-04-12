@@ -18,7 +18,6 @@ services:
       HOTO_WORKSPACE: /data
       CHROMA_URL: http://chromadb:8000
       MATRIX_HOMESERVER_URL: http://synapse:8008
-      GITEA_URL: http://moxy:3777
       OLLAMA_HOST: http://ollama:11434
       HOTO_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-helm-of-the-overlord}_hoto-data
       HOTO_GIT_COMMIT: ${GIT_COMMIT:-}

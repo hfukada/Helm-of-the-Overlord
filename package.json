@@ -22,7 +22,9 @@
     "hono": "^4.7.0",
     "matrix-js-sdk": "^34.0.0",
     "ollama": "^0.6.3",
-    "ulid": "^2.3.0"
+    "tree-sitter-wasms": "^0.1.13",
+    "ulid": "^2.3.0",
+    "web-tree-sitter": "^0.25.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.8",

@@ -13,6 +13,13 @@ You are a planning agent. Produce an implementation plan for the task below.
 
 {{knowledgeContext}}
 {{/if}}
+{{#if repoMapContext}}
+
+## Code Structure
+The following is a structural overview of key symbols in each repository, ranked by importance. Format: `filepath: [+]kind name(line)` where `+` means exported.
+
+{{repoMapContext}}
+{{/if}}
 
 ## Instructions
 1. Read at most 2-3 key files to understand integration points.

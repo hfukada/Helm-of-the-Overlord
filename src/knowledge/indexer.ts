@@ -16,7 +16,8 @@ type ChunkType =
   | "config"
   | "changelog"
   | "chat_history"
-  | "repo_commands";
+  | "repo_commands"
+  | "code_symbols";
 
 interface Chunk {
   source_file: string;
@@ -304,6 +305,25 @@ export async function indexRepo(repo: Repo, opts?: { force?: boolean }): Promise
     }
   } catch (err) {
     logger.warn("Failed to list git files", { error: String(err) });
+  }
+
+  // Generate tree-sitter code structure map
+  try {
+    const { buildRepoMap } = await import("../treesitter/repo-map");
+    const repoMap = await buildRepoMap({ repoPath, maxTokens: 4000 });
+    if (repoMap) {
+      // Remove stale code_symbols chunks
+      db.run("DELETE FROM knowledge_chunks WHERE repo_id = ? AND chunk_type = 'code_symbols'", [repo.id]);
+      chunks.push({
+        source_file: "_code_symbols",
+        chunk_type: "code_symbols",
+        title: `${repo.name} - Code Structure Map`,
+        content: repoMap,
+        metadata: {},
+      });
+    }
+  } catch (err) {
+    logger.warn("Tree-sitter repo map generation failed", { repo: repo.name, error: String(err) });
   }
 
   // Detect test/lint/build commands from documentation if missing

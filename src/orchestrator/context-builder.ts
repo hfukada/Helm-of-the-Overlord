@@ -2,6 +2,7 @@ import type { Repo, Task } from "../shared/types";
 import { search, } from "../knowledge/search";
 import { logger } from "../shared/logger";
 import { renderTemplate } from "../prompts/loader";
+import { buildRepoMap } from "../treesitter/repo-map";
 
 async function getKnowledgeContext(
   query: string,
@@ -152,10 +153,25 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
     logger.warn("Cross-repo knowledge search failed", { error: String(err) });
   }
 
+  // Generate tree-sitter repo maps for all repos (lower budget per repo)
+  const mapSections: string[] = [];
+  for (const repo of repos) {
+    try {
+      const map = await buildRepoMap({ repoPath: repo.path, maxTokens: 1000 });
+      if (map) {
+        mapSections.push(`### [${repo.name}] Code Structure\n${map}`);
+      }
+    } catch (err) {
+      logger.warn("Repo map generation failed for pre-plan", { repo: repo.name, error: String(err) });
+    }
+  }
+  const repoMapContext = mapSections.length > 0 ? mapSections.join("\n\n") : "";
+
   return renderTemplate("pre-plan", {
     repoList,
     relationshipContext: relationshipContext || undefined,
     knowledgeContext: knowledgeContext || undefined,
+    repoMapContext: repoMapContext || undefined,
     taskTitle: task.title,
     taskDescription: task.description,
   });
@@ -204,11 +220,26 @@ export async function buildPlanPrompt(task: Task, repos: Repo | Repo[]): Promise
     ? [...new Set(relSections)].join("\n")
     : "";
 
+  // Generate tree-sitter repo maps
+  const mapSections: string[] = [];
+  for (const repo of reposArray) {
+    try {
+      const map = await buildRepoMap({ repoPath: repo.path, maxTokens: 2000 });
+      if (map) {
+        mapSections.push(`### [${repo.name}] Code Structure\n${map}`);
+      }
+    } catch (err) {
+      logger.warn("Repo map generation failed for plan", { repo: repo.name, error: String(err) });
+    }
+  }
+  const repoMapContext = mapSections.length > 0 ? mapSections.join("\n\n") : "";
+
   return renderTemplate("plan", {
     repoList,
     taskDescription: task.description,
     knowledgeContext: knowledgeContext || undefined,
     relationshipContext: relationshipContext || undefined,
+    repoMapContext: repoMapContext || undefined,
   });
 }
 

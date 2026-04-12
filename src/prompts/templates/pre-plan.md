@@ -10,6 +10,13 @@ You are a scoping agent. Your job is to determine which repositories need change
 
 {{knowledgeContext}}
 {{/if}}
+{{#if repoMapContext}}
+
+## Code Structure
+Structural overview of key symbols per repository. Format: `filepath: [+]kind name(line)` where `+` means exported.
+
+{{repoMapContext}}
+{{/if}}
 
 ## Task
 Title: {{taskTitle}}
