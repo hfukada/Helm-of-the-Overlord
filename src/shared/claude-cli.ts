@@ -113,15 +113,10 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
   // (Read, Write, Edit, Bash, MCP, etc.) which are auto-approved in --print mode.
   // We block git write operations globally here.
   args.push(
-    "--disallowedTools", "Bash(git commit:*)",
     "--disallowedTools", "Bash(git push:*)",
-    "--disallowedTools", "Bash(git reset:*)",
-    "--disallowedTools", "Bash(git checkout:*)",
-    "--disallowedTools", "Bash(git rebase:*)",
-    "--disallowedTools", "Bash(git merge:*)",
-    "--disallowedTools", "Bash(git stash:*)",
-    "--disallowedTools", "Bash(git clean:*)",
-    "--disallowedTools", "Bash(git restore:*)",
+    "--disallowedTools", "Bash(git remote add:*)",
+    "--disallowedTools", "Bash(git remote set-url:*)",
+    "--disallowedTools", "Bash(git remote remove:*)",
   );
 
   // Session management for turn-loop mode
