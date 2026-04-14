@@ -181,6 +181,12 @@ export async function runClaudeTurnLoop(opts: TurnLoopSubprocessOptions): Promis
     }
   }
 
+  // Wrap onEvent to persist every stream event to the DB (feeds hoto-ui)
+  const wrappedOnEvent = (eventType: StreamEventType, content: string) => {
+    storeStreamEvent(opts.agentRunId, eventType, content);
+    opts.onEvent?.(eventType, content);
+  };
+
   const turnLoopResult = await runTurnLoop({
     prompt: opts.prompt,
     systemPrompt: opts.systemPrompt,
@@ -192,7 +198,7 @@ export async function runClaudeTurnLoop(opts: TurnLoopSubprocessOptions): Promis
     addDirs: opts.addDirs,
     agentRunId: opts.agentRunId,
     taskId: opts.taskId,
-    onEvent: opts.onEvent,
+    onEvent: wrappedOnEvent,
     containerName: opts.containerName,
     containerWorkDir: opts.containerWorkDir,
     onTurnComplete: opts.onTurnComplete,
