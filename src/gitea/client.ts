@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { config } from "../shared/config";
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
+import { parseBranchOutput } from "../workspace/git";
 
 const ADMIN_TOKEN_FILE = "/gitea-data/gitea/hoto-admin-token";
 
@@ -278,17 +279,41 @@ export async function mirrorRepoToGitea(repoPath: string, repoName: string): Pro
 
   const giteaUrl = getGiteaRemoteUrl(repoName);
 
-  const defaultBranchResult = await $`git -C ${repoPath} symbolic-ref --short HEAD`.nothrow().quiet();
-  if (defaultBranchResult.exitCode !== 0) {
-    throw new Error(`Failed to get default branch: ${defaultBranchResult.stderr.toString().trim()}`);
+  // 1. Add gitea remote
+  const addGiteaResult = await $`git -C ${repoPath} remote add gitea ${giteaUrl}`.nothrow().quiet();
+  if (addGiteaResult.exitCode !== 0) {
+    throw new Error(`Failed to add gitea remote: ${addGiteaResult.stderr.toString().trim()}`);
   }
-  const defaultBranch = defaultBranchResult.stdout.toString().trim();
 
-  const pushResult = await $`git -C ${repoPath} push ${giteaUrl} ${defaultBranch}:refs/heads/${defaultBranch}`.nothrow().quiet();
+  // 2. Detect default branch from the cloned tracking branch
+  const branchResult = await $`git -C ${repoPath} branch`.nothrow().quiet();
+  if (branchResult.exitCode !== 0) {
+    throw new Error(`Failed to list branches: ${branchResult.stderr.toString().trim()}`);
+  }
+  const defaultBranch = parseBranchOutput(branchResult.stdout.toString());
+  if (!defaultBranch) {
+    throw new Error("Failed to detect default branch: no checked-out branch found");
+  }
+
+  // 3. Remove origin
+  const removeResult = await $`git -C ${repoPath} remote remove origin`.nothrow().quiet();
+  if (removeResult.exitCode !== 0) {
+    throw new Error(`Failed to remove origin remote: ${removeResult.stderr.toString().trim()}`);
+  }
+
+  // 4. Push to gitea with upstream tracking
+  const pushResult = await $`git -C ${repoPath} push gitea -u ${defaultBranch}`.nothrow().quiet();
   if (pushResult.exitCode !== 0) {
     throw new Error(`Failed to push to Gitea: ${pushResult.stderr.toString().trim()}`);
   }
 
+  // 5. Rename gitea -> origin so createTaskClone can read the origin URL for subsequent clones
+  const renameResult = await $`git -C ${repoPath} remote rename gitea origin`.nothrow().quiet();
+  if (renameResult.exitCode !== 0) {
+    throw new Error(`Failed to rename gitea remote to origin: ${renameResult.stderr.toString().trim()}`);
+  }
+
+  // 6. Tell Gitea which branch is default (needed for PR targeting)
   const org = config.giteaOrg;
   const patchRes = await giteaFetch(`/api/v1/repos/${org}/${repoName}`, {
     method: "PATCH",
@@ -297,21 +322,6 @@ export async function mirrorRepoToGitea(repoPath: string, repoName: string): Pro
   });
   if (!patchRes.ok) {
     throw new Error(`Failed to set default branch on Gitea: ${patchRes.status} ${await patchRes.text()}`);
-  }
-
-  const removeResult = await $`git -C ${repoPath} remote remove origin`.nothrow().quiet();
-  if (removeResult.exitCode !== 0) {
-    throw new Error(`Failed to remove origin remote: ${removeResult.stderr.toString().trim()}`);
-  }
-
-  const addResult = await $`git -C ${repoPath} remote add origin ${giteaUrl}`.nothrow().quiet();
-  if (addResult.exitCode !== 0) {
-    throw new Error(`Failed to add Gitea remote: ${addResult.stderr.toString().trim()}`);
-  }
-
-  const upstreamResult = await $`git -C ${repoPath} branch --set-upstream-to=origin/${defaultBranch} ${defaultBranch}`.nothrow().quiet();
-  if (upstreamResult.exitCode !== 0) {
-    throw new Error(`Failed to set upstream tracking: ${upstreamResult.stderr.toString().trim()}`);
   }
 }
 

@@ -151,14 +151,22 @@ export async function commitAndPush(
   await $`git -C ${workDir} push origin ${branchName}`.quiet();
 }
 
-export async function getDefaultBranch(repoPath: string): Promise<string> {
-  try {
-    const result =
-      await $`git -C ${repoPath} symbolic-ref refs/remotes/origin/HEAD`.text();
-    return result.trim().replace("refs/remotes/origin/", "");
-  } catch {
-    return "main";
+export function parseBranchOutput(stdout: string): string | null {
+  for (const line of stdout.split("\n")) {
+    if (line.startsWith("* ")) {
+      return line.slice(2).trim();
+    }
   }
+  return null;
+}
+
+export async function getDefaultBranch(repoPath: string): Promise<string> {
+  const result = await $`git -C ${repoPath} branch`.nothrow().quiet();
+  if (result.exitCode === 0) {
+    const branch = parseBranchOutput(result.stdout.toString());
+    if (branch) return branch;
+  }
+  return "main";
 }
 
 export async function addRemote(repoPath: string, name: string, url: string): Promise<void> {
