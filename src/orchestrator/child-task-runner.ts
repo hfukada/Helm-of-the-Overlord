@@ -383,6 +383,11 @@ export async function runChildTask(childId: string): Promise<void> {
     logger.info("Child task PR created", { childId, repo: repo.name, prNumber: pr.number, url: prUrl });
     notifyParent(parentTaskId, repo.name, `PR created: ${prUrl}`);
 
+    const messagingManager = getMessagingManager();
+    if (messagingManager) {
+      await messagingManager.notifyPRCreated(parentTaskId, repo.name, prUrl, parentRow.title);
+    }
+
     // Start review poller (uses parent task ID for channel notifications)
     await seedCursors(parentTaskId, repo.name, pr.number);
     startReviewPoller(parentTaskId, repo.name, repo.path, branchName, pr.number);

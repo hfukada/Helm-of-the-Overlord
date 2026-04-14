@@ -459,6 +459,20 @@ export class MessagingManager {
     }
   }
 
+  async notifyPRCreated(taskId: string, repoName: string, prUrl: string, taskTitle: string): Promise<void> {
+    const msg = `PR created for "${taskTitle}" [${repoName}]: ${prUrl}`;
+    for (const [providerName, p] of this.providers) {
+      const mainChannelId = this.mainChannelIds.get(providerName);
+      if (mainChannelId) {
+        try {
+          await p.sendMessage(mainChannelId, msg);
+        } catch (err) {
+          logger.warn('notifyPRCreated failed', { provider: providerName, err });
+        }
+      }
+    }
+  }
+
   async notifyIndexingComplete(
     repoName: string,
     chunks: number,
