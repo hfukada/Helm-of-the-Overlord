@@ -28,6 +28,7 @@ import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { ClaudeCodeCliAgent } from "../agent";
+import { makeAgentOutputForwarder } from "./task-runner";
 
 const MAX_LINT_ROUNDS = 2;
 const MAX_CI_ROUNDS = 2;
@@ -179,6 +180,7 @@ export async function runChildTask(childId: string): Promise<void> {
     mcpConfigPath,
   });
   const hasMcp = !!mcpConfigPath;
+  const onEvent = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
 
   // Build the implement prompt. The plan_excerpt already contains:
   // - The shared Summary and Cross-Repo Context (from the parent's finalize-plan)
@@ -210,6 +212,7 @@ export async function runChildTask(childId: string): Promise<void> {
     implementPrompt,
     agent,
     {
+      onEvent,
       hasMcp,
       effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
     },
@@ -270,7 +273,7 @@ export async function runChildTask(childId: string): Promise<void> {
 
         const fixResult = await executeFixCi(
           { ...taskObj, status: "ci_fixing" as const },
-          repo, workDir, ciResult.output, agent, { hasMcp }
+          repo, workDir, ciResult.output, agent, { onEvent, hasMcp }
         );
         if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
 
@@ -306,7 +309,7 @@ export async function runChildTask(childId: string): Promise<void> {
 
         const fixResult = await executeFixLint(
           { ...taskObj, status: "fix_linting" as const },
-          repo, workDir, lintResult.output, lintResult.command, agent, { hasMcp }
+          repo, workDir, lintResult.output, lintResult.command, agent, { onEvent, hasMcp }
         );
         if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
 
@@ -531,6 +534,7 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
     mcpConfigPath,
   });
   const hasMcp = !!mcpConfigPath;
+  const onEvent = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
 
   // Triage + plan fix
   const { executeUnderstandReview, executeReviewSmallFeedback, executeReviewLargeFeedback } = await import("./nodes/agentic/review-feedback");
@@ -566,6 +570,7 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
   const implResult = await executeImplement(
     taskProxy, [repo], workDir, fixPlan, agent,
     {
+      onEvent,
       hasMcp,
       effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
     },

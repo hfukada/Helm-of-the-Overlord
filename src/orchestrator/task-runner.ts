@@ -16,6 +16,7 @@ import { teardownTaskContainer, startSandboxContainer } from "../workspace/docke
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { getMessagingManager } from "../messaging/manager";
 import { ClaudeCodeCliAgent, type AgentEvent } from "../agent";
+import { StreamFormatter } from "../cli/stream-formatter";
 
 const _MAX_LINT_ROUNDS = 2;
 const _MAX_CI_ROUNDS = 2;
@@ -25,43 +26,55 @@ const INPUT_POLL_INTERVAL_MS = 2000;
 import type { MessagingManager } from "../messaging/manager";
 
 /**
- * Create an onEvent callback that buffers text/thinking deltas and
- * flushes them to the task chat periodically (avoids flooding with per-token messages).
+ * Create an onEvent callback that routes agent stream events to a messaging
+ * channel as clean, batched messages.
+ *
+ * - tool_call  -> one message per tool call (e.g. "Read: file_path="/data/..."")
+ * - text       -> debounce-batched into single messages (2s window)
+ * - thinking   -> skipped (too verbose for chat)
+ * - tool_result -> skipped (can be large)
+ *
+ * @param notify  Called with each outbound message string.
  */
-function makeThinkingForwarder(
-  taskId: string,
-  manager: MessagingManager | null
+export function makeAgentOutputForwarder(
+  notify: (msg: string) => void
 ): (event: AgentEvent) => void {
-  if (!manager) return () => {};
-
-  let buffer = "";
-  let flushTimer: ReturnType<typeof setTimeout> | null = null;
   const FLUSH_INTERVAL_MS = 2000;
+  let textBuffer = "";
+  let textTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const flush = () => {
-    if (buffer.trim()) {
-      const msg = buffer;
-      buffer = "";
-      manager.notifyAgentOutput(taskId, msg).catch(() => {});
+  const flushText = () => {
+    if (textBuffer.trim()) {
+      notify(textBuffer);
+      textBuffer = "";
     }
-    flushTimer = null;
+    textTimer = null;
   };
 
-  return (event) => {
-    if (event.type === "thinking" || event.type === "text") {
-      if (!event.content) return;
-      buffer += event.content;
-      if (!flushTimer) {
-        flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
+  const formatter = new StreamFormatter(false, (output) => {
+    if (output.type === "tool") {
+      // Flush any pending text first so messages arrive in order
+      if (textTimer) { clearTimeout(textTimer); textTimer = null; }
+      flushText();
+      notify(output.content);
+    } else if (output.type === "text") {
+      // StreamFormatter emits text immediately; outer wrapper owns debounce
+      textBuffer += output.content;
+      if (!textTimer) {
+        textTimer = setTimeout(flushText, FLUSH_INTERVAL_MS);
       }
-    } else if (event.type === "tool_call" || event.type === "tool_result") {
-      // Flush on tool boundaries so the user sees reasoning before a tool call
-      if (flushTimer) {
-        clearTimeout(flushTimer);
-        flushTimer = null;
-      }
-      flush();
     }
+    // type === "thinking" and type === "result" (tool_result) are silently dropped
+  });
+
+  return (event: AgentEvent) => {
+    if (event.type === "tool_call") {
+      formatter.push("tool_use", `Tool: ${event.toolName}\n${JSON.stringify(event.args ?? {})}`);
+      formatter.flush();
+    } else if (event.type === "text") {
+      if (event.content) formatter.push("text", event.content);
+    }
+    // "thinking" and "tool_result" are intentionally skipped
   };
 }
 
@@ -540,7 +553,9 @@ export async function runTask(taskId: string): Promise<void> {
   if (isTaskCancelled(task.id)) return;
 
   // === PLAN -> SCRUTINIZE -> PLAN AGAIN -> SCRUTINIZE -> FINALIZE ===
-  const onThinking = makeThinkingForwarder(task.id, manager);
+  const onThinking = manager
+    ? makeAgentOutputForwarder((msg) => manager.notifyAgentOutput(task.id, msg).catch(() => {}))
+    : () => {};
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
 
   const { buildPlanPrompt } = await import("./context-builder");
