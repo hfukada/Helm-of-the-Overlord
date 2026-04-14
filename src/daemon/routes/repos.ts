@@ -63,6 +63,7 @@ repos.post("/", async (c) => {
 
     try {
       await $`mkdir -p ${reposDir}`.quiet();
+      await $`rm -rf ${repoPath}`.quiet();
       const cloneUrl = embedGiteaCredentials(body.url);
       logger.info("Cloning repo", { url: body.url, dest: repoPath });
       const result = await $`git clone ${cloneUrl} ${repoPath}`.nothrow().quiet();
