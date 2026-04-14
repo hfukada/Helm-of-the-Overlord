@@ -271,6 +271,55 @@ export async function ensureGiteaRepo(repoName: string): Promise<void> {
   }
 }
 
+export async function mirrorRepoToGitea(repoPath: string, repoName: string): Promise<void> {
+  const { $ } = await import("bun");
+
+  await ensureGiteaRepo(repoName);
+
+  const giteaUrl = getGiteaRemoteUrl(repoName);
+
+  const defaultBranchResult = await $`git -C ${repoPath} symbolic-ref --short HEAD`.nothrow().quiet();
+  if (defaultBranchResult.exitCode !== 0) {
+    throw new Error(`Failed to get default branch: ${defaultBranchResult.stderr.toString().trim()}`);
+  }
+  const defaultBranch = defaultBranchResult.stdout.toString().trim();
+
+  const pushBranchesResult = await $`git -C ${repoPath} push ${giteaUrl} refs/heads/*:refs/heads/*`.nothrow().quiet();
+  if (pushBranchesResult.exitCode !== 0) {
+    throw new Error(`Failed to push branches to Gitea: ${pushBranchesResult.stderr.toString().trim()}`);
+  }
+
+  const pushTagsResult = await $`git -C ${repoPath} push ${giteaUrl} --tags`.nothrow().quiet();
+  if (pushTagsResult.exitCode !== 0) {
+    throw new Error(`Failed to push tags to Gitea: ${pushTagsResult.stderr.toString().trim()}`);
+  }
+
+  const org = config.giteaOrg;
+  const patchRes = await giteaFetch(`/api/v1/repos/${org}/${repoName}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ default_branch: defaultBranch }),
+  });
+  if (!patchRes.ok) {
+    throw new Error(`Failed to set default branch on Gitea: ${patchRes.status} ${await patchRes.text()}`);
+  }
+
+  const removeResult = await $`git -C ${repoPath} remote remove origin`.nothrow().quiet();
+  if (removeResult.exitCode !== 0) {
+    throw new Error(`Failed to remove origin remote: ${removeResult.stderr.toString().trim()}`);
+  }
+
+  const addResult = await $`git -C ${repoPath} remote add origin ${giteaUrl}`.nothrow().quiet();
+  if (addResult.exitCode !== 0) {
+    throw new Error(`Failed to add Gitea remote: ${addResult.stderr.toString().trim()}`);
+  }
+
+  const upstreamResult = await $`git -C ${repoPath} branch --set-upstream-to=origin/${defaultBranch} ${defaultBranch}`.nothrow().quiet();
+  if (upstreamResult.exitCode !== 0) {
+    throw new Error(`Failed to set upstream tracking: ${upstreamResult.stderr.toString().trim()}`);
+  }
+}
+
 /**
  * If a URL points at the configured Gitea instance, rewrite it to embed bot credentials.
  * Matches on port since Gitea runs on a dedicated port and the hostname may vary

@@ -8,7 +8,7 @@ import { config } from "../../shared/config";
 import { parseRepo } from "../../knowledge/repo-parser";
 import { indexRepo } from "../../knowledge/indexer";
 import type { Repo } from "../../shared/types";
-import { embedGiteaCredentials } from "../../gitea/client";
+import { embedGiteaCredentials, mirrorRepoToGitea, isGiteaConfigured } from "../../gitea/client";
 import { getMessagingManager } from "../../messaging/manager";
 
 const repos = new Hono();
@@ -71,8 +71,14 @@ repos.post("/", async (c) => {
         logger.error("Clone failed", { url: body.url, exitCode: result.exitCode, stderr });
         return c.json({ error: `Clone failed: ${stderr || `exit code ${result.exitCode}`}` }, 500);
       }
+
+      // If the source URL is not from this Gitea instance, mirror it up to Gitea
+      if (isGiteaConfigured() && embedGiteaCredentials(body.url) === body.url) {
+        await mirrorRepoToGitea(repoPath, name);
+      }
     } catch (err) {
-      logger.error("Clone failed", { url: body.url, error: String(err) });
+      logger.error("Clone or mirror failed", { url: body.url, error: String(err) });
+      await $`rm -rf ${repoPath}`.quiet();
       return c.json({ error: `Clone failed: ${String(err)}` }, 500);
     }
   } else {
