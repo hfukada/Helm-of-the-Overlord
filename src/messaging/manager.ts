@@ -417,6 +417,10 @@ export class MessagingManager {
         });
       }
     }
+
+    if (newStatus === "review") {
+      await this.notifyReviewReady(task);
+    }
   }
 
   async notifyAgentOutput(taskId: string, text: string): Promise<void> {
@@ -446,7 +450,11 @@ export class MessagingManager {
     for (const [providerName, p] of this.providers) {
       const mainChannelId = this.mainChannelIds.get(providerName);
       if (mainChannelId) {
-        try { await p.sendMessage(mainChannelId, msg); } catch {}
+        try {
+          await p.sendMessage(mainChannelId, msg);
+        } catch (err) {
+          logger.warn("notifyReviewReady failed", { provider: providerName, err });
+        }
       }
     }
   }
@@ -501,12 +509,6 @@ export class MessagingManager {
       `Branch: ${branchName ?? "pending"}`,
     ].join("\n");
 
-    const announcement = [
-      `New task: "${task.title}"`,
-      `  ID: ${task.id}`,
-      `  Branch: ${branchName ?? "pending"}`,
-    ].join("\n");
-
     // Create a task channel on every active provider
     for (const [providerName, p] of this.providers) {
       try {
@@ -520,10 +522,22 @@ export class MessagingManager {
 
         if (!firstChannelId) firstChannelId = channelId;
 
-        // Announce in main channel
+        // Announce in main channel with per-provider channel link for the originating platform
         const mainChannelId = this.mainChannelIds.get(providerName);
         if (mainChannelId) {
-          await p.sendMessage(mainChannelId, announcement);
+          const lines = [
+            `New task: "${task.title}"`,
+            `  ID: ${task.id}`,
+            `  Branch: ${branchName ?? "pending"}`,
+          ];
+          if (creator?.providerName === providerName) {
+            if (providerName === "discord") {
+              lines.push(`  Channel: <#${channelId}>`);
+            } else {
+              lines.push(`  Channel: ${channelId}`);
+            }
+          }
+          await p.sendMessage(mainChannelId, lines.join("\n"));
         }
 
         // Invite the task creator if they used this provider
@@ -616,7 +630,7 @@ export class MessagingManager {
     if (res.ok) {
       const data = await res.json() as { id: string; title: string };
       this.taskCreators.set(data.id, { senderId: cmd.senderId, providerName: cmd.providerName });
-      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task created: ${data.title} (${data.id.slice(0, 8)})`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task queued: ${data.id.slice(0, 8)}`);
     } else {
       const err = await res.json() as { error: string };
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
