@@ -103,22 +103,55 @@ export class ClaudeCodeCliAgent implements Agent {
         sessionId,
       });
 
+      // Accumulate tool_use stream fragments into complete tool_call events.
+      // The stream sends a "Tool: Name" start event followed by many partial_json
+      // delta events. We buffer them and emit a single tool_call when the block ends.
+      let pendingToolName: string | null = null;
+      let pendingToolJson = "";
+
+      const emitPendingTool = () => {
+        if (pendingToolName) {
+          let args: unknown;
+          try { args = JSON.parse(pendingToolJson); } catch { args = pendingToolJson || undefined; }
+          const completeEvent: AgentEvent = { type: "tool_call", turnNumber: turnNum, toolName: pendingToolName, args };
+          if (!turnToolCalls.some((tc) => tc.name === pendingToolName)) {
+            turnToolCalls.push({ name: pendingToolName!, args });
+          }
+          opts.onEvent?.(completeEvent);
+          pendingToolName = null;
+          pendingToolJson = "";
+        }
+      };
+
       const cliResult = await claudeStream(cliOpts, (evt: ClaudeEvent) => {
-        // Translate Claude CLI events to generic AgentEvents.
+        if (evt.type === "tool_use") {
+          if (evt.content.startsWith("Tool: ")) {
+            // New tool call starting — flush previous if any.
+            emitPendingTool();
+            pendingToolName = evt.content.slice(6).trim();
+            pendingToolJson = "";
+          } else {
+            // JSON delta fragment — accumulate.
+            pendingToolJson += evt.content;
+          }
+          return;
+        }
+
+        // Non-tool event: flush any pending tool call first.
+        emitPendingTool();
+
         const generic = translateEvent(evt, turnNum);
         if (!generic) return;
 
         if (generic.type === "text") {
           turnText += generic.content;
-        } else if (generic.type === "tool_call") {
-          // Dedup by tool name within a turn (args often arrive fragmented).
-          if (!turnToolCalls.some((tc) => tc.name === generic.toolName)) {
-            turnToolCalls.push({ name: generic.toolName, args: generic.args });
-          }
         }
 
         opts.onEvent?.(generic);
       });
+
+      // Flush any tool call still pending at end of stream.
+      emitPendingTool();
 
       const turnUsage: TokenUsage = {
         input_tokens: cliResult.usage.inputTokens,
