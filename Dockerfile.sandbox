@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git bash ca-certificates unzip \
+    curl git bash ca-certificates unzip xz-utils \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global user.email "hoto@localhost" \
     && git config --global user.name "hoto"
@@ -17,8 +17,17 @@ RUN curl -fsSL https://download.docker.com/linux/static/stable/$(uname -m)/docke
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"
 
+# Install Node.js (includes npm)
+RUN ARCH=$(uname -m) \
+    && case "$ARCH" in \
+        x86_64) NODE_ARCH="x64" ;; \
+        aarch64) NODE_ARCH="arm64" ;; \
+        *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac \
+    && curl -fsSL "https://nodejs.org/dist/v22.13.1/node-v22.13.1-linux-${NODE_ARCH}.tar.xz" \
+       | tar -xJ --strip-components=1 -C /usr/local
+
 RUN bun install -g @anthropic-ai/claude-code \
-    && ln -s /root/.bun/bin/bun /usr/local/bin/node \
     && ln -s /root/.bun/install/global/node_modules/@anthropic-ai/claude-code/cli.js /root/.bun/bin/claude \
     && chmod +x /root/.bun/bin/claude
 
