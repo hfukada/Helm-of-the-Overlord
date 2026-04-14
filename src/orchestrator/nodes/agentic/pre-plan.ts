@@ -1,11 +1,16 @@
 import { ulid } from "ulid";
 import type { Task } from "../../../shared/types";
-import { runClaudeTurnLoop } from "../../subprocess";
 import { buildPrePlanPrompt } from "../../context-builder";
 import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { logger } from "../../../shared/logger";
-import type { SandboxOptions } from "./types";
+import {
+  type Agent,
+  runAgent,
+  READ,
+  GLOB,
+  withKnowledgeSearch,
+} from "../../../agent";
 
 /**
  * Runs a lightweight pre-plan phase to determine which repos need changes.
@@ -13,71 +18,32 @@ import type { SandboxOptions } from "./types";
  */
 export async function executePrePlan(
   task: Task,
-  mcpConfigPath?: string,
-  sandbox?: SandboxOptions,
+  agent: Agent,
+  opts: { hasMcp?: boolean } = {},
 ): Promise<{ repoNames: string[]; error: string | null }> {
   const agentRunId = ulid();
   const prompt = await buildPrePlanPrompt(task);
-  const model = config.defaultModel;
+  const hasMcp = !!opts.hasMcp;
 
-  const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
-     VALUES (?, ?, 'pre-plan', 'agentic', 'running', ?, ?, ?)`,
-    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
-  );
+  const baseTools = [READ, GLOB];
+  const tools = hasMcp ? withKnowledgeSearch(baseTools) : baseTools;
 
-  const result = await runClaudeTurnLoop({
+  const result = await runAgent(agent, agentRunId, {
+    nodeName: "pre-plan",
+    taskId: task.id,
+    childTaskId: task.child_task_id,
     prompt,
     systemPrompt: "You are a scoping agent. Determine which repositories need changes. Be concise.",
-    workDir: config.workspaceDir,
-    model,
+    tools,
     maxTurns: 3,
-    allowedTools: mcpConfigPath
-      ? ["mcp__hoto__search_knowledge", "Read", "Glob"]
-      : ["Read", "Glob"],
-    mcpConfigPath,
-    agentRunId,
-    taskId: task.id,
-    containerName: sandbox?.containerName,
-    containerWorkDir: sandbox?.containerWorkDir,
+    workDir: config.workspaceDir,
+    model: config.defaultModel,
   });
-
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE agent_runs SET
-      status = ?, output = ?, token_input = ?, token_output = ?,
-      cost_usd = ?, finished_at = ?, error = ?
-     WHERE id = ?`,
-    [
-      result.error ? "failed" : "completed",
-      result.output,
-      result.usage.input_tokens,
-      result.usage.output_tokens,
-      result.usage.cost_usd,
-      now,
-      result.error,
-      agentRunId,
-    ]
-  );
-
-  // Update daily token usage
-  const today = new Date().toISOString().slice(0, 10);
-  db.run(
-    `INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(date, model) DO UPDATE SET
-       input_tokens = input_tokens + excluded.input_tokens,
-       output_tokens = output_tokens + excluded.output_tokens,
-       cost_usd = cost_usd + excluded.cost_usd`,
-    [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
-  );
 
   if (result.error) {
     return { repoNames: [], error: result.error };
   }
 
-  // Parse the output -- look for "### Affected Repositories" section
   const repoNames = parseAffectedRepos(result.output);
 
   if (repoNames.length === 0) {
@@ -86,6 +52,7 @@ export async function executePrePlan(
   }
 
   // Validate repo names exist
+  const db = getDb();
   const validNames: string[] = [];
   for (const name of repoNames) {
     const exists = db.query("SELECT 1 FROM repos WHERE name = ?").get(name);

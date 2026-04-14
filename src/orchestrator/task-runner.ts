@@ -15,6 +15,7 @@ import { generateMcpConfig } from "./subprocess";
 import { teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { getMessagingManager } from "../messaging/manager";
+import { ClaudeCodeCliAgent, type AgentEvent } from "../agent";
 
 const _MAX_LINT_ROUNDS = 2;
 const _MAX_CI_ROUNDS = 2;
@@ -30,7 +31,7 @@ import type { MessagingManager } from "../messaging/manager";
 function makeThinkingForwarder(
   taskId: string,
   manager: MessagingManager | null
-): (type: string, content: string) => void {
+): (event: AgentEvent) => void {
   if (!manager) return () => {};
 
   let buffer = "";
@@ -46,16 +47,15 @@ function makeThinkingForwarder(
     flushTimer = null;
   };
 
-  return (type, content) => {
-    if (!content) return;
-    if (type === "thinking" || type === "text") {
-      buffer += content;
+  return (event) => {
+    if (event.type === "thinking" || event.type === "text") {
+      if (!event.content) return;
+      buffer += event.content;
       if (!flushTimer) {
         flushTimer = setTimeout(flush, FLUSH_INTERVAL_MS);
       }
-    }
-    // Flush on tool boundaries so the user sees reasoning before a tool call
-    if (type === "tool_use" || type === "tool_result") {
+    } else if (event.type === "tool_call" || event.type === "tool_result") {
+      // Flush on tool boundaries so the user sees reasoning before a tool call
       if (flushTimer) {
         clearTimeout(flushTimer);
         flushTimer = null;
@@ -412,7 +412,9 @@ export async function runTask(taskId: string): Promise<void> {
     logger.info("Running pre-plan to scope repos", { taskId, repoCount: repos.length });
 
     const { executePrePlan } = await import("./nodes/agentic/pre-plan");
-    const prePlanResult = await executePrePlan(task);
+    // Pre-plan runs before sandbox/MCP are set up -- use a bare agent.
+    const prePlanAgent = new ClaudeCodeCliAgent({});
+    const prePlanResult = await executePrePlan(task, prePlanAgent, { hasMcp: false });
 
     if (prePlanResult.error) {
       if (isTaskCancelled(task.id)) return;
@@ -501,6 +503,15 @@ export async function runTask(taskId: string): Promise<void> {
     logger.warn("Failed to generate MCP config, agents will use direct tools", { error: String(err) });
   }
 
+  // Construct the agent once for this task (used by all parent-level nodes).
+  const agent = new ClaudeCodeCliAgent({
+    sandbox: sandbox
+      ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
+      : undefined,
+    mcpConfigPath,
+  });
+  const hasMcp = !!mcpConfigPath;
+
   let state = createInitialState();
   state.history.push({
     node: "index",
@@ -542,7 +553,8 @@ export async function runTask(taskId: string): Promise<void> {
   const planPrompt = await buildPlanPrompt(task, repos);
 
   const planResult = await executePlan(
-    task, primaryRepo, primaryWorkDir, mcpConfigPath, onThinking, planPrompt, sandbox
+    task, primaryRepo, primaryWorkDir, agent,
+    { onEvent: onThinking, promptOverride: planPrompt, hasMcp }
   );
 
   // A valid plan must either contain a "### Summary" section or a
@@ -577,7 +589,7 @@ export async function runTask(taskId: string): Promise<void> {
   updateTaskStatus(task.id, "scrutinizing", state);
   logger.info("Scrutinizing plan (round 1)", { taskId: task.id });
 
-  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, mcpConfigPath, onThinking, sandbox);
+  const scrutiny1 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planResult.plan, agent, { onEvent: onThinking, hasMcp });
 
   const noIssuesPattern = /\bNO\s+ISSUES\b/i;
 
@@ -593,7 +605,7 @@ export async function runTask(taskId: string): Promise<void> {
     updateTaskStatus(task.id, "finalizing_plan", state);
 
     const finalPlan = await executeFinalizePlan(
-      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking, sandbox
+      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, agent, { onEvent: onThinking, hasMcp }
     );
 
     const finalHasStructure = /^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(finalPlan.plan ?? "");
@@ -611,7 +623,7 @@ export async function runTask(taskId: string): Promise<void> {
     logger.info("Revising plan based on scrutiny", { taskId: task.id });
 
     const planAgainResult = await executePlanAgain(
-      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, mcpConfigPath, onThinking, sandbox
+      task, primaryRepo, primaryWorkDir, planResult.plan, scrutiny1.output, agent, { onEvent: onThinking, hasMcp }
     );
 
     if (planAgainResult.error) {
@@ -625,7 +637,7 @@ export async function runTask(taskId: string): Promise<void> {
       updateTaskStatus(task.id, "scrutinizing", state);
       logger.info("Scrutinizing plan (round 2)", { taskId: task.id });
 
-      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, mcpConfigPath, onThinking, sandbox);
+      const scrutiny2 = await executeScrutinize(task, primaryRepo, primaryWorkDir, planAgainResult.plan, agent, { onEvent: onThinking, hasMcp });
 
       if (scrutiny2.error) {
         if (isTaskCancelled(task.id)) return;
@@ -639,7 +651,7 @@ export async function runTask(taskId: string): Promise<void> {
         logger.info("Finalizing plan", { taskId: task.id });
 
         const finalPlan = await executeFinalizePlan(
-          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, mcpConfigPath, onThinking, sandbox
+          task, primaryRepo, primaryWorkDir, planAgainResult.plan, scrutiny2.output, agent, { onEvent: onThinking, hasMcp }
         );
 
         const finalHasStructure = /^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(finalPlan.plan ?? "");

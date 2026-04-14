@@ -1,37 +1,48 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaudeTurnLoop } from "../../subprocess";
 import { buildSystemPrompt } from "../../context-builder";
-import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { renderTemplate } from "../../../prompts/loader";
 import { search } from "../../../knowledge/search";
-import type { SandboxOptions } from "./types";
+import {
+  type Agent,
+  type AgentEvent,
+  runAgent,
+  READ_TOOLS,
+  withKnowledgeSearch,
+} from "../../../agent";
+
+export interface ExecuteScrutinyOpts {
+  onEvent?: (event: AgentEvent) => void;
+  hasMcp?: boolean;
+}
+
+async function getKnowledgeContext(taskDescription: string, repoId: number): Promise<string> {
+  try {
+    const results = await search({ query: taskDescription, repo_id: repoId, limit: 8 });
+    if (results.length > 0) {
+      const sections = results.map((r) => `### ${r.source_file} (${r.chunk_type})\n${r.content}`);
+      return ["## Repository Knowledge Base", ...sections].join("\n");
+    }
+  } catch {}
+  return "";
+}
 
 /**
- * Run the scrutinize phase: review a plan against the 10-point checklist.
+ * Run the scrutinize phase: review a plan against the checklist.
  */
 export async function executeScrutinize(
   task: Task,
   repo: Repo,
   workDir: string,
   plan: string,
-  mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void,
-  sandbox?: SandboxOptions,
+  agent: Agent,
+  opts: ExecuteScrutinyOpts = {},
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
-  const model = config.defaultModel;
+  const hasMcp = !!opts.hasMcp;
 
-  // Get knowledge context for the scrutinizer to verify integration points
-  let knowledgeContext = "";
-  try {
-    const results = await search({ query: task.description, repo_id: repo.id, limit: 8 });
-    if (results.length > 0) {
-      const sections = results.map((r) => `### ${r.source_file} (${r.chunk_type})\n${r.content}`);
-      knowledgeContext = ["## Repository Knowledge Base", ...sections].join("\n");
-    }
-  } catch {}
+  const knowledgeContext = await getKnowledgeContext(task.description, repo.id);
 
   const prompt = await renderTemplate("scrutinize", {
     repoName: repo.name,
@@ -43,60 +54,20 @@ export async function executeScrutinize(
     knowledgeContext: knowledgeContext || undefined,
   });
 
-  const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
-     VALUES (?, ?, 'scrutinize', 'agentic', 'running', ?, ?, ?)`,
-    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
-  );
+  const tools = hasMcp ? withKnowledgeSearch(READ_TOOLS) : READ_TOOLS;
 
-  const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
-    : ["Read", "Glob", "Grep"];
-
-  const result = await runClaudeTurnLoop({
-    prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
-    workDir,
-    model,
-    maxTurns: 10,
-    allowedTools,
-    mcpConfigPath,
-    agentRunId,
+  const result = await runAgent(agent, agentRunId, {
+    nodeName: "scrutinize",
     taskId: task.id,
-    onEvent,
-    containerName: sandbox?.containerName,
-    containerWorkDir: sandbox?.containerWorkDir,
+    childTaskId: task.child_task_id,
+    prompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp }),
+    tools,
+    maxTurns: 10,
+    workDir,
+    model: config.defaultModel,
+    onEvent: opts.onEvent,
   });
-
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE agent_runs SET
-      status = ?, output = ?, token_input = ?, token_output = ?,
-      cost_usd = ?, finished_at = ?, error = ?
-     WHERE id = ?`,
-    [
-      result.error ? "failed" : "completed",
-      result.output,
-      result.usage.input_tokens,
-      result.usage.output_tokens,
-      result.usage.cost_usd,
-      now,
-      result.error,
-      agentRunId,
-    ]
-  );
-
-  const today = new Date().toISOString().slice(0, 10);
-  db.run(
-    `INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(date, model) DO UPDATE SET
-       input_tokens = input_tokens + excluded.input_tokens,
-       output_tokens = output_tokens + excluded.output_tokens,
-       cost_usd = cost_usd + excluded.cost_usd`,
-    [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
-  );
 
   return { output: result.output, error: result.error };
 }
@@ -110,21 +81,13 @@ export async function executePlanAgain(
   workDir: string,
   previousPlan: string,
   scrutinyResults: string,
-  mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void,
-  sandbox?: SandboxOptions,
+  agent: Agent,
+  opts: ExecuteScrutinyOpts = {},
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
-  const model = config.defaultModel;
+  const hasMcp = !!opts.hasMcp;
 
-  let knowledgeContext = "";
-  try {
-    const results = await search({ query: task.description, repo_id: repo.id, limit: 8 });
-    if (results.length > 0) {
-      const sections = results.map((r) => `### ${r.source_file} (${r.chunk_type})\n${r.content}`);
-      knowledgeContext = ["## Repository Knowledge Base", ...sections].join("\n");
-    }
-  } catch {}
+  const knowledgeContext = await getKnowledgeContext(task.description, repo.id);
 
   const { getRelationshipContext } = await import("../../context-builder");
   const relationshipContext = repo.id ? getRelationshipContext(repo.id) : "";
@@ -146,60 +109,20 @@ export async function executePlanAgain(
     relationshipContext: relationshipContext || undefined,
   });
 
-  const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
-     VALUES (?, ?, 'plan_again', 'agentic', 'running', ?, ?, ?)`,
-    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
-  );
+  const tools = hasMcp ? withKnowledgeSearch(READ_TOOLS) : READ_TOOLS;
 
-  const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
-    : ["Read", "Glob", "Grep"];
-
-  const result = await runClaudeTurnLoop({
-    prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
-    workDir,
-    model,
-    maxTurns: 10,
-    allowedTools,
-    mcpConfigPath,
-    agentRunId,
+  const result = await runAgent(agent, agentRunId, {
+    nodeName: "plan_again",
     taskId: task.id,
-    onEvent,
-    containerName: sandbox?.containerName,
-    containerWorkDir: sandbox?.containerWorkDir,
+    childTaskId: task.child_task_id,
+    prompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp }),
+    tools,
+    maxTurns: 10,
+    workDir,
+    model: config.defaultModel,
+    onEvent: opts.onEvent,
   });
-
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE agent_runs SET
-      status = ?, output = ?, token_input = ?, token_output = ?,
-      cost_usd = ?, finished_at = ?, error = ?
-     WHERE id = ?`,
-    [
-      result.error ? "failed" : "completed",
-      result.output,
-      result.usage.input_tokens,
-      result.usage.output_tokens,
-      result.usage.cost_usd,
-      now,
-      result.error,
-      agentRunId,
-    ]
-  );
-
-  const today = new Date().toISOString().slice(0, 10);
-  db.run(
-    `INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(date, model) DO UPDATE SET
-       input_tokens = input_tokens + excluded.input_tokens,
-       output_tokens = output_tokens + excluded.output_tokens,
-       cost_usd = cost_usd + excluded.cost_usd`,
-    [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
-  );
 
   return { plan: result.output, error: result.error };
 }
@@ -213,21 +136,13 @@ export async function executeFinalizePlan(
   workDir: string,
   previousPlan: string,
   scrutinyResults: string,
-  mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void,
-  sandbox?: SandboxOptions,
+  agent: Agent,
+  opts: ExecuteScrutinyOpts = {},
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
-  const model = config.defaultModel;
+  const hasMcp = !!opts.hasMcp;
 
-  let knowledgeContext = "";
-  try {
-    const results = await search({ query: task.description, repo_id: repo.id, limit: 8 });
-    if (results.length > 0) {
-      const sections = results.map((r) => `### ${r.source_file} (${r.chunk_type})\n${r.content}`);
-      knowledgeContext = ["## Repository Knowledge Base", ...sections].join("\n");
-    }
-  } catch {}
+  const knowledgeContext = await getKnowledgeContext(task.description, repo.id);
 
   const prompt = await renderTemplate("finalize-plan", {
     repoName: repo.name,
@@ -245,60 +160,20 @@ export async function executeFinalizePlan(
     knowledgeContext: knowledgeContext || undefined,
   });
 
-  const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
-     VALUES (?, ?, 'finalize_plan', 'agentic', 'running', ?, ?, ?)`,
-    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
-  );
+  const tools = hasMcp ? withKnowledgeSearch(READ_TOOLS) : READ_TOOLS;
 
-  const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
-    : ["Read", "Glob", "Grep"];
-
-  const result = await runClaudeTurnLoop({
-    prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
-    workDir,
-    model,
-    maxTurns: 10,
-    allowedTools,
-    mcpConfigPath,
-    agentRunId,
+  const result = await runAgent(agent, agentRunId, {
+    nodeName: "finalize_plan",
     taskId: task.id,
-    onEvent,
-    containerName: sandbox?.containerName,
-    containerWorkDir: sandbox?.containerWorkDir,
+    childTaskId: task.child_task_id,
+    prompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp }),
+    tools,
+    maxTurns: 10,
+    workDir,
+    model: config.defaultModel,
+    onEvent: opts.onEvent,
   });
-
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE agent_runs SET
-      status = ?, output = ?, token_input = ?, token_output = ?,
-      cost_usd = ?, finished_at = ?, error = ?
-     WHERE id = ?`,
-    [
-      result.error ? "failed" : "completed",
-      result.output,
-      result.usage.input_tokens,
-      result.usage.output_tokens,
-      result.usage.cost_usd,
-      now,
-      result.error,
-      agentRunId,
-    ]
-  );
-
-  const today = new Date().toISOString().slice(0, 10);
-  db.run(
-    `INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(date, model) DO UPDATE SET
-       input_tokens = input_tokens + excluded.input_tokens,
-       output_tokens = output_tokens + excluded.output_tokens,
-       cost_usd = cost_usd + excluded.cost_usd`,
-    [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
-  );
 
   return { plan: result.output, error: result.error };
 }

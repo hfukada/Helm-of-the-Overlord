@@ -1,79 +1,46 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaudeTurnLoop } from "../../subprocess";
 import { buildPlanPrompt, buildSystemPrompt } from "../../context-builder";
-import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
-import type { SandboxOptions } from "./types";
+import {
+  type Agent,
+  type AgentEvent,
+  runAgent,
+  READ_EXEC_TOOLS,
+  withKnowledgeSearch,
+} from "../../../agent";
+
+export interface ExecutePlanOpts {
+  onEvent?: (event: AgentEvent) => void;
+  promptOverride?: string;
+  hasMcp?: boolean;
+}
 
 export async function executePlan(
   task: Task,
   repo: Repo,
   workDir: string,
-  mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void,
-  promptOverride?: string,
-  sandbox?: SandboxOptions,
+  agent: Agent,
+  opts: ExecutePlanOpts = {},
 ): Promise<{ plan: string; error: string | null }> {
   const agentRunId = ulid();
-  const prompt = promptOverride ?? await buildPlanPrompt(task, repo);
-  const model = config.defaultModel;
+  const prompt = opts.promptOverride ?? await buildPlanPrompt(task, repo);
+  const hasMcp = !!opts.hasMcp;
 
-  const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
-     VALUES (?, ?, 'plan', 'agentic', 'running', ?, ?, ?)`,
-    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
-  );
+  const tools = hasMcp ? withKnowledgeSearch(READ_EXEC_TOOLS) : READ_EXEC_TOOLS;
 
-  const allowedTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep", "Bash"]
-    : ["Read", "Glob", "Grep", "Bash"];
-
-  const result = await runClaudeTurnLoop({
-    prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
-    workDir,
-    model,
-    maxTurns: 15,
-    allowedTools,
-    mcpConfigPath,
-    agentRunId,
+  const result = await runAgent(agent, agentRunId, {
+    nodeName: "plan",
     taskId: task.id,
-    onEvent,
-    containerName: sandbox?.containerName,
-    containerWorkDir: sandbox?.containerWorkDir,
+    childTaskId: task.child_task_id,
+    prompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp }),
+    tools,
+    maxTurns: 15,
+    workDir,
+    model: config.defaultModel,
+    onEvent: opts.onEvent,
   });
-
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE agent_runs SET
-      status = ?, output = ?, token_input = ?, token_output = ?,
-      cost_usd = ?, finished_at = ?, error = ?
-     WHERE id = ?`,
-    [
-      result.error ? "failed" : "completed",
-      result.output,
-      result.usage.input_tokens,
-      result.usage.output_tokens,
-      result.usage.cost_usd,
-      now,
-      result.error,
-      agentRunId,
-    ]
-  );
-
-  // Update daily token usage
-  const today = new Date().toISOString().slice(0, 10);
-  db.run(
-    `INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(date, model) DO UPDATE SET
-       input_tokens = input_tokens + excluded.input_tokens,
-       output_tokens = output_tokens + excluded.output_tokens,
-       cost_usd = cost_usd + excluded.cost_usd`,
-    [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
-  );
 
   return { plan: result.output, error: result.error };
 }

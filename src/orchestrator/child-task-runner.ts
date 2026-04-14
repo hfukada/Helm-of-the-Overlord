@@ -27,6 +27,7 @@ import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
 import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
 import type { SandboxOptions } from "./nodes/agentic/types";
+import { ClaudeCodeCliAgent } from "../agent";
 
 const MAX_LINT_ROUNDS = 2;
 const MAX_CI_ROUNDS = 2;
@@ -170,6 +171,15 @@ export async function runChildTask(childId: string): Promise<void> {
     );
   } catch {}
 
+  // Construct the agent for this child (used by implement, fix-ci, fix-lint).
+  const agent = new ClaudeCodeCliAgent({
+    sandbox: sandbox
+      ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
+      : undefined,
+    mcpConfigPath,
+  });
+  const hasMcp = !!mcpConfigPath;
+
   // Build the implement prompt. The plan_excerpt already contains:
   // - The shared Summary and Cross-Repo Context (from the parent's finalize-plan)
   // - This repo's specific Execution Plan
@@ -198,9 +208,11 @@ export async function runChildTask(childId: string): Promise<void> {
     [repo],
     workDir,
     implementPrompt,
-    mcpConfigPath,
-    undefined,
-    sandbox
+    agent,
+    {
+      hasMcp,
+      effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
+    },
   );
 
   if (implResult.error) {
@@ -258,7 +270,7 @@ export async function runChildTask(childId: string): Promise<void> {
 
         const fixResult = await executeFixCi(
           { ...taskObj, status: "ci_fixing" as const },
-          repo, workDir, ciResult.output, mcpConfigPath, undefined, sandbox
+          repo, workDir, ciResult.output, agent, { hasMcp }
         );
         if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
 
@@ -294,7 +306,7 @@ export async function runChildTask(childId: string): Promise<void> {
 
         const fixResult = await executeFixLint(
           { ...taskObj, status: "fix_linting" as const },
-          repo, workDir, lintResult.output, lintResult.command, mcpConfigPath, undefined, sandbox
+          repo, workDir, lintResult.output, lintResult.command, agent, { hasMcp }
         );
         if (fixResult.error) { if (isChildCancelled(childId)) return; break; }
 
@@ -507,24 +519,32 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
     );
   } catch {}
 
+  const agent = new ClaudeCodeCliAgent({
+    sandbox: sandbox
+      ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
+      : undefined,
+    mcpConfigPath,
+  });
+  const hasMcp = !!mcpConfigPath;
+
   // Triage + plan fix
   const { executeUnderstandReview, executeReviewSmallFeedback, executeReviewLargeFeedback } = await import("./nodes/agentic/review-feedback");
 
   const triageResult = await executeUnderstandReview(
-    taskProxy, repo, workDir, feedback, planExcerpt, mcpConfigPath, undefined, sandbox
+    taskProxy, repo, workDir, feedback, planExcerpt, agent, { hasMcp }
   );
 
   let fixPlan: string;
   if (triageResult.verdict === "small") {
     notifyParent(parentTaskId, repo.name, "Small fix -- planning targeted changes.");
     const result = await executeReviewSmallFeedback(
-      taskProxy, repo, workDir, feedback, planExcerpt, mcpConfigPath, undefined, sandbox
+      taskProxy, repo, workDir, feedback, planExcerpt, agent, { hasMcp }
     );
     fixPlan = result.plan;
   } else {
     notifyParent(parentTaskId, repo.name, "Large fix -- replanning.");
     const result = await executeReviewLargeFeedback(
-      taskProxy, repo, workDir, feedback, planExcerpt, mcpConfigPath, undefined, sandbox
+      taskProxy, repo, workDir, feedback, planExcerpt, agent, { hasMcp }
     );
     fixPlan = result.plan;
   }
@@ -539,7 +559,11 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
   // Implement fix
   updateChildStatus(childId, "implementing");
   const implResult = await executeImplement(
-    taskProxy, [repo], workDir, fixPlan, mcpConfigPath, undefined, sandbox
+    taskProxy, [repo], workDir, fixPlan, agent,
+    {
+      hasMcp,
+      effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
+    },
   );
 
   if (implResult.error) {

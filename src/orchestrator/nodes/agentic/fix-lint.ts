@@ -1,11 +1,20 @@
 import { ulid } from "ulid";
 import type { Task, Repo } from "../../../shared/types";
-import { runClaudeTurnLoop } from "../../subprocess";
 import { buildSystemPrompt, getChatContext } from "../../context-builder";
-import { getDb } from "../../../knowledge/db";
 import { config } from "../../../shared/config";
 import { renderTemplate } from "../../../prompts/loader";
-import type { SandboxOptions } from "./types";
+import {
+  type Agent,
+  type AgentEvent,
+  runAgent,
+  EDIT_TOOLS,
+  withKnowledgeSearch,
+} from "../../../agent";
+
+export interface ExecuteFixLintOpts {
+  onEvent?: (event: AgentEvent) => void;
+  hasMcp?: boolean;
+}
 
 export async function executeFixLint(
   task: Task,
@@ -13,12 +22,11 @@ export async function executeFixLint(
   workDir: string,
   lintOutput: string,
   lintCommand: string,
-  mcpConfigPath?: string,
-  onEvent?: (type: string, content: string) => void,
-  sandbox?: SandboxOptions,
+  agent: Agent,
+  opts: ExecuteFixLintOpts = {},
 ): Promise<{ output: string; error: string | null }> {
   const agentRunId = ulid();
-  const model = config.defaultModel;
+  const hasMcp = !!opts.hasMcp;
 
   const chatContext = await getChatContext(task.id);
 
@@ -29,62 +37,20 @@ export async function executeFixLint(
     chatContext: chatContext || undefined,
   });
 
-  const db = getDb();
-  db.run(
-    `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, child_task_id)
-     VALUES (?, ?, 'fix_lint', 'agentic', 'running', ?, ?, ?)`,
-    [agentRunId, task.id, prompt, model, task.child_task_id ?? null]
-  );
+  const tools = hasMcp ? withKnowledgeSearch(EDIT_TOOLS) : EDIT_TOOLS;
 
-  const mcpReadTools = mcpConfigPath
-    ? ["mcp__hoto__search_knowledge", "Read", "Glob", "Grep"]
-    : ["Read", "Glob", "Grep"];
-
-  const allowedTools = [...mcpReadTools, "Write", "Edit", "Bash"];
-
-  const result = await runClaudeTurnLoop({
-    prompt,
-    systemPrompt: buildSystemPrompt(repo, { hasMcp: !!mcpConfigPath }),
-    workDir,
-    model,
-    maxTurns: 10,
-    allowedTools,
-    mcpConfigPath,
-    agentRunId,
+  const result = await runAgent(agent, agentRunId, {
+    nodeName: "fix_lint",
     taskId: task.id,
-    onEvent,
-    containerName: sandbox?.containerName,
-    containerWorkDir: sandbox?.containerWorkDir,
+    childTaskId: task.child_task_id,
+    prompt,
+    systemPrompt: buildSystemPrompt(repo, { hasMcp }),
+    tools,
+    maxTurns: 10,
+    workDir,
+    model: config.defaultModel,
+    onEvent: opts.onEvent,
   });
-
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE agent_runs SET
-      status = ?, output = ?, token_input = ?, token_output = ?,
-      cost_usd = ?, finished_at = ?, error = ?
-     WHERE id = ?`,
-    [
-      result.error ? "failed" : "completed",
-      result.output,
-      result.usage.input_tokens,
-      result.usage.output_tokens,
-      result.usage.cost_usd,
-      now,
-      result.error,
-      agentRunId,
-    ]
-  );
-
-  const today = new Date().toISOString().slice(0, 10);
-  db.run(
-    `INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(date, model) DO UPDATE SET
-       input_tokens = input_tokens + excluded.input_tokens,
-       output_tokens = output_tokens + excluded.output_tokens,
-       cost_usd = cost_usd + excluded.cost_usd`,
-    [today, model, result.usage.input_tokens, result.usage.output_tokens, result.usage.cost_usd]
-  );
 
   return { output: result.output, error: result.error };
 }

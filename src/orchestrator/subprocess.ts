@@ -1,218 +1,21 @@
+/**
+ * Subprocess utilities for task-scoped MCP configuration.
+ *
+ * Agent invocation lives in `src/agent/`. This file remains for orchestrator
+ * setup that isn't agent-specific -- currently just `generateMcpConfig`.
+ */
 
 import { join, resolve } from "node:path";
-import { mkdirSync, writeFileSync } from "node:fs";
 import { logger } from "../shared/logger";
-import type { TokenUsage, StreamEventType } from "../shared/types";
-import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
-import { claudeStream, type ClaudeEvent } from "../shared/claude-cli";
 import { taskDir } from "../workspace/manager";
-import { runTurnLoop, type TurnLoopResult, type TurnResult } from "./turn-loop";
-
-export interface SubprocessOptions {
-  prompt: string;
-  systemPrompt?: string;
-  workDir: string;
-  model?: string;
-  maxTurns?: number;
-  allowedTools?: string[];
-  mcpConfigPath?: string;
-  addDirs?: string[];
-  agentRunId: string;
-  taskId?: string;
-  onEvent?: (eventType: StreamEventType, content: string) => void;
-  /** If set, run claude inside this Docker container. */
-  containerName?: string;
-  /** Working directory inside the container. */
-  containerWorkDir?: string;
-}
-
-export interface SubprocessResult {
-  output: string;
-  usage: TokenUsage;
-  error: string | null;
-}
-
-function storeStreamEvent(
-  agentRunId: string,
-  eventType: StreamEventType,
-  content: unknown
-): void {
-  const safeContent = typeof content === "string"
-    ? content
-    : content == null
-      ? ""
-      : JSON.stringify(content);
-  const db = getDb();
-  db.run(
-    "INSERT INTO agent_stream (agent_run_id, event_type, content) VALUES (?, ?, ?)",
-    [agentRunId, eventType, safeContent]
-  );
-}
-
-export async function runClaude(opts: SubprocessOptions): Promise<SubprocessResult> {
-  const model = opts.model ?? config.defaultModel;
-
-  logger.info("Spawning claude subprocess", {
-    model,
-    workDir: opts.workDir,
-    agentRunId: opts.agentRunId,
-  });
-
-  // Dump prompt to task directory for debugging
-  if (opts.taskId) {
-    try {
-      const nodeName = (getDb().query(
-        "SELECT node_name FROM agent_runs WHERE id = ?"
-      ).get(opts.agentRunId) as { node_name: string } | null)?.node_name ?? "unknown";
-
-      const promptsDir = join(taskDir(opts.taskId), "prompts");
-      mkdirSync(promptsDir, { recursive: true });
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `${timestamp}_${nodeName}.md`;
-      const content = [
-        `# ${nodeName}`,
-        `Agent Run: ${opts.agentRunId}`,
-        `Model: ${model}`,
-        `Timestamp: ${new Date().toISOString()}`,
-        "",
-        "## System Prompt",
-        opts.systemPrompt ?? "(none)",
-        "",
-        "## Prompt",
-        opts.prompt,
-      ].join("\n");
-
-      writeFileSync(join(promptsDir, filename), content);
-      logger.debug("Dumped prompt to file", { taskId: opts.taskId, file: filename });
-    } catch (err) {
-      logger.warn("Failed to dump prompt", { error: String(err) });
-    }
-  }
-
-  const result = await claudeStream(
-    {
-      prompt: opts.prompt,
-      systemPrompt: opts.systemPrompt,
-      cwd: opts.containerName ? undefined : opts.workDir,
-      model,
-      maxTurns: opts.maxTurns,
-      allowedTools: opts.allowedTools,
-      mcpConfigPath: opts.mcpConfigPath,
-      addDirs: opts.addDirs,
-      containerName: opts.containerName,
-      containerWorkDir: opts.containerWorkDir,
-    },
-    (evt: ClaudeEvent) => {
-      storeStreamEvent(opts.agentRunId, evt.type, evt.content);
-      opts.onEvent?.(evt.type, evt.content);
-    },
-  );
-
-  logger.info("claude subprocess completed", {
-    agentRunId: opts.agentRunId,
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
-    costUsd: result.usage.costUsd.toFixed(4),
-  });
-
-  return {
-    output: result.text,
-    usage: {
-      input_tokens: result.usage.inputTokens,
-      output_tokens: result.usage.outputTokens,
-      cost_usd: result.usage.costUsd,
-    },
-    error: result.error,
-  };
-}
-
-export interface TurnLoopSubprocessOptions extends SubprocessOptions {
-  onTurnComplete?: (turn: TurnResult) => Promise<string | null>;
-  shouldStop?: (turn: TurnResult) => boolean;
-}
 
 /**
- * Run Claude in a resume-based turn loop (--max-turns 1 per invocation).
- *
- * Replaces runClaude() for agentic nodes that benefit from between-turn
- * control: nudges, loop detection, budget enforcement.
+ * Generate an MCP config JSON file scoped to a task + repo.
+ * - Sandboxed: uses SSE transport via host.docker.internal so containerized
+ *   Claude can reach the host-bound MCP server.
+ * - Host: uses stdio transport, running `bun run mcp/server.ts` directly.
  */
-export async function runClaudeTurnLoop(opts: TurnLoopSubprocessOptions): Promise<SubprocessResult & { turnLoop: TurnLoopResult }> {
-  const model = opts.model ?? config.defaultModel;
-
-  logger.info("Spawning claude turn loop", {
-    model,
-    workDir: opts.workDir,
-    agentRunId: opts.agentRunId,
-    maxTurns: opts.maxTurns,
-  });
-
-  // Dump prompt to task directory for debugging
-  if (opts.taskId) {
-    try {
-      const nodeName = (getDb().query(
-        "SELECT node_name FROM agent_runs WHERE id = ?"
-      ).get(opts.agentRunId) as { node_name: string } | null)?.node_name ?? "unknown";
-
-      const promptsDir = join(taskDir(opts.taskId), "prompts");
-      mkdirSync(promptsDir, { recursive: true });
-
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `${timestamp}_${nodeName}.md`;
-      const content = [
-        `# ${nodeName} (turn-loop)`,
-        `Agent Run: ${opts.agentRunId}`,
-        `Model: ${model}`,
-        `Max Turns: ${opts.maxTurns ?? "default"}`,
-        `Timestamp: ${new Date().toISOString()}`,
-        "",
-        "## System Prompt",
-        opts.systemPrompt ?? "(none)",
-        "",
-        "## Prompt",
-        opts.prompt,
-      ].join("\n");
-
-      writeFileSync(join(promptsDir, filename), content);
-    } catch (err) {
-      logger.warn("Failed to dump prompt", { error: String(err) });
-    }
-  }
-
-  // Wrap onEvent to persist every stream event to the DB (feeds hoto-ui)
-  const wrappedOnEvent = (eventType: StreamEventType, content: string) => {
-    storeStreamEvent(opts.agentRunId, eventType, content);
-    opts.onEvent?.(eventType, content);
-  };
-
-  const turnLoopResult = await runTurnLoop({
-    prompt: opts.prompt,
-    systemPrompt: opts.systemPrompt,
-    workDir: opts.workDir,
-    model,
-    maxTurns: opts.maxTurns ?? 15,
-    allowedTools: opts.allowedTools,
-    mcpConfigPath: opts.mcpConfigPath,
-    addDirs: opts.addDirs,
-    agentRunId: opts.agentRunId,
-    taskId: opts.taskId,
-    onEvent: wrappedOnEvent,
-    containerName: opts.containerName,
-    containerWorkDir: opts.containerWorkDir,
-    onTurnComplete: opts.onTurnComplete,
-    shouldStop: opts.shouldStop,
-  });
-
-  return {
-    output: turnLoopResult.output,
-    usage: turnLoopResult.totalUsage,
-    error: turnLoopResult.error,
-    turnLoop: turnLoopResult,
-  };
-}
-
 export async function generateMcpConfig(
   taskId: string,
   workDir: string,
@@ -224,8 +27,6 @@ export async function generateMcpConfig(
   let mcpConfig: Record<string, unknown>;
 
   if (opts?.sandboxed) {
-    // Inside a container, use HTTP transport to reach MCP server on the host.
-    // host.docker.internal resolves to the host from inside Docker.
     const mcpUrl = `http://host.docker.internal:${config.mcpHttpPort}`;
     mcpConfig = {
       mcpServers: {
@@ -236,7 +37,6 @@ export async function generateMcpConfig(
       },
     };
   } else {
-    // On the host, use stdio transport as before.
     const serverScript = resolve(join(import.meta.dir, "../mcp/server.ts"));
     mcpConfig = {
       mcpServers: {
