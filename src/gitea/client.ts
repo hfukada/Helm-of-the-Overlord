@@ -284,7 +284,7 @@ export async function mirrorRepoToGitea(repoPath: string, repoName: string): Pro
   }
   const defaultBranch = defaultBranchResult.stdout.toString().trim();
 
-  const pushBranchesResult = await $`git -C ${repoPath} push ${giteaUrl} refs/heads/*:refs/heads/*`.nothrow().quiet();
+  const pushBranchesResult = await $`git -C ${repoPath} push --all ${giteaUrl}`.nothrow().quiet();
   if (pushBranchesResult.exitCode !== 0) {
     throw new Error(`Failed to push branches to Gitea: ${pushBranchesResult.stderr.toString().trim()}`);
   }
