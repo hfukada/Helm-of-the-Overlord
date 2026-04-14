@@ -1,7 +1,7 @@
 Revise the plan below to address the scrutiny issues. Keep what passed. Same output format as the original plan.
 
-## Task
-{{taskDescription}}
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
+> {{taskDescription}}
 
 ## Previous Plan
 {{previousPlan}}

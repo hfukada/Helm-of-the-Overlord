@@ -1,7 +1,7 @@
 Final pass. Address remaining scrutiny issues and add implementation detail so the plan can be followed mechanically.
 
-## Task
-{{taskDescription}}
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
+> {{taskDescription}}
 
 ## Current Plan
 {{previousPlan}}

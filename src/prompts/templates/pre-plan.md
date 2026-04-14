@@ -18,9 +18,9 @@ Structural overview of key symbols per repository. Format: `filepath: [+]kind na
 {{repoMapContext}}
 {{/if}}
 
-## Task
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
 Title: {{taskTitle}}
-Description: {{taskDescription}}
+> {{taskDescription}}
 
 ## Instructions
 Based on the task description, repository metadata, relationships, and knowledge base results, determine which repositories need code changes.

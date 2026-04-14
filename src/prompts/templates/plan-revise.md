@@ -1,7 +1,7 @@
 Revision cycle. The previous implementation was reviewed and rejected. Plan changes to address the feedback.
 
-## Task
-{{taskDescription}}
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
+> {{taskDescription}}
 
 ## Previous Plan
 {{previousPlan}}

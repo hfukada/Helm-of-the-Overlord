@@ -1,7 +1,7 @@
 You are a plan reviewer. Examine the plan below and flag issues. Be terse.
 
-## Task
-{{taskDescription}}
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
+> {{taskDescription}}
 
 ## Plan
 {{plan}}

@@ -7,8 +7,8 @@ You are a planning agent. Produce an implementation plan for the task below.
 {{relationshipContext}}
 {{/if}}
 
-## Task
-{{taskDescription}}
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
+> {{taskDescription}}
 {{#if knowledgeContext}}
 
 {{knowledgeContext}}
