@@ -284,14 +284,9 @@ export async function mirrorRepoToGitea(repoPath: string, repoName: string): Pro
   }
   const defaultBranch = defaultBranchResult.stdout.toString().trim();
 
-  const pushBranchesResult = await $`git -C ${repoPath} push --all ${giteaUrl}`.nothrow().quiet();
-  if (pushBranchesResult.exitCode !== 0) {
-    throw new Error(`Failed to push branches to Gitea: ${pushBranchesResult.stderr.toString().trim()}`);
-  }
-
-  const pushTagsResult = await $`git -C ${repoPath} push ${giteaUrl} --tags`.nothrow().quiet();
-  if (pushTagsResult.exitCode !== 0) {
-    throw new Error(`Failed to push tags to Gitea: ${pushTagsResult.stderr.toString().trim()}`);
+  const pushResult = await $`git -C ${repoPath} push ${giteaUrl} ${defaultBranch}:refs/heads/${defaultBranch}`.nothrow().quiet();
+  if (pushResult.exitCode !== 0) {
+    throw new Error(`Failed to push to Gitea: ${pushResult.stderr.toString().trim()}`);
   }
 
   const org = config.giteaOrg;
