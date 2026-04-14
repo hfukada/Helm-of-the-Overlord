@@ -175,6 +175,20 @@ export class DiscordProvider implements MessagingProvider {
     // No-op: channel deletion (archiveChannel) handles cleanup.
   }
 
+  async listTaskChannelIds(): Promise<string[]> {
+    const guild = await this.client.guilds.fetch(this.guildId);
+    const channels = await guild.channels.fetch();
+    const mainId = this.getMainChannelId();
+    return channels
+      .filter((ch) =>
+        ch !== null &&
+        ch.type === ChannelType.GuildText &&
+        ch.name.startsWith("hoto-task-") &&
+        ch.id !== mainId
+      )
+      .map((ch) => ch!.id);
+  }
+
   onCommand(handler: (cmd: CommandEvent) => Promise<void>): void {
     this.commandHandlers.push(handler);
   }

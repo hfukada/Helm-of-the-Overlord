@@ -188,6 +188,23 @@ export class MatrixProvider implements MessagingProvider {
     } catch (err) {
       logger.warn("Failed to archive channel", { channelId, error: String(err) });
     }
+    try {
+      await this.client.leave(channelId);
+    } catch (err) {
+      logger.warn("Matrix: failed to leave room after archiving", { channelId, error: String(err) });
+    }
+  }
+
+  async listTaskChannelIds(): Promise<string[]> {
+    if (!this.client) throw new Error("Matrix client not connected");
+    const mainId = this.mainChannelId ?? null;
+    return this.client
+      .getRooms()
+      .filter((room) => {
+        const alias = room.getCanonicalAlias();
+        return alias?.startsWith("#hoto-task-") && room.roomId !== mainId;
+      })
+      .map((room) => room.roomId);
   }
 
   async kickAllMembers(channelId: string): Promise<void> {
