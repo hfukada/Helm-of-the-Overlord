@@ -195,7 +195,7 @@ export class MatrixProvider implements MessagingProvider {
     }
   }
 
-  async listTaskChannelIds(): Promise<string[]> {
+  async listTaskChannels(): Promise<string[]> {
     if (!this.client) throw new Error("Matrix client not connected");
     const mainId = this.mainChannelId ?? null;
     return this.client

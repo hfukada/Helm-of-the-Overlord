@@ -175,7 +175,7 @@ export class DiscordProvider implements MessagingProvider {
     // No-op: channel deletion (archiveChannel) handles cleanup.
   }
 
-  async listTaskChannelIds(): Promise<string[]> {
+  async listTaskChannels(): Promise<string[]> {
     const guild = await this.client.guilds.fetch(this.guildId);
     const channels = await guild.channels.fetch();
     const mainId = this.getMainChannelId();
