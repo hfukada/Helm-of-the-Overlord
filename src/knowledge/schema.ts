@@ -262,6 +262,8 @@ const MIGRATIONS_V6 = [
   `CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)`,
 ];
 
+const MIGRATIONS_V7: string[] = [];
+
 const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id)",
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
@@ -281,6 +283,11 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE tasks ADD COLUMN source_provider TEXT",
   "ALTER TABLE agent_runs ADD COLUMN child_task_id TEXT",
   "ALTER TABLE agent_runs ADD COLUMN session_id TEXT",
+  "ALTER TABLE projects ADD COLUMN milestones TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE projects ADD COLUMN current_milestone INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE projects ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
+  "ALTER TABLE projects ADD COLUMN source_sender_id TEXT",
+  "ALTER TABLE projects ADD COLUMN source_provider TEXT",
 ];
 
 export function runMigrations(db: Database): void {
@@ -308,6 +315,10 @@ export function runMigrations(db: Database): void {
   }
 
   for (const sql of MIGRATIONS_V6) {
+    db.exec(sql);
+  }
+
+  for (const sql of MIGRATIONS_V7) {
     db.exec(sql);
   }
 

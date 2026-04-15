@@ -5,31 +5,21 @@ import { fixDates, fixDatesAll } from "../dates";
 
 const projects = new Hono();
 
-// GET /projects
+const ALLOWED_PATCH_FIELDS = ["title", "description", "status", "architecture_notes", "carry_over_notes"] as const;
+
 projects.get("/", (c) => {
   const db = getDb();
-  const rows = db.query("SELECT * FROM projects ORDER BY created_at DESC, rowid DESC").all() as Record<string, unknown>[];
+  const rows = db
+    .query("SELECT * FROM projects ORDER BY created_at DESC LIMIT 100")
+    .all() as Record<string, unknown>[];
   return c.json(fixDatesAll(rows, "created_at", "updated_at"));
 });
 
-// GET /projects/:id
-projects.get("/:id", (c) => {
-  const db = getDb();
-  const project = db.query("SELECT * FROM projects WHERE id = ?").get(c.req.param("id")) as Record<string, unknown> | null;
-  if (!project) return c.json({ error: "Not found" }, 404);
-  const tasks = db
-    .query("SELECT id, title, status, created_at FROM tasks WHERE project_id = ? ORDER BY created_at ASC")
-    .all(c.req.param("id")) as Record<string, unknown>[];
-  fixDates(project, "created_at", "updated_at");
-  return c.json({ ...project, tasks: fixDatesAll(tasks, "created_at") });
-});
-
-// POST /projects
 projects.post("/", async (c) => {
-  const body = await c.req.json();
-  if (!body.title || !body.description) {
-    return c.json({ error: "title and description are required" }, 400);
-  }
+  const body = await c.req.json<Record<string, unknown>>();
+  if (!body.title) return c.json({ error: "title is required" }, 400);
+  if (!body.description) return c.json({ error: "description is required" }, 400);
+
   const db = getDb();
   const id = ulid();
   db.run(
@@ -40,29 +30,37 @@ projects.post("/", async (c) => {
   return c.json(fixDates(row, "created_at", "updated_at"), 201);
 });
 
-// PATCH /projects/:id
+projects.get("/:id", (c) => {
+  const db = getDb();
+  const id = c.req.param("id");
+  const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown> | null;
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const tasks = db
+    .query("SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at ASC")
+    .all(id) as Record<string, unknown>[];
+  return c.json({
+    ...fixDates(row, "created_at", "updated_at"),
+    tasks: fixDatesAll(tasks, "created_at", "updated_at"),
+  });
+});
+
 projects.patch("/:id", async (c) => {
   const db = getDb();
-  const existing = db.query("SELECT id FROM projects WHERE id = ?").get(c.req.param("id"));
+  const id = c.req.param("id");
+  const existing = db.query("SELECT id FROM projects WHERE id = ?").get(id);
   if (!existing) return c.json({ error: "Not found" }, 404);
 
-  const body = await c.req.json();
-  const ALLOWED_PATCH_FIELDS = new Set([
-    "title", "description", "status",
-    "architecture_notes", "carry_over_notes",
-  ]);
-  const updates = Object.fromEntries(
-    Object.entries(body).filter(([k]) => ALLOWED_PATCH_FIELDS.has(k))
-  );
-  if (Object.keys(updates).length === 0) {
-    return c.json({ error: "No valid fields" }, 400);
+  const body = await c.req.json<Record<string, unknown>>();
+  const updates: Record<string, unknown> = {};
+  for (const field of ALLOWED_PATCH_FIELDS) {
+    if (field in body) updates[field] = body[field];
   }
+  if (Object.keys(updates).length === 0) return c.json({ error: "No valid fields to update" }, 400);
 
-  const setClauses = [...Object.keys(updates).map((k) => `${k} = ?`), "updated_at = datetime('now')"];
-  const values = [...Object.values(updates), c.req.param("id")];
-  db.run(`UPDATE projects SET ${setClauses.join(", ")} WHERE id = ?`, values);
-
-  const row = db.query("SELECT * FROM projects WHERE id = ?").get(c.req.param("id")) as Record<string, unknown>;
+  const sets = Object.keys(updates).map((k) => `${k} = ?`).join(", ");
+  const values = [...Object.values(updates), id];
+  db.run(`UPDATE projects SET ${sets}, updated_at = datetime('now') WHERE id = ?`, values);
+  const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown>;
   return c.json(fixDates(row, "created_at", "updated_at"));
 });
 

@@ -114,6 +114,13 @@ commits.post("/:id/commit", async (c) => {
       branch: branchName,
     });
 
+    // Advance any project waiting on this task — fire and forget
+    import("../../projects/runner").then(({ onTaskCompleted }) =>
+      onTaskCompleted(id).catch((err) =>
+        logger.warn("onTaskCompleted failed", { taskId: id, error: String(err) })
+      )
+    );
+
     return c.json({ id, status: "committed", branch: branchName });
   } catch (err) {
     logger.error("Commit failed", { taskId: id, error: String(err) });

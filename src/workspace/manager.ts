@@ -24,3 +24,13 @@ export function taskWorkDir(taskId: string, repoName: string): string {
 
 /** @deprecated Use taskWorkDir instead */
 export const worktreeDir = taskWorkDir;
+
+export function projectDir(projectId: string): string {
+  return join(config.workspaceDir, "projects", projectId);
+}
+
+export async function ensureProjectDir(projectId: string): Promise<string> {
+  const dir = projectDir(projectId);
+  await mkdir(dir, { recursive: true });
+  return dir;
+}

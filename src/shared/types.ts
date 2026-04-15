@@ -178,17 +178,29 @@ export interface ContainerSecret {
   created_at: string;
 }
 
+export type ProjectStatus = "active" | "planning" | "in_progress" | "completed" | "failed" | "cancelled";
+
+export interface ProjectMilestone {
+  index: number;
+  title: string;
+  description: string;
+  files_estimate: number;
+  task_id: string | null;
+  completed: boolean;
+}
+
 export interface Project {
   id: string;
   title: string;
   description: string;
-  status: string;
+  status: ProjectStatus;
   architecture_notes: string | null;
   carry_over_notes: string | null;
+  milestones: ProjectMilestone[];
+  current_milestone: number;
+  repo_id: number | null;
+  source_sender_id: string | null;
+  source_provider: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface ProjectDetail extends Project {
-  tasks: Array<{ id: string; title: string; status: string; created_at: string }>;
 }
