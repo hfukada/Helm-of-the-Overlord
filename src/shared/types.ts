@@ -177,3 +177,18 @@ export interface ContainerSecret {
   verified: boolean;
   created_at: string;
 }
+
+export interface Project {
+  id: string;
+  title: string;
+  description: string;
+  status: string;
+  architecture_notes: string | null;
+  carry_over_notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectDetail extends Project {
+  tasks: Array<{ id: string; title: string; status: string; created_at: string }>;
+}

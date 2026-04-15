@@ -11,6 +11,7 @@ import { secrets } from "./routes/secrets";
 import { relationships } from "./routes/relationships";
 import { childTasks } from "./routes/child-tasks";
 import { version } from "./routes/version";
+import projects from "./routes/projects";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
@@ -39,6 +40,7 @@ app.route("/repos", secrets); // /repos/:name/secrets
 app.route("/repos", relationships); // /repos/:name/relationships + /repos/relationships
 app.route("/tokens", tokens);
 app.route("/knowledge", knowledge);
+app.route("/projects", projects);
 
 export async function startDaemon(): Promise<void> {
   await ensureWorkspace();
