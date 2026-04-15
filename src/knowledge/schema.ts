@@ -248,7 +248,22 @@ const MIGRATIONS_V5 = [
     ON task_ci_lint_runs(child_task_id, run_type, created_at)`,
 ];
 
+const MIGRATIONS_V6 = [
+  `CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    architecture_notes TEXT,
+    carry_over_notes TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)`,
+];
+
 const ALTER_MIGRATIONS = [
+  "ALTER TABLE tasks ADD COLUMN project_id TEXT REFERENCES projects(id)",
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
   "ALTER TABLE tasks ADD COLUMN lint_output TEXT",
   "ALTER TABLE tasks ADD COLUMN lint_passed INTEGER",
@@ -289,6 +304,10 @@ export function runMigrations(db: Database): void {
   }
 
   for (const sql of MIGRATIONS_V5) {
+    db.exec(sql);
+  }
+
+  for (const sql of MIGRATIONS_V6) {
     db.exec(sql);
   }
 
