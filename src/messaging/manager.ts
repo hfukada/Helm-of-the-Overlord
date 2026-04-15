@@ -60,6 +60,12 @@ const COMMAND_HELP: Record<string, string> = {
     "  !repo add git@github.com:org/project.git --name my-project",
     "  !repo remove my-project",
   ].join("\n"),
+  "newrepo": [
+    "!newrepo <name> <seed prompt>",
+    "Initialize a new empty git repo named <name> and immediately submit a seeding task.",
+    "The seed prompt is passed as the task description to bootstrap the new project.",
+    "Example: !newrepo my-service Create a minimal HTTP server in TypeScript with Bun and Hono",
+  ].join("\n"),
   "delete-repo": [
     "!delete-repo <name>",
     "Same as !repo remove. Hard-delete a repo and its embeddings (blocked if active tasks).",
@@ -244,6 +250,9 @@ export class MessagingManager {
         break;
       case "repo":
         await this.cmdRepo(cmd);
+        break;
+      case "newrepo":
+        await this.cmdNewRepo(cmd);
         break;
       case "delete-repo":
         await this.cmdDeleteRepo(cmd);
@@ -848,6 +857,42 @@ export class MessagingManager {
       const err = await res.json() as { error: string };
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
     }
+  }
+
+  private async cmdNewRepo(cmd: CommandEvent): Promise<void> {
+    const name = cmd.args[0];
+    const seedPrompt = cmd.args.slice(1).join(" ").trim();
+
+    if (!name || !seedPrompt) {
+      await this.getSenderProvider(cmd)?.sendMessage(
+        cmd.channelId,
+        "Usage: !newrepo <name> <seed prompt>\nExample: !newrepo my-service Create a minimal HTTP server in TypeScript with Bun and Hono"
+      );
+      return;
+    }
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/init`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+      await this.getSenderProvider(cmd)?.sendMessage(
+        cmd.channelId,
+        `Failed to initialize repo: ${err.error ?? res.statusText}`
+      );
+      return;
+    }
+
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Repo initialized: ${name}`);
+
+    await this.createTask(
+      cmd,
+      { description: seedPrompt, repo_name: name, source: cmd.providerName },
+      "Seed task queued"
+    );
   }
 
   private async cmdDeleteRepo(cmd: CommandEvent): Promise<void> {
@@ -1486,6 +1531,7 @@ export class MessagingManager {
       "  !repo add <url> [--name] [--allow-ci-on-host]",
       "                                 Clone and register a repo",
       "  !repo remove <name>            Unregister a repo",
+      "  !newrepo <name> <seed>         Init a new repo and seed it with a task",
       "  !reindex <repo> [--force]      Reindex repo knowledge base",
       "  !tokens                        Show token usage and cost",
       "  !ask <question>                Query the knowledge base",

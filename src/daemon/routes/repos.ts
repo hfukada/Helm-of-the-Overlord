@@ -224,4 +224,86 @@ repos.delete("/:name", async (c) => {
   return c.json({ deleted: name });
 });
 
+repos.post("/init", async (c) => {
+  const body = await c.req.json<{ name?: string }>();
+  const name = body.name?.trim();
+  if (!name) {
+    return c.json({ error: "name is required" }, 400);
+  }
+
+  const db = getDb();
+  const existing = db.query("SELECT id FROM repos WHERE name = ?").get(name);
+  if (existing) {
+    return c.json({ error: `Repo '${name}' already exists` }, 409);
+  }
+
+  const reposDir = join(config.workspaceDir, "repos");
+  const repoPath = join(reposDir, name);
+
+  await $`mkdir -p ${repoPath}`.quiet();
+
+  const initResult = await $`git init ${repoPath}`.nothrow().quiet();
+  if (initResult.exitCode !== 0) {
+    const stderr = initResult.stderr.toString().trim();
+    logger.error("git init failed", { name, exitCode: initResult.exitCode, stderr });
+    return c.json({ error: `git init failed: ${stderr || `exit code ${initResult.exitCode}`}` }, 500);
+  }
+
+  const commitResult = await $`git -C ${repoPath} commit --allow-empty -m "init"`.nothrow().quiet();
+  if (commitResult.exitCode !== 0) {
+    const stderr = commitResult.stderr.toString().trim();
+    logger.error("Initial commit failed", { name, exitCode: commitResult.exitCode, stderr });
+    await $`rm -rf ${repoPath}`.quiet();
+    return c.json({ error: `Initial commit failed: ${stderr || `exit code ${commitResult.exitCode}`}` }, 500);
+  }
+
+  const parsed = await parseRepo(repoPath);
+
+  const result = db.run(
+    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path, docker_image, ci_on_host)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      name,
+      repoPath,
+      parsed.description,
+      parsed.language,
+      parsed.framework,
+      parsed.build_cmd,
+      parsed.test_cmd,
+      parsed.run_cmd,
+      parsed.lint_cmd,
+      parsed.docker_compose_path,
+      parsed.docker_image,
+      0,
+    ]
+  );
+
+  const repoId = Number(result.lastInsertRowid);
+  logger.info("Repo initialized", { name, path: repoPath, language: parsed.language });
+
+  const repo: Repo = {
+    id: repoId, name, path: repoPath,
+    description: parsed.description,
+    build_cmd: parsed.build_cmd,
+    test_cmd: parsed.test_cmd,
+    run_cmd: parsed.run_cmd,
+    lint_cmd: parsed.lint_cmd,
+    language: parsed.language,
+    framework: parsed.framework,
+    docker_compose_path: parsed.docker_compose_path,
+    docker_image: parsed.docker_image,
+    ci_on_host: false,
+    metadata: null,
+  };
+  indexRepo(repo)
+    .then((r) => {
+      getMessagingManager()?.notifyIndexingComplete(repo.name, r.chunks, r.embeddings);
+    })
+    .catch((err) => {
+      logger.warn("Auto-indexing failed", { repo: name, error: String(err) });
+    });
+
+  return c.json({ id: repoId, name, path: repoPath }, 201);
+});
+
 export { repos };
