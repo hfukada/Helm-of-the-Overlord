@@ -34,6 +34,16 @@ const COMMAND_HELP: Record<string, string> = {
     "!repos",
     "List all registered repos with their detected language and framework.",
   ].join("\n"),
+  projects: [
+    "!projects",
+    "List all projects with their ID (first 8 chars), status, and title.",
+    "Example: !projects",
+  ].join("\n"),
+  project: [
+    "!project",
+    "List all projects with their ID (first 8 chars), status, and title.",
+    "Example: !project",
+  ].join("\n"),
   "repo": [
     "!repo add <git-url> [--name <name>]",
     "!repo remove <name>",
@@ -220,6 +230,10 @@ export class MessagingManager {
         break;
       case "repos":
         await this.cmdRepos(cmd);
+        break;
+      case "projects":
+      case "project":
+        await this.cmdProjects(cmd);
         break;
       case "repo":
         await this.cmdRepo(cmd);
@@ -888,6 +902,21 @@ export class MessagingManager {
     await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
   }
 
+  private async cmdProjects(cmd: CommandEvent): Promise<void> {
+    const db = getDb();
+    const rows = db.query(
+      "SELECT id, title, status FROM projects ORDER BY created_at DESC, id DESC LIMIT 100"
+    ).all() as Array<{ id: string; title: string; status: string }>;
+
+    if (rows.length === 0) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "No projects found.");
+      return;
+    }
+
+    const lines = ["Projects:", ...rows.map((r) => `${r.id.slice(0, 8)}  [${r.status}]  ${r.title}`)];
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
+  }
+
   private async cmdReindex(cmd: CommandEvent): Promise<void> {
     let repoName: string | undefined;
     let force = false;
@@ -1388,6 +1417,7 @@ export class MessagingManager {
       "  !clean-done                    Delete all finished tasks",
       "  !purge <status>                Delete all tasks with a given status",
       "  !repos                         List registered repos",
+      "  !projects                      List all projects",
       "  !repo add <url> [--name] [--allow-ci-on-host]",
       "                                 Clone and register a repo",
       "  !repo remove <name>            Unregister a repo",
