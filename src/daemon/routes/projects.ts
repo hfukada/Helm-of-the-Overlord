@@ -10,7 +10,7 @@ const ALLOWED_PATCH_FIELDS = ["title", "description", "status", "architecture_no
 projects.get("/", (c) => {
   const db = getDb();
   const rows = db
-    .query("SELECT * FROM projects ORDER BY created_at DESC, id DESC LIMIT 100")
+    .query("SELECT * FROM projects ORDER BY created_at DESC, rowid DESC LIMIT 100")
     .all() as Record<string, unknown>[];
   return c.json(fixDatesAll(rows, "created_at", "updated_at"));
 });
