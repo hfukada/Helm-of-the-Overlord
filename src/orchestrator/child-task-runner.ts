@@ -49,12 +49,20 @@ function updateChildStatus(childId: string, status: ChildTaskStatus, blueprintSt
   }
 }
 
-function saveChildNodeOutput(childId: string, node: "lint" | "ci", output: string, passed: boolean) {
+function saveChildNodeOutput(childId: string, node: "lint" | "ci", output: string, passed: boolean, parentTaskId: string) {
   const db = getDb();
   if (node === "lint") {
     db.run("UPDATE child_tasks SET lint_output = ?, lint_passed = ? WHERE id = ?", [output, passed ? 1 : 0, childId]);
   } else {
     db.run("UPDATE child_tasks SET ci_output = ?, ci_passed = ? WHERE id = ?", [output, passed ? 1 : 0, childId]);
+  }
+  try {
+    db.prepare(
+      `INSERT INTO task_ci_lint_runs (task_id, child_task_id, run_type, output, passed)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(parentTaskId, childId, node, output, passed ? 1 : 0);
+  } catch (err) {
+    logger.warn("Failed to insert ci/lint run history row", { err, childId, parentTaskId });
   }
 }
 
@@ -253,14 +261,14 @@ export async function runChildTask(childId: string): Promise<void> {
     }
     if (!containerName && !repo.ci_on_host) {
       const msg = "CI skipped: no Docker container and ci_on_host not enabled.";
-      saveChildNodeOutput(childId, "ci", msg, false);
+      saveChildNodeOutput(childId, "ci", msg, false, parentTaskId);
       notifyParent(parentTaskId, repo.name, msg);
     } else {
       updateChildStatus(childId, "ci_running", state);
 
       for (let round = 0; round < MAX_CI_ROUNDS; round++) {
         const ciResult = await runCiCommand(repo, workDir, containerName ?? undefined, containerWorkDir);
-        saveChildNodeOutput(childId, "ci", ciResult.output, ciResult.success);
+        saveChildNodeOutput(childId, "ci", ciResult.output, ciResult.success, parentTaskId);
 
         if (ciResult.success) break;
         if (containerName) discoverSecrets(repo.id, ciResult.output);
@@ -290,14 +298,14 @@ export async function runChildTask(childId: string): Promise<void> {
   if (repo.lint_cmd) {
     if (!containerName && !repo.ci_on_host) {
       const msg = "Lint skipped: no Docker container and ci_on_host not enabled.";
-      saveChildNodeOutput(childId, "lint", msg, false);
+      saveChildNodeOutput(childId, "lint", msg, false, parentTaskId);
       notifyParent(parentTaskId, repo.name, msg);
     } else {
       updateChildStatus(childId, "linting", state);
 
       for (let round = 0; round <= MAX_LINT_ROUNDS; round++) {
         const lintResult = await executeLint(repo, workDir, containerName ?? undefined, containerWorkDir);
-        saveChildNodeOutput(childId, "lint", lintResult.output, lintResult.success);
+        saveChildNodeOutput(childId, "lint", lintResult.output, lintResult.success, parentTaskId);
 
         if (lintResult.success) break;
         if (containerName) discoverSecrets(repo.id, lintResult.output);

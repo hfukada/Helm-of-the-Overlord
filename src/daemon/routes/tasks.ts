@@ -165,9 +165,25 @@ tasks.get("/:id", async (c) => {
     ).all(id, child.id as string) as Array<Record<string, unknown>>;
     fixDatesAll(childRuns, "started_at", "finished_at");
 
+    const childCiRuns = db.query(
+      `SELECT id, output, passed, created_at
+       FROM task_ci_lint_runs
+       WHERE child_task_id = ? AND run_type = 'ci'
+       ORDER BY created_at ASC`
+    ).all(child.id as string) as Array<Record<string, unknown>>;
+
+    const childLintRuns = db.query(
+      `SELECT id, output, passed, created_at
+       FROM task_ci_lint_runs
+       WHERE child_task_id = ? AND run_type = 'lint'
+       ORDER BY created_at ASC`
+    ).all(child.id as string) as Array<Record<string, unknown>>;
+
     return {
       ...child,
       runs: childRuns,
+      ci_runs: childCiRuns,
+      lint_runs: childLintRuns,
     };
   });
 
@@ -179,6 +195,20 @@ tasks.get("/:id", async (c) => {
   ).all(id) as Array<Record<string, unknown>>;
   fixDatesAll(parentRuns, "started_at", "finished_at");
 
+  const ciRuns = db.query(
+    `SELECT id, child_task_id, output, passed, created_at
+     FROM task_ci_lint_runs
+     WHERE task_id = ? AND run_type = 'ci'
+     ORDER BY created_at ASC`
+  ).all(id) as Array<Record<string, unknown>>;
+
+  const lintRuns = db.query(
+    `SELECT id, child_task_id, output, passed, created_at
+     FROM task_ci_lint_runs
+     WHERE task_id = ? AND run_type = 'lint'
+     ORDER BY created_at ASC`
+  ).all(id) as Array<Record<string, unknown>>;
+
   return c.json({
     ...task,
     blueprint_state: blueprintState,
@@ -188,42 +218,52 @@ tasks.get("/:id", async (c) => {
     repos: taskRepos,
     prs: taskPrs,
     children,
+    ci_runs: ciRuns,
+    lint_runs: lintRuns,
   });
 });
 
 tasks.get("/:id/ci-output", (c) => {
   const id = c.req.param("id");
   const db = getDb();
-  const row = db
-    .query("SELECT ci_output, ci_passed, status FROM tasks WHERE id = ?")
-    .get(id) as { ci_output: string | null; ci_passed: number | null; status: string } | null;
+  const taskStatus = db.query("SELECT status FROM tasks WHERE id = ?").get(id) as { status: string } | null;
 
-  if (!row) {
+  if (!taskStatus) {
     return c.json({ error: "Task not found" }, 404);
   }
 
+  const run = db.query(
+    `SELECT output, passed FROM task_ci_lint_runs
+     WHERE task_id = ? AND run_type = 'ci'
+     ORDER BY created_at DESC LIMIT 1`
+  ).get(id) as { output: string | null; passed: number | null } | null;
+
   return c.json({
-    ci_output: row.ci_output,
-    ci_passed: row.ci_passed,
-    status: row.status,
+    output: run?.output ?? null,
+    passed: run?.passed ?? null,
+    status: taskStatus.status,
   });
 });
 
 tasks.get("/:id/lint-output", (c) => {
   const id = c.req.param("id");
   const db = getDb();
-  const row = db
-    .query("SELECT lint_output, lint_passed, status FROM tasks WHERE id = ?")
-    .get(id) as { lint_output: string | null; lint_passed: number | null; status: string } | null;
+  const taskStatus = db.query("SELECT status FROM tasks WHERE id = ?").get(id) as { status: string } | null;
 
-  if (!row) {
+  if (!taskStatus) {
     return c.json({ error: "Task not found" }, 404);
   }
 
+  const run = db.query(
+    `SELECT output, passed FROM task_ci_lint_runs
+     WHERE task_id = ? AND run_type = 'lint'
+     ORDER BY created_at DESC LIMIT 1`
+  ).get(id) as { output: string | null; passed: number | null } | null;
+
   return c.json({
-    lint_output: row.lint_output,
-    lint_passed: row.lint_passed,
-    status: row.status,
+    output: run?.output ?? null,
+    passed: run?.passed ?? null,
+    status: taskStatus.status,
   });
 });
 
@@ -289,6 +329,7 @@ async function deleteTask(taskId: string): Promise<void> {
   db.run("DELETE FROM task_repos WHERE task_id = ?", [taskId]);
   db.run("DELETE FROM task_prs WHERE task_id = ?", [taskId]);
   db.run("DELETE FROM messaging_channels WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_ci_lint_runs WHERE task_id = ?", [taskId]);
   db.run("DELETE FROM tasks WHERE id = ?", [taskId]);
 
   logger.info("Task deleted", { taskId });

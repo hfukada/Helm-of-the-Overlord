@@ -232,6 +232,22 @@ const MIGRATIONS_V4 = [
   `CREATE INDEX IF NOT EXISTS idx_agent_turns_run ON agent_turns(agent_run_id)`,
 ];
 
+const MIGRATIONS_V5 = [
+  `CREATE TABLE IF NOT EXISTS task_ci_lint_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    child_task_id TEXT,
+    run_type TEXT NOT NULL CHECK(run_type IN ('ci','lint')),
+    output TEXT,
+    passed INTEGER,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_ci_lint_runs_task
+    ON task_ci_lint_runs(task_id, run_type, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_ci_lint_runs_child
+    ON task_ci_lint_runs(child_task_id, run_type, created_at)`,
+];
+
 const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN index_commit_hash TEXT",
   "ALTER TABLE tasks ADD COLUMN lint_output TEXT",
@@ -269,6 +285,10 @@ export function runMigrations(db: Database): void {
   }
 
   for (const sql of MIGRATIONS_V4) {
+    db.exec(sql);
+  }
+
+  for (const sql of MIGRATIONS_V5) {
     db.exec(sql);
   }
 
