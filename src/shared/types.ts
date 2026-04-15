@@ -33,7 +33,7 @@ export type ChildTaskStatus =
   | "error"
   | "cancelled";
 
-export type TaskSource = "cli" | "web";
+export type TaskSource = "cli" | "web" | "messaging";
 
 export interface Task {
   id: string;

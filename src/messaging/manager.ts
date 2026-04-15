@@ -40,9 +40,14 @@ const COMMAND_HELP: Record<string, string> = {
     "Example: !projects",
   ].join("\n"),
   project: [
-    "!project",
-    "List all projects with their ID (first 8 chars), status, and title.",
-    "Example: !project",
+    "!project <title> [-r repo [-r repo2]] [-d description text]",
+    "Create a new project from a messaging platform.",
+    "Options:",
+    "  -r <repo>   Target repo (can be repeated for multi-repo)",
+    "  -d <text>   Description (optional; all tokens after -d until next flag)",
+    "Examples:",
+    "  !project New auth system -r my-api",
+    "  !project Refactor login -r my-api -d Remove legacy session handling",
   ].join("\n"),
   "repo": [
     "!repo add <git-url> [--name <name>]",
@@ -232,8 +237,10 @@ export class MessagingManager {
         await this.cmdRepos(cmd);
         break;
       case "projects":
-      case "project":
         await this.cmdProjects(cmd);
+        break;
+      case "project":
+        await this.cmdProject(cmd);
         break;
       case "repo":
         await this.cmdRepo(cmd);
@@ -668,6 +675,30 @@ export class MessagingManager {
 
   // Command handlers
 
+  private async createTask(
+    cmd: CommandEvent,
+    body: Record<string, unknown>,
+    successLabel: string
+  ): Promise<void> {
+    body.source_sender_id = cmd.senderId;
+    body.source_provider = cmd.providerName;
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const data = await res.json() as { id: string; title: string };
+      this.taskCreators.set(data.id, { senderId: cmd.senderId, providerName: cmd.providerName });
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `${successLabel}: ${data.id.slice(0, 8)}`);
+    } else {
+      const err = await res.json() as { error: string };
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    }
+  }
+
   private async cmdRun(cmd: CommandEvent): Promise<void> {
     // Parse: !run <description> [-r repo [-r repo2]]
     const repoNames: string[] = [];
@@ -694,26 +725,59 @@ export class MessagingManager {
       body.repo_name = repoNames[0];
     }
 
-    // Pass creator info through the API so task-runner can use it for channel invites.
-    // We include source_sender_id and source_provider so createTaskChannel knows who to invite
-    // without relying on the in-memory taskCreators map (which has a race condition).
-    body.source_sender_id = cmd.senderId;
-    body.source_provider = cmd.providerName;
+    await this.createTask(cmd, body, "Task queued");
+  }
 
-    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+  private async cmdProject(cmd: CommandEvent): Promise<void> {
+    // Parse: !project <title> [-r repo [-r repo2]] [-d description text]
+    // Tokens before the first flag form the title.
+    // -r <repo> can appear multiple times.
+    // -d <text> consumes all remaining tokens until the next recognized flag.
+    const repoNames: string[] = [];
+    const titleParts: string[] = [];
+    const descParts: string[] = [];
 
-    if (res.ok) {
-      const data = await res.json() as { id: string; title: string };
-      this.taskCreators.set(data.id, { senderId: cmd.senderId, providerName: cmd.providerName });
-      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task queued: ${data.id.slice(0, 8)}`);
-    } else {
-      const err = await res.json() as { error: string };
-      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+    let i = 0;
+    // Collect title tokens until first flag
+    while (i < cmd.args.length && cmd.args[i] !== "-r" && cmd.args[i] !== "-d") {
+      titleParts.push(cmd.args[i++]);
     }
+    // Parse remaining flags
+    while (i < cmd.args.length) {
+      if (cmd.args[i] === "-r" && cmd.args[i + 1]) {
+        repoNames.push(cmd.args[++i]);
+        i++;
+      } else if (cmd.args[i] === "-d") {
+        i++;
+        // Consume tokens until next recognized flag
+        while (i < cmd.args.length && !(cmd.args[i] === "-r" || cmd.args[i] === "-d")) {
+          descParts.push(cmd.args[i++]);
+        }
+      } else {
+        i++;
+      }
+    }
+
+    const title = titleParts.join(" ").trim();
+    if (!title) {
+      await this.getSenderProvider(cmd)?.sendMessage(
+        cmd.channelId,
+        "Usage: !project <title> [-r repo [-r repo2]] [-d description text]\nType !help project for details."
+      );
+      return;
+    }
+
+    // description defaults to "" when -d is omitted (prevents route throwing on undefined.slice())
+    const description = descParts.join(" ");
+
+    const body: Record<string, unknown> = { title, description, source: "messaging" };
+    if (repoNames.length > 1) {
+      body.repo_names = repoNames;
+    } else if (repoNames.length === 1) {
+      body.repo_name = repoNames[0];
+    }
+
+    await this.createTask(cmd, body, "Project queued");
   }
 
   private async cmdRepo(cmd: CommandEvent): Promise<void> {
@@ -1410,6 +1474,7 @@ export class MessagingManager {
       "",
       "General (any channel):",
       "  !run <description> [-r repo]   Submit a new task",
+      "  !project <title> [-r repo] [-d desc]  Create a named project",
       "  !list                          List recent tasks (last 20)",
       "  !status [id]                   Show task details",
       "  !cancel [id]                   Cancel a running task",
