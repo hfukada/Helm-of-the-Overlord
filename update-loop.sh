@@ -9,6 +9,7 @@ while true; do
     export GIT_DATETIME=$(git log -1 --format=%cI)
     docker image rm -f hoto-sandbox:latest
     docker compose up -d --build
+    date
   fi
   sleep 30
 done
