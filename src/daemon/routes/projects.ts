@@ -18,7 +18,6 @@ projects.get("/", (c) => {
 
 projects.post("/", async (c) => {
   const body = await c.req.json<Record<string, string | string[] | null>>();
-  if (!body.title) return c.json({ error: "title is required" }, 400);
   if (!body.description) return c.json({ error: "description is required" }, 400);
 
   const db = getDb();
@@ -26,8 +25,8 @@ projects.post("/", async (c) => {
   const now = new Date().toISOString();
   db.run(
     `INSERT INTO projects (id, title, description, status, architecture_notes, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
-     VALUES (?, ?, ?, 'active', ?, '[]', 0, NULL, ?, ?, ?, ?)`,
-    [id, body.title as string, body.description as string, (body.architecture_notes as string | null) ?? null, body.source_sender_id ?? null, body.source_provider ?? null, now, now]
+     VALUES (?, ?, ?, 'planning', ?, '[]', 0, NULL, ?, ?, ?, ?)`,
+    [id, "Planning\u2026", body.description as string, (body.architecture_notes as string | null) ?? null, body.source_sender_id ?? null, body.source_provider ?? null, now, now]
   );
 
   const repoNames: string[] = Array.isArray(body.repo_names)

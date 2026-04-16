@@ -40,16 +40,14 @@ const COMMAND_HELP: Record<string, string> = {
     "Example: !projects",
   ].join("\n"),
   project: [
-    "!project <title> [-r repo [-r repo2]] [-d description text]",
+    "!project <description> [-r repo [-r repo2]]",
     "  Create a new project.",
+    "!project list",
+    "  List all projects.",
+    "!project status <id>",
+    "  Show project milestones and status.",
     "!project delete <id>",
     "  Delete a project by ID (prefix match accepted).",
-    "Options for create:",
-    "  -r <repo>   Target repo (can be repeated for multi-repo)",
-    "  -d <text>   Description (optional)",
-    "Examples:",
-    "  !project New auth system -r my-api",
-    "  !project delete 01JA3B",
   ].join("\n"),
   "repo": [
     "!repo add <git-url> [--name <name>]",
@@ -764,55 +762,107 @@ export class MessagingManager {
       return;
     }
 
-    // Parse: !project <title> [-r repo [-r repo2]] [-d description text]
-    // Tokens before the first flag form the title.
-    // -r <repo> can appear multiple times.
-    // -d <text> consumes all remaining tokens until the next recognized flag.
+    if (cmd.args[0] === "list") {
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/projects`);
+      if (!res.ok) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Failed to list projects.");
+        return;
+      }
+      const projects = await res.json() as Array<{ id: string; status: string; title: string }>;
+      if (projects.length === 0) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "No projects.");
+        return;
+      }
+      const lines = projects.map((p) => `${p.id.slice(0, 8)}  [${p.status}]  ${p.title}`);
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
+      return;
+    }
+
+    if (cmd.args[0] === "status") {
+      const rawId = cmd.args[1];
+      if (!rawId) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !project status <id>");
+        return;
+      }
+      const db = getDb();
+      const row = db.query("SELECT id FROM projects WHERE id LIKE ?").get(`${rawId}%`) as { id: string } | null;
+      if (!row) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Project not found: ${rawId}`);
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/projects/${row.id}`);
+      if (!res.ok) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Failed to fetch project.");
+        return;
+      }
+      const project = await res.json() as { id: string; title: string; status: string; milestones: string; current_milestone: number };
+      const milestones = JSON.parse(project.milestones ?? "[]") as Array<{ description: string; completed: boolean }>;
+      const current = project.current_milestone ?? 0;
+      const lines: string[] = [`${project.title} [${project.status}]`];
+      milestones.forEach((m, idx) => {
+        const label = m.completed ? "done" : idx === current ? "in-progress" : "pending";
+        lines.push(`  ${idx + 1}. [${label}] ${m.description}`);
+      });
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, lines.join("\n"));
+      return;
+    }
+
+    // Create: parse <description> [-r repo [-r repo2]]
     const repoNames: string[] = [];
-    const titleParts: string[] = [];
     const descParts: string[] = [];
 
     let i = 0;
-    // Collect title tokens until first flag
-    while (i < cmd.args.length && cmd.args[i] !== "-r" && cmd.args[i] !== "-d") {
-      titleParts.push(cmd.args[i++]);
+    while (i < cmd.args.length && cmd.args[i] !== "-r") {
+      descParts.push(cmd.args[i++]);
     }
-    // Parse remaining flags
     while (i < cmd.args.length) {
       if (cmd.args[i] === "-r" && cmd.args[i + 1]) {
         repoNames.push(cmd.args[++i]);
         i++;
-      } else if (cmd.args[i] === "-d") {
-        i++;
-        // Consume tokens until next recognized flag
-        while (i < cmd.args.length && !(cmd.args[i] === "-r" || cmd.args[i] === "-d")) {
-          descParts.push(cmd.args[i++]);
-        }
       } else {
         i++;
       }
     }
 
-    const title = titleParts.join(" ").trim();
-    if (!title) {
+    const description = descParts.join(" ").trim();
+    if (!description) {
       await this.getSenderProvider(cmd)?.sendMessage(
         cmd.channelId,
-        "Usage: !project <title> [-r repo [-r repo2]] [-d description text]\nType !help project for details."
+        "Usage: !project <description> [-r repo [-r repo2]]\nType !help project for details."
       );
       return;
     }
 
-    // description defaults to "" when -d is omitted (prevents route throwing on undefined.slice())
-    const description = descParts.join(" ");
-
-    const body: Record<string, unknown> = { title, description, source: "messaging" };
+    const body: Record<string, unknown> = {
+      description,
+      source_sender_id: cmd.senderId,
+      source_provider: cmd.providerName,
+    };
     if (repoNames.length > 1) {
       body.repo_names = repoNames;
     } else if (repoNames.length === 1) {
       body.repo_name = repoNames[0];
     }
 
-    await this.createTask(cmd, body, "Project queued");
+    const createRes = await fetch(`http://127.0.0.1:${config.daemonPort}/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!createRes.ok) {
+      const text = await createRes.text();
+      try {
+        const err = JSON.parse(text) as { error: string };
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+      } catch {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${text}`);
+      }
+      return;
+    }
+
+    const data = await createRes.json() as { id: string };
+    await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Project queued: ${data.id.slice(0, 8)}`);
   }
 
   private async cmdRepo(cmd: CommandEvent): Promise<void> {
