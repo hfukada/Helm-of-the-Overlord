@@ -12,6 +12,7 @@ import { config } from "../../shared/config";
 import type { Repo } from "../../shared/types";
 import { claudeStream } from "../../shared/claude-cli";
 import { renderTemplate } from "../../prompts/loader";
+import { READ_EXEC_TOOLS } from "../../agent";
 
 const knowledge = new Hono();
 
@@ -255,11 +256,8 @@ function runAskInBackground(askId: string, query: string, results: SearchResult[
       "INSERT INTO ask_stream (ask_query_id, event_type, content) VALUES (?, ?, ?)"
     );
 
-    const askTools = config.sandboxClaude
-      ? ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
-      : ["Read", "Glob", "Grep"];
     return claudeStream(
-      { prompt, systemPrompt, maxTurns: 5, allowedTools: askTools },
+      { prompt, systemPrompt, maxTurns: 15, allowedTools: READ_EXEC_TOOLS.map(t => t.name) },
       async (evt) => {
         insertEvent.run(askId, evt.type, evt.content);
       },
