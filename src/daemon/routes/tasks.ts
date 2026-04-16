@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
-import { runTask, cleanupTask } from "../../orchestrator/task-runner";
+import { runTask, cleanupTask, updateTaskStatus } from "../../orchestrator/task-runner";
+import type { TaskStatus } from "../../shared/types";
 import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
@@ -287,6 +288,29 @@ tasks.post("/:id/cancel", async (c) => {
   });
 
   return c.json({ id, status: "cancelled" });
+});
+
+tasks.post("/:id/resume", async (c) => {
+  const id = c.req.param("id");
+  const db = getDb();
+
+  const row = db.query("SELECT status FROM tasks WHERE id = ?")
+    .get(id) as { status: string } | null;
+  if (!row) return c.json({ error: "Task not found" }, 404);
+
+  const resumable: TaskStatus[] = ["failed", "error", "cancelled", "waiting_for_children"];
+  if (!resumable.includes(row.status as TaskStatus)) {
+    return c.json({ error: `Task is not resumable (status: ${row.status})` }, 409);
+  }
+
+  const priorStatus = row.status;
+  updateTaskStatus(id, "resuming");
+
+  runTask(id, { resume: true, priorStatus }).catch((err) => {
+    logger.error("Resume task crashed", { taskId: id, error: String(err) });
+  });
+
+  return c.json({ id });
 });
 
 /**

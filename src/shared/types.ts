@@ -19,7 +19,8 @@ export type TaskStatus =
   | "committed"
   | "error"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "resuming";
 
 export type ChildTaskStatus =
   | "pending"

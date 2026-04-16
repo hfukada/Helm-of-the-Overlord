@@ -78,7 +78,7 @@ export function makeAgentOutputForwarder(
   };
 }
 
-function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
+export function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
   const db = getDb();
   const now = new Date().toISOString();
   if (blueprintState) {
@@ -394,7 +394,51 @@ export function loadTaskAndRepos(taskId: string): { task: Task; repos: Repo[] } 
   return null;
 }
 
-export async function runTask(taskId: string): Promise<void> {
+async function resumeChildTasks(taskId: string): Promise<void> {
+  const db = getDb();
+  const { runChildTask, checkParentCompletion } = await import("./child-task-runner");
+
+  const staleChildren = db.query(
+    `SELECT id FROM child_tasks
+     WHERE parent_task_id = ? AND status IN ('error', 'cancelled')`
+  ).all(taskId) as Array<{ id: string }>;
+
+  if (staleChildren.length === 0) {
+    checkParentCompletion(taskId);
+    return;
+  }
+
+  const now = new Date().toISOString();
+  for (const { id } of staleChildren) {
+    db.run("UPDATE child_tasks SET status = 'pending', updated_at = ? WHERE id = ?", [now, id]);
+  }
+
+  const results = await Promise.allSettled(staleChildren.map(({ id }) => runChildTask(id)));
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === "rejected") {
+      logger.error("Resumed child task crashed", { childId: staleChildren[i].id, error: String(result.reason) });
+      db.run("UPDATE child_tasks SET status = 'error', updated_at = ? WHERE id = ?", [now, staleChildren[i].id]);
+    }
+  }
+
+  checkParentCompletion(taskId);
+}
+
+export async function runTask(taskId: string, opts?: { resume?: boolean; priorStatus?: string }): Promise<void> {
+  if (opts?.resume) {
+    if (opts.priorStatus === "waiting_for_children") {
+      // Worktrees still exist -- skip pipeline, re-spawn failed children only.
+      updateTaskStatus(taskId, "waiting_for_children");
+      await resumeChildTasks(taskId);
+      return;
+    }
+
+    // For "error", "failed", or "cancelled": clean up worktrees before re-running full pipeline.
+    await cleanupTask(taskId);
+    // Fall through -- the existing runTask body re-clones and runs the full pipeline.
+  }
+
   const loaded = loadTaskAndRepos(taskId);
   if (!loaded) {
     logger.error("Task or repo not found", { taskId });
