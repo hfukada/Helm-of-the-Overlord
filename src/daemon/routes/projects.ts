@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
 import { fixDates, fixDatesAll } from "../dates";
+import { logger } from "../../shared/logger";
 
 const projects = new Hono();
 
@@ -16,16 +17,36 @@ projects.get("/", (c) => {
 });
 
 projects.post("/", async (c) => {
-  const body = await c.req.json<Record<string, string | null>>();
+  const body = await c.req.json<Record<string, string | string[] | null>>();
   if (!body.title) return c.json({ error: "title is required" }, 400);
   if (!body.description) return c.json({ error: "description is required" }, 400);
 
   const db = getDb();
   const id = ulid();
+  const now = new Date().toISOString();
   db.run(
-    "INSERT INTO projects (id, title, description, architecture_notes) VALUES (?, ?, ?, ?)",
-    [id, body.title, body.description, body.architecture_notes ?? null]
+    `INSERT INTO projects (id, title, description, status, architecture_notes, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
+     VALUES (?, ?, ?, 'active', ?, '[]', 0, NULL, ?, ?, ?, ?)`,
+    [id, body.title as string, body.description as string, (body.architecture_notes as string | null) ?? null, body.source_sender_id ?? null, body.source_provider ?? null, now, now]
   );
+
+  const repoNames: string[] = Array.isArray(body.repo_names)
+    ? body.repo_names
+    : body.repo_name
+    ? [body.repo_name as string]
+    : [];
+
+  const { createProject } = await import("../../projects/runner");
+  createProject(
+    body.description as string,
+    repoNames,
+    (body.source_sender_id as string | null) ?? null,
+    (body.source_provider as string | null) ?? null,
+    id,
+  ).catch((err) => {
+    logger.error("Background project creation failed", { projectId: id, error: String(err) });
+  });
+
   const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown>;
   return c.json(fixDates(row, "created_at", "updated_at"), 201);
 });

@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { ulid } from "ulid";
 import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
@@ -21,13 +21,14 @@ function saveProject(project: Project): void {
   const db = getDb();
   const now = new Date().toISOString();
   db.run(
-    `UPDATE projects SET title=?, description=?, status=?, milestones=?, current_milestone=?, updated_at=? WHERE id=?`,
+    `UPDATE projects SET title=?, description=?, status=?, milestones=?, current_milestone=?, carry_over_notes=?, updated_at=? WHERE id=?`,
     [
       project.title,
       project.description,
       project.status,
       JSON.stringify(project.milestones),
       project.current_milestone,
+      project.carry_over_notes ?? null,
       now,
       project.id,
     ]
@@ -38,17 +39,19 @@ export async function createProject(
   description: string,
   repoNames: string[],
   sourceSenderId: string | null,
-  sourceProvider: string | null
+  sourceProvider: string | null,
+  preAllocatedId?: string,
 ): Promise<{ id: string; title: string }> {
   const db = getDb();
-  const id = randomUUID();
-  const now = new Date().toISOString();
-
-  db.run(
-    `INSERT INTO projects (id, title, description, status, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
-     VALUES (?, ?, ?, 'planning', '[]', 0, NULL, ?, ?, ?, ?)`,
-    [id, "Planning\u2026", description, sourceSenderId, sourceProvider, now, now]
-  );
+  const id = preAllocatedId ?? ulid();
+  if (!preAllocatedId) {
+    const now = new Date().toISOString();
+    db.run(
+      `INSERT INTO projects (id, title, description, status, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
+       VALUES (?, ?, ?, 'planning', '[]', 0, NULL, ?, ?, ?, ?)`,
+      [id, "Planning\u2026", description, sourceSenderId, sourceProvider, now, now]
+    );
+  }
 
   // Build MCP config in the project directory — never use taskDir for projects
   const pDir = await ensureProjectDir(id);
@@ -106,7 +109,14 @@ export async function advanceProject(projectId: string): Promise<void> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        description: `[Project: ${project.title} \u2014 Milestone ${milestone.index + 1}/${project.milestones.length}]\n\n${milestone.description}`,
+        description: [
+          `[Project: ${project.title} \u2014 Milestone ${milestone.index + 1}/${project.milestones.length}]`,
+          "",
+          milestone.description,
+          ...(project.carry_over_notes
+            ? ["", "Carry-over notes from previous milestone:", project.carry_over_notes]
+            : []),
+        ].join("\n"),
         source_sender_id: project.source_sender_id,
         source_provider: project.source_provider,
       }),
@@ -142,6 +152,18 @@ export async function onTaskCompleted(taskId: string): Promise<void> {
     };
     const milestone = project.milestones[project.current_milestone];
     if (milestone?.task_id !== taskId) continue;
+
+    // Capture carry-over notes from the completed task's latest agent run
+    const latestRun = db
+      .query(
+        "SELECT output FROM agent_runs WHERE task_id = ? AND status = 'completed' ORDER BY finished_at DESC LIMIT 1"
+      )
+      .get(taskId) as { output: string | null } | null;
+    if (latestRun?.output) {
+      project.carry_over_notes = latestRun.output.slice(0, 2000);
+    } else {
+      project.carry_over_notes = null;
+    }
 
     milestone.completed = true;
     project.current_milestone += 1;
