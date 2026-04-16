@@ -216,7 +216,7 @@ export async function runChildTask(childId: string): Promise<void> {
     registryKey: childId,
   });
   const hasMcp = !!mcpConfigPath;
-  const onEvent = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
+  const { onEvent, done: doneForwarding } = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
 
   // Build the implement prompt. The plan_excerpt already contains:
   // - The shared Summary and Cross-Repo Context (from the parent's finalize-plan)
@@ -241,18 +241,23 @@ export async function runChildTask(childId: string): Promise<void> {
 
   const taskObj = { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "implementing" as const, blueprint_state: null, branch_name: branchName, source: "cli" as const, use_full_copy: false, created_at: "", updated_at: "", child_task_id: childId };
 
-  const implResult = await executeImplement(
-    taskObj,
-    [repo],
-    workDir,
-    implementPrompt,
-    agent,
-    {
-      onEvent,
-      hasMcp,
-      effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
-    },
-  );
+  let implResult: Awaited<ReturnType<typeof executeImplement>>;
+  try {
+    implResult = await executeImplement(
+      taskObj,
+      [repo],
+      workDir,
+      implementPrompt,
+      agent,
+      {
+        onEvent,
+        hasMcp,
+        effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
+      },
+    );
+  } finally {
+    doneForwarding();
+  }
 
   if (implResult.error) {
     if (isChildCancelled(childId)) return;
@@ -571,7 +576,7 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
     mcpConfigPath,
   });
   const hasMcp = !!mcpConfigPath;
-  const onEvent = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
+  const { onEvent, done: doneForwarding } = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
 
   // Triage + plan fix
   const { executeUnderstandReview, executeReviewSmallFeedback, executeReviewLargeFeedback } = await import("./nodes/agentic/review-feedback");
@@ -604,14 +609,19 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
 
   // Implement fix
   updateChildStatus(childId, "implementing");
-  const implResult = await executeImplement(
-    taskProxy, [repo], workDir, fixPlan, agent,
-    {
-      onEvent,
-      hasMcp,
-      effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
-    },
-  );
+  let implResult: Awaited<ReturnType<typeof executeImplement>>;
+  try {
+    implResult = await executeImplement(
+      taskProxy, [repo], workDir, fixPlan, agent,
+      {
+        onEvent,
+        hasMcp,
+        effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
+      },
+    );
+  } finally {
+    doneForwarding();
+  }
 
   if (implResult.error) {
     notifyParent(parentTaskId, repo.name, `Revision implementation failed: ${implResult.error}`);

@@ -36,7 +36,7 @@ const INPUT_POLL_INTERVAL_MS = 2000;
  */
 export function makeAgentOutputForwarder(
   notify: (msg: string) => void
-): (event: AgentEvent) => void {
+): { onEvent: (event: AgentEvent) => void; done: () => void } {
   const FLUSH_INTERVAL_MS = 2000;
   let textBuffer = "";
   let textTimer: ReturnType<typeof setTimeout> | null = null;
@@ -65,15 +65,23 @@ export function makeAgentOutputForwarder(
     // type === "thinking" and type === "result" (tool_result) are silently dropped
   });
 
-  return (event: AgentEvent) => {
+  const done = () => {
+    if (textTimer) { clearTimeout(textTimer); textTimer = null; }
+    flushText();
+  };
+
+  const onEvent = (event: AgentEvent) => {
     if (event.type === "tool_call") {
-      formatter.push("tool_use", `Tool: ${event.toolName}\n${JSON.stringify(event.args ?? {})}`);
+      const argsStr = typeof event.args === "string" ? event.args : JSON.stringify(event.args ?? {});
+      formatter.push("tool_use", `Tool: ${event.toolName}\n${argsStr}`);
       formatter.flush();
     } else if (event.type === "text") {
       if (event.content) formatter.push("text", event.content);
     }
     // "thinking" and "tool_result" are intentionally skipped
   };
+
+  return { onEvent, done };
 }
 
 export function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
@@ -557,9 +565,9 @@ export async function runTask(taskId: string): Promise<void> {
   if (isTaskCancelled(task.id)) return;
 
   // === PLAN -> SCRUTINIZE -> PLAN AGAIN -> SCRUTINIZE -> FINALIZE ===
-  const onThinking = manager
+  const { onEvent: onThinking, done: doneThinking } = manager
     ? makeAgentOutputForwarder((msg) => manager.notifyAgentOutput(task.id, msg).catch(() => {}))
-    : () => {};
+    : { onEvent: () => {}, done: () => {} };
   const { executeScrutinize, executePlanAgain, executeFinalizePlan } = await import("./nodes/agentic/scrutinize");
 
   const { buildPlanPrompt } = await import("./context-builder");
@@ -689,6 +697,8 @@ export async function runTask(taskId: string): Promise<void> {
   if (!/^#{1,3}\s*(Summary|Execution Plan|Per-Repo Plans)\b/m.test(planResult.plan)) {
     logger.warn("Final plan lacks structured sections, task may produce poor results", { taskId: task.id, len: planResult.plan.length });
   }
+
+  doneThinking();
 
   if (isTaskCancelled(task.id)) return;
 
