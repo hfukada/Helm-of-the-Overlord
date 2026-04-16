@@ -6,9 +6,9 @@ import { createInitialState, advanceState, restartFromPhase } from "./blueprint"
 import { NotFoundError } from "./errors";
 import { executePlan } from "./nodes/agentic/plan";
 import { rm } from "node:fs/promises";
-
+import { existsSync } from "node:fs";
 import { createTaskClone, generateBranchName } from "../workspace/git";
-import { ensureTaskDir, taskDir, } from "../workspace/manager";
+import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
@@ -402,8 +402,8 @@ export async function runTask(taskId: string): Promise<void> {
 
   let { task, repos } = loaded;
 
-  // Set up branch name first so we can announce it
-  const branchName = generateBranchName(task.id, task.title);
+  // Reuse existing branch name if the task already has one (e.g. resume after restart)
+  const branchName = task.branch_name || generateBranchName(task.id, task.title);
   updateTaskBranch(task.id, branchName);
 
   // Create messaging channel for this task
@@ -469,13 +469,19 @@ export async function runTask(taskId: string): Promise<void> {
   const workDirs = new Map<string, string>(); // repoName -> workDir
 
   for (const repo of repos) {
-    try {
-      const wd = await createTaskClone(repo.path, task.id, repo.name, branchName);
-      workDirs.set(repo.name, wd);
-    } catch (err) {
-      logger.error("Failed to clone repo for task", { repo: repo.name, error: String(err) });
-      updateTaskStatus(task.id, "failed");
-      return;
+    const existingDir = worktreeDir(task.id, repo.name);
+    if (existsSync(existingDir)) {
+      logger.info("Worktree already exists, skipping clone", { repo: repo.name, dir: existingDir });
+      workDirs.set(repo.name, existingDir);
+    } else {
+      try {
+        const wd = await createTaskClone(repo.path, task.id, repo.name, branchName);
+        workDirs.set(repo.name, wd);
+      } catch (err) {
+        logger.error("Failed to clone repo for task", { repo: repo.name, error: String(err) });
+        updateTaskStatus(task.id, "failed");
+        return;
+      }
     }
   }
 

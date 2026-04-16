@@ -29,14 +29,6 @@ services:
       - gitea
       - ollama
 
-  sandbox:
-    build:
-      context: .
-      dockerfile: Dockerfile.sandbox
-    image: hoto-sandbox:latest
-    entrypoint: ["true"]
-    restart: "no"
-
   ollama:
     image: ollama/ollama:latest
     entrypoint: ["/bin/sh", "/scripts/ollama-init.sh"]

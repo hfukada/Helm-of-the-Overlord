@@ -24,6 +24,7 @@ export interface Config {
   giteaPollIntervalMs: number;
   sandboxClaude: boolean;
   mcpHttpPort: number;
+  autoResumeOnStartup: boolean;
 }
 
 function expandHome(p: string): string {
@@ -56,6 +57,7 @@ function loadConfig(): Config {
   const giteaPollIntervalMs = parseInt(process.env.GITEA_POLL_INTERVAL_MS ?? "15000", 10);
   const sandboxClaude = process.env.HOTO_SANDBOX_CLAUDE === "true" || process.env.HOTO_SANDBOX_CLAUDE === "1";
   const mcpHttpPort = parseInt(process.env.HOTO_MCP_HTTP_PORT ?? "7778", 10);
+  const autoResumeOnStartup = process.env.HOTO_AUTO_RESUME !== "false" && process.env.HOTO_AUTO_RESUME !== "0";
 
   return {
     workspaceDir,
@@ -79,6 +81,7 @@ function loadConfig(): Config {
     giteaPollIntervalMs,
     sandboxClaude,
     mcpHttpPort,
+    autoResumeOnStartup,
   };
 }
 
