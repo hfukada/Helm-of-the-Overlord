@@ -41,13 +41,15 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\n"),
   project: [
     "!project <title> [-r repo [-r repo2]] [-d description text]",
-    "Create a new project from a messaging platform.",
-    "Options:",
+    "  Create a new project.",
+    "!project delete <id>",
+    "  Delete a project by ID (prefix match accepted).",
+    "Options for create:",
     "  -r <repo>   Target repo (can be repeated for multi-repo)",
-    "  -d <text>   Description (optional; all tokens after -d until next flag)",
+    "  -d <text>   Description (optional)",
     "Examples:",
     "  !project New auth system -r my-api",
-    "  !project Refactor login -r my-api -d Remove legacy session handling",
+    "  !project delete 01JA3B",
   ].join("\n"),
   "repo": [
     "!repo add <git-url> [--name <name>]",
@@ -697,6 +699,33 @@ export class MessagingManager {
   }
 
   private async cmdProject(cmd: CommandEvent): Promise<void> {
+    if (cmd.args[0] === "delete") {
+      const rawId = cmd.args[1];
+      if (!rawId) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !project delete <id>");
+        return;
+      }
+      const db = getDb();
+      const row = db.query("SELECT id, title FROM projects WHERE id LIKE ?").get(`${rawId}%`) as { id: string; title: string } | null;
+      if (!row) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Project not found: ${rawId}`);
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/projects/${row.id}`, { method: "DELETE" });
+      if (res.ok) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Project deleted: ${row.title}`);
+      } else {
+        const body = await res.text();
+        try {
+          const err = JSON.parse(body) as { error: string };
+          await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+        } catch {
+          await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${body}`);
+        }
+      }
+      return;
+    }
+
     // Parse: !project <title> [-r repo [-r repo2]] [-d description text]
     // Tokens before the first flag form the title.
     // -r <repo> can appear multiple times.

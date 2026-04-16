@@ -64,4 +64,13 @@ projects.patch("/:id", async (c) => {
   return c.json(fixDates(row, "created_at", "updated_at"));
 });
 
+projects.delete("/:id", (c) => {
+  const db = getDb();
+  const id = c.req.param("id");
+  const existing = db.query("SELECT id FROM projects WHERE id = ?").get(id);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  db.run("DELETE FROM projects WHERE id = ?", [id]);
+  return c.json({ id, deleted: true });
+});
+
 export default projects;
