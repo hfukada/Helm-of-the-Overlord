@@ -29,6 +29,31 @@ import { $ } from "bun";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { ClaudeCodeCliAgent } from "../agent";
 import { makeAgentOutputForwarder } from "./task-runner";
+import { claudeText } from "../shared/claude-cli";
+
+async function generatePrTitle(taskDescription: string, planExcerpt: string): Promise<string> {
+  const fallback = taskDescription.length > 60
+    ? `${taskDescription.slice(0, 60)}...`
+    : taskDescription;
+  try {
+    const result = await claudeText({
+      prompt: [
+        "Generate a concise pull request title for the following task.",
+        "Rules: imperative mood, max 72 characters, no trailing period, no quotes, no \"hoto:\" prefix.",
+        "",
+        `Task: ${taskDescription}`,
+        `Plan summary: ${planExcerpt.slice(0, 500)}`,
+        "",
+        "Reply with only the title, nothing else.",
+      ].join("\n"),
+    });
+    const title = result.trim().replace(/^["']|["']$/g, "");
+    return title.length > 0 ? title : fallback;
+  } catch (err) {
+    logger.warn("generatePrTitle failed, using fallback", { error: String(err) });
+    return fallback;
+  }
+}
 
 const MAX_LINT_ROUNDS = 2;
 const MAX_CI_ROUNDS = 2;
@@ -374,9 +399,10 @@ export async function runChildTask(childId: string): Promise<void> {
     const baseBranch = await getDefaultBranch(repo.path);
     await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
 
+    const prTitle = await generatePrTitle(parentRow.title, planExcerpt);
     const pr = await createPullRequest(
       repo.name, branchName, baseBranch,
-      `hoto: ${parentRow.title}`,
+      `hoto: ${prTitle}`,
       `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt.slice(0, 2000)}`
     );
 
