@@ -411,7 +411,7 @@ export async function runChildTask(childId: string): Promise<void> {
     const pr = await createPullRequest(
       repo.name, branchName, baseBranch,
       `hoto: ${prTitle}`,
-      `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt.slice(0, 2000)}`
+      `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt}`
     );
 
     const prUrl = rewriteGiteaUrl(pr.html_url);
