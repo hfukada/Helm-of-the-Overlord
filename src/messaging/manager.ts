@@ -643,6 +643,44 @@ export class MessagingManager {
     }
   }
 
+  private async listOrphanedChannels(): Promise<Array<{ provider: MessagingProvider; channelId: string }>> {
+    const db = getDb();
+    const known = db.query('SELECT channel_id FROM messaging_channels').all() as Array<{ channel_id: string }>;
+    const knownIds = new Set(known.map((r) => r.channel_id));
+
+    const orphans: Array<{ provider: MessagingProvider; channelId: string }> = [];
+    for (const provider of this.providers.values()) {
+      let live: string[];
+      try {
+        live = await provider.listTaskChannels();
+      } catch (err) {
+        logger.warn('Failed to list task channels from provider', { provider: provider.providerName, error: String(err) });
+        continue;
+      }
+      for (const channelId of live) {
+        if (!knownIds.has(channelId)) {
+          orphans.push({ provider, channelId });
+        }
+      }
+    }
+    return orphans;
+  }
+
+  async cleanOrphanedChannels(): Promise<{ cleaned: string[]; errors: Array<{ channelId: string; error: string }> }> {
+    const orphans = await this.listOrphanedChannels();
+    const cleaned: string[] = [];
+    const errors: Array<{ channelId: string; error: string }> = [];
+    for (const { provider, channelId } of orphans) {
+      try {
+        await this.kickAndArchiveChannelId(provider, channelId);
+        cleaned.push(channelId);
+      } catch (err) {
+        errors.push({ channelId, error: String(err) });
+      }
+    }
+    return { cleaned, errors };
+  }
+
   // Command handlers
 
   private async createTask(
@@ -1284,7 +1322,12 @@ export class MessagingManager {
       return;
     }
 
-    const data = await res.json() as { deleted: string[]; errors: Array<{ id: string; error: string }> };
+    const data = await res.json() as {
+      deleted: string[];
+      errors: Array<{ id: string; error: string }>;
+      orphanedChannelsCleaned: string[];
+      orphanedChannelsErrors: Array<{ channelId: string; error: string }>;
+    };
     const lines: string[] = [];
 
     if (data.deleted.length === 0) {
@@ -1293,10 +1336,21 @@ export class MessagingManager {
       lines.push(`Deleted ${data.deleted.length} finished task(s).`);
     }
 
+    if (data.orphanedChannelsCleaned.length > 0) {
+      lines.push(`Cleaned ${data.orphanedChannelsCleaned.length} orphaned channel(s).`);
+    }
+
     if (data.errors.length > 0) {
-      lines.push(`${data.errors.length} error(s):`);
+      lines.push(`${data.errors.length} task deletion error(s):`);
       for (const e of data.errors) {
         lines.push(`  ${e.id.slice(0, 8)}: ${e.error}`);
+      }
+    }
+
+    if (data.orphanedChannelsErrors.length > 0) {
+      lines.push(`${data.orphanedChannelsErrors.length} orphaned channel cleanup error(s):`);
+      for (const e of data.orphanedChannelsErrors) {
+        lines.push(`  ${e.channelId.slice(0, 8)}: ${e.error}`);
       }
     }
 
