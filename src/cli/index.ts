@@ -17,6 +17,7 @@ Usage:
   hoto status                       List tasks
   hoto status <id>                  Task detail + diff
   hoto cancel <id>                  Cancel a task
+  hoto resume <id>                  Resume a task
   hoto delete <id>                  Delete a task and clean up all data
   hoto repos                        List tracked repos
   hoto repos add <url-or-path>     Clone/add + index repo
@@ -79,6 +80,27 @@ export async function runCli(args: string[]): Promise<void> {
           process.exit(1);
         }
         console.log(`Task ${id} deleted.`);
+      } catch {
+        console.error("Daemon is not running. Start it with: hoto daemon start");
+        process.exit(1);
+      }
+      break;
+    }
+    case "resume": {
+      const id = args[1];
+      if (!id) {
+        console.log("Usage: hoto resume <task-id>");
+        process.exit(1);
+      }
+      const { daemonUrl } = await import("../shared/config");
+      try {
+        const res = await fetch(daemonUrl(`/tasks/${id}/resume`), { method: "POST" });
+        if (!res.ok) {
+          const err = (await res.json()) as { error: string };
+          console.error(`Error: ${err.error}`);
+          process.exit(1);
+        }
+        console.log(`Task ${id} resuming.`);
       } catch {
         console.error("Daemon is not running. Start it with: hoto daemon start");
         process.exit(1);

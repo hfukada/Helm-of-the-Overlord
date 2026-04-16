@@ -233,6 +233,9 @@ export class MessagingManager {
       case "cancel":
         await this.cmdCancel(cmd);
         break;
+      case "resume":
+        await this.cmdResume(cmd);
+        break;
       case "status":
         await this.cmdStatus(cmd);
         break;
@@ -953,6 +956,26 @@ export class MessagingManager {
     } else {
       const body = await res.text();
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to cancel: ${body}`);
+    }
+  }
+
+  private async cmdResume(cmd: CommandEvent): Promise<void> {
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT task_id FROM messaging_channels WHERE channel_id = ?"
+    ).get(cmd.channelId) as { task_id: string } | null;
+    const taskId = cmd.args[0] ?? channelRow?.task_id;
+    if (!taskId) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !resume [task-id]");
+      return;
+    }
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/${taskId}/resume`, { method: "POST" });
+    if (res.ok) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task ${taskId} resuming.`);
+    } else {
+      const body = await res.text();
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to resume: ${body}`);
     }
   }
 
