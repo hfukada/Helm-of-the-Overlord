@@ -142,7 +142,7 @@ function parseRepoRow(row: Record<string, unknown>): Repo {
  * Run a child task: implement -> CI/lint -> commit/push/PR -> review.
  * Called in parallel for each repo in a multi-repo task.
  */
-export async function runChildTask(childId: string): Promise<void> {
+export async function runChildTask(childId: string, opts?: { resume?: boolean }): Promise<void> {
   const db = getDb();
 
   const childRow = db.query("SELECT * FROM child_tasks WHERE id = ?").get(childId) as Record<string, unknown> | null;
@@ -172,6 +172,31 @@ export async function runChildTask(childId: string): Promise<void> {
     logger.error("Parent task not found", { childId, parentTaskId });
     updateChildStatus(childId, "error");
     return;
+  }
+
+  // Phase-aware resume: reposition state machine to last incomplete phase.
+  if (opts?.resume) {
+    let bpState: BlueprintState | null = null;
+    try {
+      const raw = childRow.blueprint_state as string | null;
+      if (raw) bpState = JSON.parse(raw) as BlueprintState;
+    } catch {
+      logger.warn("Failed to parse child blueprint_state for resume, falling back to full restart", { childId });
+    }
+
+    if (bpState && Array.isArray(bpState.history)) {
+      const { findResumePoint } = await import("./resume-utils");
+      const { node, cleanHistory } = findResumePoint(bpState);
+      const updatedState: BlueprintState = { ...bpState, current_node: node, history: cleanHistory };
+      const now = new Date().toISOString();
+      db.run(
+        "UPDATE child_tasks SET blueprint_state = ?, current_node = ?, status = 'resuming', updated_at = ? WHERE id = ?",
+        [JSON.stringify(updatedState), node, now, childId]
+      );
+    } else {
+      logger.warn("No valid child blueprint_state, proceeding with full child restart", { childId });
+      // Full restart: fall through with no state changes.
+    }
   }
 
   logger.info("Starting child task", { childId, parentTaskId, repo: repo.name });

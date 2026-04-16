@@ -410,10 +410,10 @@ async function resumeChildTasks(taskId: string): Promise<void> {
 
   const now = new Date().toISOString();
   for (const { id } of staleChildren) {
-    db.run("UPDATE child_tasks SET status = 'pending', updated_at = ? WHERE id = ?", [now, id]);
+    db.run("UPDATE child_tasks SET status = 'resuming', updated_at = ? WHERE id = ?", [now, id]);
   }
 
-  const results = await Promise.allSettled(staleChildren.map(({ id }) => runChildTask(id)));
+  const results = await Promise.allSettled(staleChildren.map(({ id }) => runChildTask(id, { resume: true })));
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     if (result.status === "rejected") {
@@ -434,9 +434,32 @@ export async function runTask(taskId: string, opts?: { resume?: boolean; priorSt
       return;
     }
 
-    // For "error", "failed", or "cancelled": clean up worktrees before re-running full pipeline.
-    await cleanupTask(taskId);
-    // Fall through -- the existing runTask body re-clones and runs the full pipeline.
+    // Phase-aware resume: do NOT call cleanupTask — worktrees must survive.
+    // Find the last incomplete phase and reposition the state machine there.
+    const db = getDb();
+    const taskRow = db.query("SELECT blueprint_state FROM tasks WHERE id = ?").get(taskId) as { blueprint_state: string | null } | null;
+    let bpState: BlueprintState | null = null;
+    try {
+      if (taskRow?.blueprint_state) bpState = JSON.parse(taskRow.blueprint_state) as BlueprintState;
+    } catch {
+      logger.warn("Failed to parse blueprint_state for resume, falling back to full restart", { taskId });
+    }
+
+    if (!bpState || !Array.isArray(bpState.history)) {
+      logger.warn("No valid blueprint_state found for resume, falling back to full restart", { taskId });
+      await cleanupTask(taskId);
+      // Fall through to full restart below.
+    } else {
+      const { findResumePoint } = await import("./resume-utils");
+      const { node, cleanHistory } = findResumePoint(bpState);
+      const updatedState: BlueprintState = { ...bpState, current_node: node, history: cleanHistory };
+      const now = new Date().toISOString();
+      db.run(
+        "UPDATE tasks SET blueprint_state = ?, current_node = ?, updated_at = ? WHERE id = ?",
+        [JSON.stringify(updatedState), node, now, taskId]
+      );
+      // Fall through — the phase loop below will pick up from `node`.
+    }
   }
 
   const loaded = loadTaskAndRepos(taskId);
