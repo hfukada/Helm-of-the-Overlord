@@ -22,17 +22,14 @@ export function unregisterSubprocess(taskId: string, proc: Subprocess): void {
   }
 }
 
-export function killTaskSubprocesses(taskId: string): void {
+export async function killTaskSubprocesses(taskId: string): Promise<void> {
   const procs = registry.get(taskId);
   if (!procs || procs.size === 0) return;
-
   logger.info("Killing subprocesses for task", { taskId, count: procs.size });
-  for (const proc of procs) {
-    try {
-      proc.kill();
-    } catch (err) {
-      logger.warn("Failed to kill subprocess", { taskId, error: String(err) });
-    }
-  }
+  const exits = Array.from(procs).map((proc) => {
+    proc.kill();
+    return proc.exited;
+  });
   registry.delete(taskId);
+  await Promise.all(exits);
 }

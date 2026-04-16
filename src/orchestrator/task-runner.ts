@@ -1,8 +1,9 @@
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
-import type { Task, Repo, BlueprintState, TaskStatus } from "../shared/types";
-import { createInitialState, advanceState } from "./blueprint";
+import type { Task, Repo, BlueprintState, TaskStatus, BlueprintNodeType } from "../shared/types";
+import { createInitialState, advanceState, restartFromPhase } from "./blueprint";
+import { NotFoundError } from "./errors";
 import { executePlan } from "./nodes/agentic/plan";
 import { rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -301,7 +302,7 @@ function isTaskCancelled(taskId: string): boolean {
 
 export async function cleanupTask(taskId: string): Promise<void> {
   // Kill any running subprocesses for this task
-  killTaskSubprocesses(taskId);
+  await killTaskSubprocesses(taskId);
 
   // Tear down Docker container if one exists
   try {
@@ -394,74 +395,7 @@ export function loadTaskAndRepos(taskId: string): { task: Task; repos: Repo[] } 
   return null;
 }
 
-async function resumeChildTasks(taskId: string): Promise<void> {
-  const db = getDb();
-  const { runChildTask, checkParentCompletion } = await import("./child-task-runner");
-
-  const staleChildren = db.query(
-    `SELECT id FROM child_tasks
-     WHERE parent_task_id = ? AND status IN ('error', 'cancelled')`
-  ).all(taskId) as Array<{ id: string }>;
-
-  if (staleChildren.length === 0) {
-    checkParentCompletion(taskId);
-    return;
-  }
-
-  const now = new Date().toISOString();
-  for (const { id } of staleChildren) {
-    db.run("UPDATE child_tasks SET status = 'resuming', updated_at = ? WHERE id = ?", [now, id]);
-  }
-
-  const results = await Promise.allSettled(staleChildren.map(({ id }) => runChildTask(id, { resume: true })));
-  for (let i = 0; i < results.length; i++) {
-    const result = results[i];
-    if (result.status === "rejected") {
-      logger.error("Resumed child task crashed", { childId: staleChildren[i].id, error: String(result.reason) });
-      db.run("UPDATE child_tasks SET status = 'error', updated_at = ? WHERE id = ?", [now, staleChildren[i].id]);
-    }
-  }
-
-  checkParentCompletion(taskId);
-}
-
-export async function runTask(taskId: string, opts?: { resume?: boolean; priorStatus?: string }): Promise<void> {
-  if (opts?.resume) {
-    if (opts.priorStatus === "waiting_for_children") {
-      // Worktrees still exist -- skip pipeline, re-spawn failed children only.
-      updateTaskStatus(taskId, "waiting_for_children");
-      await resumeChildTasks(taskId);
-      return;
-    }
-
-    // Phase-aware resume: do NOT call cleanupTask — worktrees must survive.
-    // Find the last incomplete phase and reposition the state machine there.
-    const db = getDb();
-    const taskRow = db.query("SELECT blueprint_state FROM tasks WHERE id = ?").get(taskId) as { blueprint_state: string | null } | null;
-    let bpState: BlueprintState | null = null;
-    try {
-      if (taskRow?.blueprint_state) bpState = JSON.parse(taskRow.blueprint_state) as BlueprintState;
-    } catch {
-      logger.warn("Failed to parse blueprint_state for resume, falling back to full restart", { taskId });
-    }
-
-    if (!bpState || !Array.isArray(bpState.history)) {
-      logger.warn("No valid blueprint_state found for resume, falling back to full restart", { taskId });
-      await cleanupTask(taskId);
-      // Fall through to full restart below.
-    } else {
-      const { findResumePoint } = await import("./resume-utils");
-      const { node, cleanHistory } = findResumePoint(bpState);
-      const updatedState: BlueprintState = { ...bpState, current_node: node, history: cleanHistory };
-      const now = new Date().toISOString();
-      db.run(
-        "UPDATE tasks SET blueprint_state = ?, current_node = ?, updated_at = ? WHERE id = ?",
-        [JSON.stringify(updatedState), node, now, taskId]
-      );
-      // Fall through — the phase loop below will pick up from `node`.
-    }
-  }
-
+export async function runTask(taskId: string): Promise<void> {
   const loaded = loadTaskAndRepos(taskId);
   if (!loaded) {
     logger.error("Task or repo not found", { taskId });
@@ -811,6 +745,24 @@ export async function runTask(taskId: string, opts?: { resume?: boolean; priorSt
 
     return; // Parent task is done orchestrating
   }
+}
+
+export async function restartTaskPhase(taskId: string, phase: string): Promise<void> {
+  const db = getDb();
+  const row = db.query("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | undefined;
+  if (!row) throw new NotFoundError(`Task not found: ${taskId}`);
+  const currentState: BlueprintState = row.blueprint_state
+    ? JSON.parse(row.blueprint_state as string)
+    : createInitialState();
+  const newState = restartFromPhase(currentState, phase as BlueprintNodeType);
+  await killTaskSubprocesses(taskId);
+  db.run(
+    "UPDATE tasks SET status = 'running', blueprint_state = ? WHERE id = ?",
+    [JSON.stringify(newState), taskId]
+  );
+  runTask(taskId).catch((err) =>
+    logger.error("restartTaskPhase: runTask failed", { taskId, err })
+  );
 }
 
 export async function reviseTask(taskId: string, feedback: string): Promise<void> {
