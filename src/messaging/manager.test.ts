@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, spyOn } from "bun:test";
 import { MessagingManager } from "./manager";
 import type { MessagingProvider } from "./interface";
 
-function makeStubProvider(): MessagingProvider {
+function _makeStubProvider(): MessagingProvider {
   return {
     providerName: "stub",
     connect: async () => {},
@@ -22,6 +22,7 @@ function makeStubProvider(): MessagingProvider {
     sendFormattedMessage: async () => {},
     inviteUser: async () => {},
     kickAllMembers: async () => {},
+    listTaskChannels: async () => [],
     onCommand: () => {},
     onMessage: () => {},
   };
@@ -34,7 +35,7 @@ describe("MessagingManager.handleMessage", () => {
   beforeEach(() => {
     manager = new MessagingManager();
     manager.setMainChannel("stub", "main-channel-id");
-    cmdAskSpy = spyOn(manager as unknown as Record<string, (...args: unknown[]) => unknown>, "cmdAsk").mockResolvedValue(undefined);
+    cmdAskSpy = spyOn(manager as unknown as Record<string, (...args: unknown[]) => unknown>, "cmdAsk").mockResolvedValue(undefined as never);
   });
 
   it("routes plain-text main-channel message to cmdAsk", async () => {
@@ -66,7 +67,7 @@ describe("MessagingManager.handleMessage", () => {
   });
 
   it("does not route !-prefixed message in main channel to cmdAsk", async () => {
-    const handleCommandSpy = spyOn(manager as unknown as Record<string, (...args: unknown[]) => unknown>, "handleCommand").mockResolvedValue(undefined);
+    const handleCommandSpy = spyOn(manager as unknown as Record<string, (...args: unknown[]) => unknown>, "handleCommand").mockResolvedValue(undefined as never);
     const msg = {
       channelId: "main-channel-id",
       text: "!ask what is the status?",

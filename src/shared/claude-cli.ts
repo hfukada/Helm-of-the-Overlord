@@ -122,6 +122,13 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
     "--disallowedTools", "Bash(git remote remove:*)",
   );
 
+  // Session management for turn-loop mode
+  if (opts.resumeId) {
+    args.push("--resume", opts.resumeId);
+  } else if (opts.sessionId) {
+    args.push("--session-id", opts.sessionId);
+  }
+
   // Prompt passed via stdin to avoid shell arg length limits
   return args;
 }
@@ -168,7 +175,7 @@ function spawnClaude(args: string[], opts: ClaudeOptions) {
 
   if (opts.registryKey) {
     registerSubprocess(opts.registryKey, proc);
-    proc.exited.then(() => unregisterSubprocess(opts.registryKey!, proc));
+    proc.exited.then(() => unregisterSubprocess(opts.registryKey as string, proc));
   }
 
   return proc;
@@ -197,8 +204,9 @@ export async function claudeText(opts: ClaudeOptions): Promise<string> {
   const args = buildArgs(opts, []);
   const proc = spawnClaude(args, opts);
 
+  const stdout = proc.stdout as ReadableStream<Uint8Array>;
   const [output, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
+    new Response(stdout).text(),
     proc.exited,
   ]);
 
@@ -234,8 +242,9 @@ export async function claudeJSON(opts: ClaudeOptions): Promise<ClaudeResult> {
   const args = buildArgs(opts, ["--output-format", "json"]);
   const proc = spawnClaude(args, opts);
 
+  const stdout = proc.stdout as ReadableStream<Uint8Array>;
   const [rawOutput, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
+    new Response(stdout).text(),
     proc.exited,
   ]);
 
@@ -301,7 +310,7 @@ export async function claudeBatch(
   let error: string | null = null;
 
   try {
-    const reader = proc.stdout.getReader();
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let earlyExit = false;
@@ -401,7 +410,7 @@ export async function claudeStream(
   let error: string | null = null;
 
   try {
-    const reader = proc.stdout.getReader();
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let earlyExit = false;

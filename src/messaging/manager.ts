@@ -492,7 +492,7 @@ export class MessagingManager {
     }
   }
 
-  async notifyPRCreated(taskId: string, repoName: string, prUrl: string, taskTitle: string): Promise<void> {
+  async notifyPRCreated(_taskId: string, repoName: string, prUrl: string, taskTitle: string): Promise<void> {
     const msg = `PR created for "${taskTitle}" [${repoName}]: ${prUrl}`;
     for (const [providerName, p] of this.providers) {
       const mainChannelId = this.mainChannelIds.get(providerName);
@@ -639,50 +639,6 @@ export class MessagingManager {
     try { await provider.archiveChannel(channelId); } catch (err) {
       logger.warn("Failed to archive channel", { provider: provider.providerName, channelId, error: String(err) });
     }
-  }
-
-  private async deleteOrphanedChannels(): Promise<{ deleted: number; errors: number }> {
-    let deleted = 0;
-    let errors = 0;
-    for (const [providerName, provider] of this.providers) {
-      let liveIds: string[];
-      try {
-        liveIds = await provider.listTaskChannelIds();
-      } catch (err) {
-        logger.warn("Failed to list task channel IDs", { providerName, error: String(err) });
-        errors++;
-        continue;
-      }
-      const rows = getDb()
-        .prepare("SELECT channel_id FROM messaging_channels WHERE provider = ?")
-        .all(providerName) as { channel_id: string }[];
-      const knownIds = new Set(rows.map((r) => r.channel_id));
-      for (const channelId of liveIds) {
-        if (!knownIds.has(channelId)) {
-          try {
-            await this.kickAndArchiveChannelId(provider, channelId);
-            deleted++;
-            logger.info("Deleted orphaned channel", { providerName, channelId });
-          } catch (err) {
-            logger.warn("Failed to delete orphaned channel", { providerName, channelId, error: String(err) });
-            errors++;
-          }
-        }
-      }
-    }
-    return { deleted, errors };
-  }
-
-  private async runOrphanCleanup(): Promise<string[]> {
-    const { deleted, errors } = await this.deleteOrphanedChannels();
-    const lines: string[] = [];
-    if (deleted === 0 && errors === 0) {
-      lines.push("No orphaned channels.");
-    } else {
-      if (deleted > 0) lines.push(`Deleted ${deleted} orphaned channel(s).`);
-      if (errors > 0) lines.push(`${errors} error(s) during orphan cleanup.`);
-    }
-    return lines;
   }
 
   // Command handlers

@@ -16,7 +16,7 @@ projects.get("/", (c) => {
 });
 
 projects.post("/", async (c) => {
-  const body = await c.req.json<Record<string, unknown>>();
+  const body = await c.req.json<Record<string, string | null>>();
   if (!body.title) return c.json({ error: "title is required" }, 400);
   if (!body.description) return c.json({ error: "description is required" }, 400);
 
@@ -50,8 +50,8 @@ projects.patch("/:id", async (c) => {
   const existing = db.query("SELECT id FROM projects WHERE id = ?").get(id);
   if (!existing) return c.json({ error: "Not found" }, 404);
 
-  const body = await c.req.json<Record<string, unknown>>();
-  const updates: Record<string, unknown> = {};
+  const body = await c.req.json<Record<string, string | null>>();
+  const updates: Record<string, string | null> = {};
   for (const field of ALLOWED_PATCH_FIELDS) {
     if (field in body) updates[field] = body[field];
   }

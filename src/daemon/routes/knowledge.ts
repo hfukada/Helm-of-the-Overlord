@@ -8,7 +8,7 @@ import { indexRepo } from "../../knowledge/indexer";
 import { parseRepo } from "../../knowledge/repo-parser";
 import { logger } from "../../shared/logger";
 import { getMessagingManager } from "../../messaging/manager";
-import { config } from "../../shared/config";
+
 import type { Repo } from "../../shared/types";
 import { claudeStream } from "../../shared/claude-cli";
 import { renderTemplate } from "../../prompts/loader";

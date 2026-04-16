@@ -6,8 +6,7 @@ import { createInitialState, advanceState, restartFromPhase } from "./blueprint"
 import { NotFoundError } from "./errors";
 import { executePlan } from "./nodes/agentic/plan";
 import { rm } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+
 import { createTaskClone, generateBranchName } from "../workspace/git";
 import { ensureTaskDir, taskDir, } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
@@ -23,8 +22,6 @@ const _MAX_LINT_ROUNDS = 2;
 const _MAX_CI_ROUNDS = 2;
 const INPUT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INPUT_POLL_INTERVAL_MS = 2000;
-
-import type { MessagingManager } from "../messaging/manager";
 
 /**
  * Create an onEvent callback that routes agent stream events to a messaging

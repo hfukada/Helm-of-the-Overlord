@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
-import { runTask, cleanupTask, updateTaskStatus, restartTaskPhase } from "../../orchestrator/task-runner";
+import { runTask, cleanupTask, restartTaskPhase } from "../../orchestrator/task-runner";
 import { NotFoundError } from "../../orchestrator/errors";
 import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
