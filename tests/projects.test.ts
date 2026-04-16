@@ -43,17 +43,30 @@ describe("projects API", () => {
     expect(data.length).toBe(0);
   });
 
+  test("POST /projects requires only description", async () => {
+    const res = await req("POST", "/projects", { description: "A big feature broken into tasks" });
+    expect(res.status).toBe(201);
+    const data = await res.json() as Record<string, unknown>;
+    expect(typeof data.id).toBe("string");
+    expect(data.title).toBe("Planning\u2026");
+    expect(data.description).toBe("A big feature broken into tasks");
+    expect(data.status).toBe("planning");
+    expect(data.architecture_notes).toBeNull();
+    expect(data.carry_over_notes).toBeNull();
+    expect(typeof data.created_at).toBe("string");
+    expect(typeof data.updated_at).toBe("string");
+  });
+
   test("POST /projects creates a project", async () => {
     const res = await req("POST", "/projects", {
-      title: "My Feature",
       description: "A big feature broken into tasks",
     });
     expect(res.status).toBe(201);
     const data = await res.json() as Record<string, unknown>;
     expect(typeof data.id).toBe("string");
-    expect(data.title).toBe("My Feature");
+    expect(data.title).toBe("Planning\u2026");
     expect(data.description).toBe("A big feature broken into tasks");
-    expect(data.status).toBe("active");
+    expect(data.status).toBe("planning");
     expect(data.architecture_notes).toBeNull();
     expect(data.carry_over_notes).toBeNull();
     expect(typeof data.created_at).toBe("string");
@@ -62,7 +75,6 @@ describe("projects API", () => {
 
   test("POST /projects with architecture_notes", async () => {
     const res = await req("POST", "/projects", {
-      title: "Auth Overhaul",
       description: "Refactor auth system",
       architecture_notes: "Use JWT with refresh tokens",
     });
@@ -71,19 +83,13 @@ describe("projects API", () => {
     expect(data.architecture_notes).toBe("Use JWT with refresh tokens");
   });
 
-  test("POST /projects returns 400 when title missing", async () => {
-    const res = await req("POST", "/projects", { description: "no title" });
-    expect(res.status).toBe(400);
-  });
-
   test("POST /projects returns 400 when description missing", async () => {
-    const res = await req("POST", "/projects", { title: "no desc" });
+    const res = await req("POST", "/projects", {});
     expect(res.status).toBe(400);
   });
 
   test("GET /projects/:id returns project with empty tasks array", async () => {
     const createRes = await req("POST", "/projects", {
-      title: "Test Project",
       description: "desc",
     });
     const created = await createRes.json() as Record<string, unknown>;
@@ -98,7 +104,6 @@ describe("projects API", () => {
 
   test("GET /projects/:id includes associated tasks", async () => {
     const createRes = await req("POST", "/projects", {
-      title: "Project With Tasks",
       description: "desc",
     });
     const project = await createRes.json() as Record<string, unknown>;
@@ -129,21 +134,20 @@ describe("projects API", () => {
   });
 
   test("GET /projects returns all projects ordered by created_at desc", async () => {
-    await req("POST", "/projects", { title: "First", description: "a" });
-    await req("POST", "/projects", { title: "Second", description: "b" });
+    await req("POST", "/projects", { description: "a" });
+    await req("POST", "/projects", { description: "b" });
 
     const res = await req("GET", "/projects");
     expect(res.status).toBe(200);
     const data = await res.json() as Array<Record<string, unknown>>;
     expect(data.length).toBe(2);
     // Most recently created is first
-    expect(data[0].title).toBe("Second");
-    expect(data[1].title).toBe("First");
+    expect(data[0].description).toBe("b");
+    expect(data[1].description).toBe("a");
   });
 
   test("PATCH /projects/:id updates fields", async () => {
     const createRes = await req("POST", "/projects", {
-      title: "Original Title",
       description: "original desc",
     });
     const created = await createRes.json() as Record<string, unknown>;
@@ -163,7 +167,6 @@ describe("projects API", () => {
 
   test("PATCH /projects/:id with no valid fields returns 400", async () => {
     const createRes = await req("POST", "/projects", {
-      title: "Test",
       description: "desc",
     });
     const created = await createRes.json() as Record<string, unknown>;
@@ -177,5 +180,18 @@ describe("projects API", () => {
   test("PATCH /projects/:unknown returns 404", async () => {
     const res = await req("PATCH", "/projects/nonexistent", { title: "x" });
     expect(res.status).toBe(404);
+  });
+
+  test("DELETE /projects/:id removes the project", async () => {
+    const createRes = await req("POST", "/projects", { description: "to be deleted" });
+    const created = await createRes.json() as Record<string, unknown>;
+
+    const delRes = await req("DELETE", `/projects/${created.id}`);
+    expect(delRes.status).toBe(200);
+    const delData = await delRes.json() as Record<string, unknown>;
+    expect(delData.deleted).toBe(true);
+
+    const getRes = await req("GET", `/projects/${created.id}`);
+    expect(getRes.status).toBe(404);
   });
 });

@@ -225,4 +225,12 @@ export async function resumeInterruptedTasks(overrides?: ResumeHandlers): Promis
   }
 
   logger.info("Task resumption complete");
+
+  if (!overrides) {
+    import("../projects/runner").then(({ resumeProjects }) => {
+      resumeProjects().catch((err) =>
+        logger.error("resumeProjects failed on startup", { error: String(err) })
+      );
+    }).catch(() => {});
+  }
 }

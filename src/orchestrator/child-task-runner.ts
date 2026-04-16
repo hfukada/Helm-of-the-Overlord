@@ -384,6 +384,7 @@ export async function runChildTask(childId: string): Promise<void> {
       logger.warn("Child task has no changes to commit", { childId, repo: repo.name });
       notifyParent(parentTaskId, repo.name, "No changes to commit.");
       updateChildStatus(childId, "committed", state);
+      checkParentCompletion(parentTaskId);
       return;
     }
   } catch (err) {
@@ -726,6 +727,9 @@ export function checkParentCompletion(parentTaskId: string): void {
     if (manager) {
       manager.notifyAgentOutput(parentTaskId, "All repos committed. Task complete.").catch(() => {});
     }
+    import("../projects/runner").then(({ onTaskCompleted }) => {
+      onTaskCompleted(parentTaskId).catch(() => {});
+    }).catch(() => {});
   } else if (allCancelled) {
     db.run("UPDATE tasks SET status = 'cancelled', updated_at = ? WHERE id = ?", [now, parentTaskId]);
     logger.info("All child tasks cancelled, parent task cancelled", { parentTaskId });
