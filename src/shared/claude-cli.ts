@@ -26,6 +26,7 @@
 
 import { config } from "./config";
 import { logger } from "./logger";
+import { registerSubprocess, unregisterSubprocess } from "../orchestrator/subprocess-registry";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,9 +46,11 @@ export interface ClaudeOptions {
   containerName?: string;
   /** Working directory inside the container (default: /workspace). */
   containerWorkDir?: string;
-  /** Set a session ID for the conversation (UUID format). Used on first turn. */
+  /** Registry key for subprocess tracking. If set, the spawned process is registered under this key. */
+  registryKey?: string;
+  /** Session ID to pass to the CLI for a new conversation. */
   sessionId?: string;
-  /** Resume a conversation by session ID (UUID format). Used on subsequent turns. */
+  /** Session ID from a prior turn to resume that conversation. */
   resumeId?: string;
 }
 
@@ -119,18 +122,13 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
     "--disallowedTools", "Bash(git remote remove:*)",
   );
 
-  // Session management for turn-loop mode
-  if (opts.resumeId) {
-    args.push("--resume", opts.resumeId);
-  } else if (opts.sessionId) {
-    args.push("--session-id", opts.sessionId);
-  }
-
   // Prompt passed via stdin to avoid shell arg length limits
   return args;
 }
 
 function spawnClaude(args: string[], opts: ClaudeOptions) {
+  let proc: ReturnType<typeof Bun.spawn>;
+
   if (opts.containerName) {
     // Run claude inside a Docker container
     const containerWorkDir = opts.containerWorkDir ?? "/workspace";
@@ -152,21 +150,28 @@ function spawnClaude(args: string[], opts: ClaudeOptions) {
       containerWorkDir,
     });
 
-    return Bun.spawn(dockerArgs, {
+    proc = Bun.spawn(dockerArgs, {
       stdin: new TextEncoder().encode(opts.prompt),
       stdout: "pipe",
       stderr: "pipe",
     });
+  } else {
+    // Run claude on the host
+    proc = Bun.spawn(args, {
+      cwd: opts.cwd,
+      stdin: new TextEncoder().encode(opts.prompt),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...opts.env },
+    });
   }
 
-  // Run claude on the host
-  return Bun.spawn(args, {
-    cwd: opts.cwd,
-    stdin: new TextEncoder().encode(opts.prompt),
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ...opts.env },
-  });
+  if (opts.registryKey) {
+    registerSubprocess(opts.registryKey, proc);
+    proc.exited.then(() => unregisterSubprocess(opts.registryKey!, proc));
+  }
+
+  return proc;
 }
 
 async function getStderr(proc: ReturnType<typeof Bun.spawn>): Promise<string> {

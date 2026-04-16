@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
-import { runTask, cleanupTask, updateTaskStatus } from "../../orchestrator/task-runner";
-import type { TaskStatus } from "../../shared/types";
+import { runTask, cleanupTask, updateTaskStatus, restartTaskPhase } from "../../orchestrator/task-runner";
+import { NotFoundError } from "../../orchestrator/errors";
 import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
@@ -290,27 +290,18 @@ tasks.post("/:id/cancel", async (c) => {
   return c.json({ id, status: "cancelled" });
 });
 
-tasks.post("/:id/resume", async (c) => {
-  const id = c.req.param("id");
-  const db = getDb();
-
-  const row = db.query("SELECT status FROM tasks WHERE id = ?")
-    .get(id) as { status: string } | null;
-  if (!row) return c.json({ error: "Task not found" }, 404);
-
-  const resumable: TaskStatus[] = ["failed", "error", "cancelled", "waiting_for_children"];
-  if (!resumable.includes(row.status as TaskStatus)) {
-    return c.json({ error: `Task is not resumable (status: ${row.status})` }, 409);
+tasks.post("/:id/restart-phase", async (c) => {
+  const taskId = c.req.param("id");
+  const { phase } = await c.req.json();
+  try {
+    await restartTaskPhase(taskId, phase);
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    if (err instanceof Error && err.message.startsWith("Unknown phase"))
+      return c.json({ error: err.message }, 400);
+    throw err;
   }
-
-  const priorStatus = row.status;
-  updateTaskStatus(id, "resuming");
-
-  runTask(id, { resume: true, priorStatus }).catch((err) => {
-    logger.error("Resume task crashed", { taskId: id, error: String(err) });
-  });
-
-  return c.json({ id });
 });
 
 /**

@@ -124,6 +124,19 @@ export function createChildInitialState(): BlueprintState {
   };
 }
 
+export function restartFromPhase(state: BlueprintState, phase: BlueprintNodeType): BlueprintState {
+  const node = getNode(phase);
+  if (!node) throw new Error(`Unknown phase: ${phase}`);
+  const firstIdx = state.history.findIndex((h) => h.node === phase);
+  const trimmedHistory = firstIdx === -1 ? state.history : state.history.slice(0, firstIdx);
+  return {
+    current_node: phase,
+    history: trimmedHistory,
+    ci_rounds: 0,
+    lint_rounds: 0,
+  };
+}
+
 export function advanceState(
   state: BlueprintState,
   result: string

@@ -1,17 +1,17 @@
 /**
  * ClaudeCodeCliAgent -- implements the generic Agent interface by driving
- * the Claude Code CLI via `claude --print` with a resume-based turn loop.
+ * the Claude Code CLI via `claude --print` with a turn loop.
  *
  * Owns:
- *   - Per-turn invocation (max-turns=1) + resume sessions for multi-turn work
+ *   - Per-turn invocation (max-turns=1) for multi-turn work
  *   - Translation of generic ToolDefinition[] to Claude CLI --allowedTools flags
  *   - Destructive git command denylist
  *   - Optional sandbox (docker exec) execution
  *   - Optional MCP wiring for SearchKnowledge tool
- *   - agent_turns table per-turn logging, session_id storage on agent_runs
+ *   - agent_turns table per-turn logging
  */
 
-import { randomUUID } from "node:crypto";
+import { ulid } from "ulid";
 import { claudeStream, type ClaudeOptions, type ClaudeEvent } from "../shared/claude-cli";
 import { logger } from "../shared/logger";
 import { getDb } from "../knowledge/db";
@@ -35,6 +35,8 @@ export interface ClaudeCodeCliAgentOptions {
   model?: string;
   /** Extra directories the CLI may access (--add-dir). */
   addDirs?: string[];
+  /** Registry key for subprocess tracking. */
+  registryKey?: string;
 }
 
 export class ClaudeCodeCliAgent implements Agent {
@@ -42,16 +44,17 @@ export class ClaudeCodeCliAgent implements Agent {
   private readonly mcpConfigPath?: string;
   private readonly model?: string;
   private readonly addDirs?: string[];
+  private readonly registryKey?: string;
 
   constructor(opts: ClaudeCodeCliAgentOptions = {}) {
     this.sandbox = opts.sandbox;
     this.mcpConfigPath = opts.mcpConfigPath;
     this.model = opts.model;
     this.addDirs = opts.addDirs;
+    this.registryKey = opts.registryKey;
   }
 
   async run(opts: AgentRunOptions): Promise<AgentRunResult> {
-    const sessionId = randomUUID();
     const turns: TurnSummary[] = [];
     const recentToolNames: string[][] = [];
     let lastText = "";
@@ -65,11 +68,9 @@ export class ClaudeCodeCliAgent implements Agent {
     const allowedTools = this.toAllowedTools(opts.tools);
 
     for (let turnNum = 1; turnNum <= opts.maxTurns; turnNum++) {
-      const isFirstTurn = turnNum === 1;
-
       // Decide what to send this turn.
       let turnPrompt: string;
-      if (isFirstTurn) {
+      if (turnNum === 1) {
         turnPrompt = opts.prompt;
       } else {
         const lastTurn = turns[turns.length - 1];
@@ -82,7 +83,7 @@ export class ClaudeCodeCliAgent implements Agent {
 
       const cliOpts: ClaudeOptions = {
         prompt: turnPrompt,
-        systemPrompt: isFirstTurn ? opts.systemPrompt : undefined,
+        systemPrompt: turnNum === 1 ? opts.systemPrompt : undefined,
         cwd: this.sandbox ? undefined : opts.workDir,
         model: this.model,
         maxTurns: 1,
@@ -91,16 +92,13 @@ export class ClaudeCodeCliAgent implements Agent {
         addDirs: opts.addDirs ?? this.addDirs,
         containerName: this.sandbox?.containerName,
         containerWorkDir: this.sandbox?.containerWorkDir,
-        sessionId: isFirstTurn ? sessionId : undefined,
-        resumeId: isFirstTurn ? undefined : sessionId,
+        registryKey: this.registryKey,
       };
 
       logger.info("Agent turn starting", {
         agentRunId: opts.agentRunId,
         turn: turnNum,
         maxTurns: opts.maxTurns,
-        isResume: !isFirstTurn,
-        sessionId,
       });
 
       // Accumulate tool_use stream fragments into complete tool_call events.
@@ -242,17 +240,12 @@ export class ClaudeCodeCliAgent implements Agent {
 
     const output = lastText || (turns.length > 0 ? turns[turns.length - 1].text : "");
 
-    try {
-      db?.run("UPDATE agent_runs SET session_id = ? WHERE id = ?", [sessionId, opts.agentRunId]);
-    } catch {}
-
     logger.info("Agent run complete", {
       agentRunId: opts.agentRunId,
       totalTurns: turns.length,
       stopReason,
       totalTokens: totalUsage.input_tokens + totalUsage.output_tokens,
       totalCost: totalUsage.cost_usd.toFixed(4),
-      sessionId,
     });
 
     return {
@@ -261,7 +254,7 @@ export class ClaudeCodeCliAgent implements Agent {
       totalUsage,
       error,
       stopReason,
-      metadata: { sessionId },
+      metadata: {},
     };
   }
 
