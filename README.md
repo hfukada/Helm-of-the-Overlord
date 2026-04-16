@@ -98,6 +98,8 @@ src/
   daemon/
     server.ts                Hono HTTP server + static file serving
     routes/                  REST endpoints (tasks, agents, repos, tokens, comments, commits, knowledge, secrets)
+      projects.ts            Projects REST endpoints
+      version.ts             Version endpoint
   cli/
     index.ts                 Command router
     commands/                One file per command
@@ -113,17 +115,36 @@ src/
   messaging/                 Chat bot integration (Matrix, Discord)
     matrix/client.ts         Matrix (Synapse) provider
     discord/client.ts        Discord provider
+  agent/                     Claude Code CLI agent wrapper
+    claude-code-cli.ts       ClaudeCodeCliAgent: spawns and manages Claude CLI subprocesses
+    tools.ts                 Tool definitions passed to the agent
+    persistence.ts           Agent run persistence helpers
+    types.ts                 Agent-related TypeScript types
+  projects/                  Projects feature: breaks long-horizon tasks into sequential milestones
+    planner.ts               Generates milestone plans for projects
+    runner.ts                Executes project milestones sequentially
   orchestrator/
     blueprint.ts             Pipeline state machine
     task-runner.ts           Runs parent task pipeline (plan -> children or implement)
     child-task-runner.ts     Runs child tasks (implement -> CI -> review per repo)
     plan-splitter.ts         Extracts per-repo plan excerpts from [repo-name] tags
+    plan-parser.ts           Parses structured plan output from the plan node
+    timeline.ts              Timeline tracking for task phases
+    resume-on-startup.ts     Resumes in-progress tasks after daemon restart
+    resume-utils.ts          Helpers for determining resumable task state
+    subprocess-registry.ts   Tracks active Claude subprocesses
     subprocess.ts            Spawns Claude subagents (host or sandboxed)
     context-builder.ts       Assembles prompts from knowledge base
+    errors.ts                Orchestrator error types
     nodes/
       agentic/               plan, implement, fix-lint, fix-ci (Claude-driven)
       deterministic/         lint, git-ops, docker-compose (shell commands)
   prompts/                   Markdown prompt templates per pipeline stage
+  treesitter/                Tree-sitter code analysis for repo maps and symbol extraction
+    repo-map.ts              Generates repo maps from source files
+    symbols.ts               Extracts symbols (functions, classes, etc.) from source files
+    references.ts            Tracks cross-file symbol references
+    parser.ts                Tree-sitter parser setup and language detection
   workspace/
     manager.ts               Workspace directory management
     git.ts                   Worktree, diff, commit operations

@@ -17,15 +17,36 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `src/index.ts` - Entry point: routes to CLI or daemon based on args
 - `src/daemon/` - Hono HTTP server, routes, WebSocket
 - `src/daemon/dates.ts` - ISO 8601 date helpers for API responses
+- `src/daemon/routes/projects.ts` - Projects REST endpoints
+- `src/daemon/routes/version.ts` - Version endpoint
 - `src/cli/` - CLI arg parsing and commands
 - `src/gitea/` - Gitea REST client, PR creation, review polling
 - `src/knowledge/` - SQLite DB, schema, embeddings, search
 - `src/mcp/` - MCP server (stdio + HTTP/SSE transports) for knowledge base access
 - `src/messaging/` - Chat bot integration (Matrix, Discord)
+- `src/agent/` - Claude Code CLI agent wrapper
+- `src/agent/claude-code-cli.ts` - ClaudeCodeCliAgent: spawns and manages Claude CLI subprocesses
+- `src/agent/tools.ts` - Tool definitions passed to the agent
+- `src/agent/persistence.ts` - Agent run persistence helpers
+- `src/agent/types.ts` - Agent-related TypeScript types
+- `src/projects/` - Projects feature: breaks long-horizon tasks into sequential milestones
+- `src/projects/planner.ts` - Generates milestone plans for projects
+- `src/projects/runner.ts` - Executes project milestones sequentially
 - `src/orchestrator/` - Blueprint engine, subprocess management, agent nodes
+- `src/orchestrator/plan-parser.ts` - Parses structured plan output from the plan node
+- `src/orchestrator/timeline.ts` - Timeline tracking for task phases
+- `src/orchestrator/resume-on-startup.ts` - Resumes in-progress tasks after daemon restart
+- `src/orchestrator/resume-utils.ts` - Helpers for determining resumable task state
+- `src/orchestrator/subprocess-registry.ts` - Tracks active Claude subprocesses
+- `src/orchestrator/errors.ts` - Orchestrator error types
 - `src/orchestrator/nodes/agentic/` - Agent nodes (plan, implement, scrutinize, fix-ci, fix-lint, review-feedback)
 - `src/orchestrator/nodes/agentic/types.ts` - SandboxOptions type
 - `src/prompts/` - Markdown prompt templates per pipeline stage
+- `src/treesitter/` - Tree-sitter code analysis for repo maps and symbol extraction
+- `src/treesitter/repo-map.ts` - Generates repo maps from source files
+- `src/treesitter/symbols.ts` - Extracts symbols (functions, classes, etc.) from source files
+- `src/treesitter/references.ts` - Tracks cross-file symbol references
+- `src/treesitter/parser.ts` - Tree-sitter parser setup and language detection
 - `src/workspace/` - Workspace directory, git operations, Docker container management
 - `src/workspace/docker-exec.ts` - Sandbox container lifecycle, CI container setup
 - `src/shared/` - Types, config, logger
