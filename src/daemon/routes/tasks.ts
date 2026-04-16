@@ -388,7 +388,20 @@ tasks.delete("/done", async (c) => {
     }
   }
 
-  return c.json({ deleted, errors });
+  let orphanedChannelsCleaned: string[] = [];
+  let orphanedChannelsErrors: Array<{ channelId: string; error: string }> = [];
+
+  try {
+    const orphanResult = await getMessagingManager()?.cleanOrphanedChannels();
+    if (orphanResult) {
+      orphanedChannelsCleaned = orphanResult.cleaned;
+      orphanedChannelsErrors = orphanResult.errors;
+    }
+  } catch (err) {
+    logger.warn("Failed to clean orphaned channels", { error: String(err) });
+  }
+
+  return c.json({ deleted, errors, orphanedChannelsCleaned, orphanedChannelsErrors });
 });
 
 tasks.delete("/:id", async (c) => {
