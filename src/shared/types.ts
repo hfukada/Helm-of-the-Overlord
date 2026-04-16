@@ -24,6 +24,7 @@ export type TaskStatus =
 
 export type ChildTaskStatus =
   | "pending"
+  | "resuming"
   | "implementing"
   | "linting"
   | "fix_linting"
