@@ -41,13 +41,15 @@ const COMMAND_HELP: Record<string, string> = {
   ].join("\n"),
   project: [
     "!project <title> [-r repo [-r repo2]] [-d description text]",
-    "Create a new project from a messaging platform.",
-    "Options:",
+    "  Create a new project.",
+    "!project delete <id>",
+    "  Delete a project by ID (prefix match accepted).",
+    "Options for create:",
     "  -r <repo>   Target repo (can be repeated for multi-repo)",
-    "  -d <text>   Description (optional; all tokens after -d until next flag)",
+    "  -d <text>   Description (optional)",
     "Examples:",
     "  !project New auth system -r my-api",
-    "  !project Refactor login -r my-api -d Remove legacy session handling",
+    "  !project delete 01JA3B",
   ].join("\n"),
   "repo": [
     "!repo add <git-url> [--name <name>]",
@@ -232,6 +234,9 @@ export class MessagingManager {
         break;
       case "cancel":
         await this.cmdCancel(cmd);
+        break;
+      case "resume":
+        await this.cmdResume(cmd);
         break;
       case "status":
         await this.cmdStatus(cmd);
@@ -489,7 +494,7 @@ export class MessagingManager {
     }
   }
 
-  async notifyPRCreated(taskId: string, repoName: string, prUrl: string, taskTitle: string): Promise<void> {
+  async notifyPRCreated(_taskId: string, repoName: string, prUrl: string, taskTitle: string): Promise<void> {
     const msg = `PR created for "${taskTitle}" [${repoName}]: ${prUrl}`;
     for (const [providerName, p] of this.providers) {
       const mainChannelId = this.mainChannelIds.get(providerName);
@@ -638,50 +643,6 @@ export class MessagingManager {
     }
   }
 
-  private async deleteOrphanedChannels(): Promise<{ deleted: number; errors: number }> {
-    let deleted = 0;
-    let errors = 0;
-    for (const [providerName, provider] of this.providers) {
-      let liveIds: string[];
-      try {
-        liveIds = await provider.listTaskChannelIds();
-      } catch (err) {
-        logger.warn("Failed to list task channel IDs", { providerName, error: String(err) });
-        errors++;
-        continue;
-      }
-      const rows = getDb()
-        .prepare("SELECT channel_id FROM messaging_channels WHERE provider = ?")
-        .all(providerName) as { channel_id: string }[];
-      const knownIds = new Set(rows.map((r) => r.channel_id));
-      for (const channelId of liveIds) {
-        if (!knownIds.has(channelId)) {
-          try {
-            await this.kickAndArchiveChannelId(provider, channelId);
-            deleted++;
-            logger.info("Deleted orphaned channel", { providerName, channelId });
-          } catch (err) {
-            logger.warn("Failed to delete orphaned channel", { providerName, channelId, error: String(err) });
-            errors++;
-          }
-        }
-      }
-    }
-    return { deleted, errors };
-  }
-
-  private async runOrphanCleanup(): Promise<string[]> {
-    const { deleted, errors } = await this.deleteOrphanedChannels();
-    const lines: string[] = [];
-    if (deleted === 0 && errors === 0) {
-      lines.push("No orphaned channels.");
-    } else {
-      if (deleted > 0) lines.push(`Deleted ${deleted} orphaned channel(s).`);
-      if (errors > 0) lines.push(`${errors} error(s) during orphan cleanup.`);
-    }
-    return lines;
-  }
-
   // Command handlers
 
   private async createTask(
@@ -738,6 +699,33 @@ export class MessagingManager {
   }
 
   private async cmdProject(cmd: CommandEvent): Promise<void> {
+    if (cmd.args[0] === "delete") {
+      const rawId = cmd.args[1];
+      if (!rawId) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !project delete <id>");
+        return;
+      }
+      const db = getDb();
+      const row = db.query("SELECT id, title FROM projects WHERE id LIKE ?").get(`${rawId}%`) as { id: string; title: string } | null;
+      if (!row) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Project not found: ${rawId}`);
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/projects/${row.id}`, { method: "DELETE" });
+      if (res.ok) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Project deleted: ${row.title}`);
+      } else {
+        const body = await res.text();
+        try {
+          const err = JSON.parse(body) as { error: string };
+          await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error}`);
+        } catch {
+          await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${body}`);
+        }
+      }
+      return;
+    }
+
     // Parse: !project <title> [-r repo [-r repo2]] [-d description text]
     // Tokens before the first flag form the title.
     // -r <repo> can appear multiple times.
@@ -953,6 +941,26 @@ export class MessagingManager {
     } else {
       const body = await res.text();
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to cancel: ${body}`);
+    }
+  }
+
+  private async cmdResume(cmd: CommandEvent): Promise<void> {
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT task_id FROM messaging_channels WHERE channel_id = ?"
+    ).get(cmd.channelId) as { task_id: string } | null;
+    const taskId = cmd.args[0] ?? channelRow?.task_id;
+    if (!taskId) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !resume [task-id]");
+      return;
+    }
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/${taskId}/resume`, { method: "POST" });
+    if (res.ok) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task ${taskId} resuming.`);
+    } else {
+      const body = await res.text();
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to resume: ${body}`);
     }
   }
 

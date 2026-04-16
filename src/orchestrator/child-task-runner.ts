@@ -8,8 +8,10 @@
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
-import type { Repo, BlueprintState, ChildTaskStatus } from "../shared/types";
-import { createChildInitialState, advanceState } from "./blueprint";
+import type { Repo, BlueprintState, BlueprintNodeType, ChildTaskStatus } from "../shared/types";
+import { createChildInitialState, advanceState, restartFromPhase } from "./blueprint";
+import { killTaskSubprocesses } from "./subprocess-registry";
+import { NotFoundError } from "./errors";
 import { executeImplement } from "./nodes/agentic/implement";
 import { executeFixLint } from "./nodes/agentic/fix-lint";
 import { executeFixCi } from "./nodes/agentic/fix-ci";
@@ -29,6 +31,31 @@ import { $ } from "bun";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { ClaudeCodeCliAgent } from "../agent";
 import { makeAgentOutputForwarder } from "./task-runner";
+import { claudeText } from "../shared/claude-cli";
+
+async function generatePrTitle(taskDescription: string, planExcerpt: string): Promise<string> {
+  const fallback = taskDescription.length > 60
+    ? `${taskDescription.slice(0, 60)}...`
+    : taskDescription;
+  try {
+    const result = await claudeText({
+      prompt: [
+        "Generate a concise pull request title for the following task.",
+        "Rules: imperative mood, max 72 characters, no trailing period, no quotes, no \"hoto:\" prefix.",
+        "",
+        `Task: ${taskDescription}`,
+        `Plan summary: ${planExcerpt.slice(0, 500)}`,
+        "",
+        "Reply with only the title, nothing else.",
+      ].join("\n"),
+    });
+    const title = result.trim().replace(/^["']|["']$/g, "");
+    return title.length > 0 ? title : fallback;
+  } catch (err) {
+    logger.warn("generatePrTitle failed, using fallback", { error: String(err) });
+    return fallback;
+  }
+}
 
 const MAX_LINT_ROUNDS = 2;
 const MAX_CI_ROUNDS = 2;
@@ -186,6 +213,7 @@ export async function runChildTask(childId: string): Promise<void> {
       ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
       : undefined,
     mcpConfigPath,
+    registryKey: childId,
   });
   const hasMcp = !!mcpConfigPath;
   const { onEvent, done: doneForwarding } = makeAgentOutputForwarder((msg) => notifyParent(parentTaskId, repo.name, msg));
@@ -379,9 +407,10 @@ export async function runChildTask(childId: string): Promise<void> {
     const baseBranch = await getDefaultBranch(repo.path);
     await pushBranchToGitea(workDir, repo.path, repo.name, branchName);
 
+    const prTitle = await generatePrTitle(parentRow.title, planExcerpt);
     const pr = await createPullRequest(
       repo.name, branchName, baseBranch,
-      `hoto: ${parentRow.title}`,
+      `hoto: ${prTitle}`,
       `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt.slice(0, 2000)}`
     );
 
@@ -641,6 +670,30 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
     await seedCursors(parentTaskId, repo.name, prNumber);
     startReviewPoller(parentTaskId, repo.name, repo.path, branchName, prNumber);
   }
+}
+
+export async function restartChildTaskPhase(
+  taskId: string,
+  childId: string,
+  phase: string
+): Promise<void> {
+  const db = getDb();
+  const row = db
+    .query("SELECT * FROM child_tasks WHERE id = ? AND parent_task_id = ?")
+    .get(childId, taskId) as Record<string, unknown> | undefined;
+  if (!row) throw new NotFoundError(`Child task not found: ${childId}`);
+  const currentState: BlueprintState = row.blueprint_state
+    ? JSON.parse(row.blueprint_state as string)
+    : createChildInitialState();
+  const newState = restartFromPhase(currentState, phase as BlueprintNodeType);
+  await killTaskSubprocesses(childId);
+  db.run(
+    "UPDATE child_tasks SET status = 'running', blueprint_state = ? WHERE id = ?",
+    [JSON.stringify(newState), childId]
+  );
+  runChildTask(childId).catch((err) =>
+    logger.error("restartChildTaskPhase: runChildTask failed", { childId, err })
+  );
 }
 
 /**

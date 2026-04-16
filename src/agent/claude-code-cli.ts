@@ -35,6 +35,8 @@ export interface ClaudeCodeCliAgentOptions {
   model?: string;
   /** Extra directories the CLI may access (--add-dir). */
   addDirs?: string[];
+  /** Registry key for subprocess tracking. */
+  registryKey?: string;
 }
 
 export class ClaudeCodeCliAgent implements Agent {
@@ -42,12 +44,14 @@ export class ClaudeCodeCliAgent implements Agent {
   private readonly mcpConfigPath?: string;
   private readonly model?: string;
   private readonly addDirs?: string[];
+  private readonly registryKey?: string;
 
   constructor(opts: ClaudeCodeCliAgentOptions = {}) {
     this.sandbox = opts.sandbox;
     this.mcpConfigPath = opts.mcpConfigPath;
     this.model = opts.model;
     this.addDirs = opts.addDirs;
+    this.registryKey = opts.registryKey;
   }
 
   async run(opts: AgentRunOptions): Promise<AgentRunResult> {
@@ -91,6 +95,7 @@ export class ClaudeCodeCliAgent implements Agent {
         addDirs: opts.addDirs ?? this.addDirs,
         containerName: this.sandbox?.containerName,
         containerWorkDir: this.sandbox?.containerWorkDir,
+        registryKey: this.registryKey,
         sessionId: isFirstTurn ? sessionId : undefined,
         resumeId: isFirstTurn ? undefined : sessionId,
       };
@@ -115,7 +120,7 @@ export class ClaudeCodeCliAgent implements Agent {
           try { args = JSON.parse(pendingToolJson); } catch { args = pendingToolJson || undefined; }
           const completeEvent: AgentEvent = { type: "tool_call", turnNumber: turnNum, toolName: pendingToolName, args };
           if (!turnToolCalls.some((tc) => tc.name === pendingToolName)) {
-            turnToolCalls.push({ name: pendingToolName!, args });
+            turnToolCalls.push({ name: pendingToolName, args });
           }
           opts.onEvent?.(completeEvent);
           pendingToolName = null;

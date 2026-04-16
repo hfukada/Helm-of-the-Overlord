@@ -26,6 +26,7 @@
 
 import { config } from "./config";
 import { logger } from "./logger";
+import { registerSubprocess, unregisterSubprocess } from "../orchestrator/subprocess-registry";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,9 +46,11 @@ export interface ClaudeOptions {
   containerName?: string;
   /** Working directory inside the container (default: /workspace). */
   containerWorkDir?: string;
-  /** Set a session ID for the conversation (UUID format). Used on first turn. */
+  /** Registry key for subprocess tracking. If set, the spawned process is registered under this key. */
+  registryKey?: string;
+  /** Session ID to pass to the CLI for a new conversation. */
   sessionId?: string;
-  /** Resume a conversation by session ID (UUID format). Used on subsequent turns. */
+  /** Session ID from a prior turn to resume that conversation. */
   resumeId?: string;
 }
 
@@ -131,6 +134,8 @@ function buildArgs(opts: ClaudeOptions, extra: string[]): string[] {
 }
 
 function spawnClaude(args: string[], opts: ClaudeOptions) {
+  let proc: ReturnType<typeof Bun.spawn>;
+
   if (opts.containerName) {
     // Run claude inside a Docker container
     const containerWorkDir = opts.containerWorkDir ?? "/workspace";
@@ -152,21 +157,28 @@ function spawnClaude(args: string[], opts: ClaudeOptions) {
       containerWorkDir,
     });
 
-    return Bun.spawn(dockerArgs, {
+    proc = Bun.spawn(dockerArgs, {
       stdin: new TextEncoder().encode(opts.prompt),
       stdout: "pipe",
       stderr: "pipe",
     });
+  } else {
+    // Run claude on the host
+    proc = Bun.spawn(args, {
+      cwd: opts.cwd,
+      stdin: new TextEncoder().encode(opts.prompt),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, ...opts.env },
+    });
   }
 
-  // Run claude on the host
-  return Bun.spawn(args, {
-    cwd: opts.cwd,
-    stdin: new TextEncoder().encode(opts.prompt),
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, ...opts.env },
-  });
+  if (opts.registryKey) {
+    registerSubprocess(opts.registryKey, proc);
+    proc.exited.then(() => unregisterSubprocess(opts.registryKey as string, proc));
+  }
+
+  return proc;
 }
 
 async function getStderr(proc: ReturnType<typeof Bun.spawn>): Promise<string> {
@@ -192,8 +204,9 @@ export async function claudeText(opts: ClaudeOptions): Promise<string> {
   const args = buildArgs(opts, []);
   const proc = spawnClaude(args, opts);
 
+  const stdout = proc.stdout as ReadableStream<Uint8Array>;
   const [output, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
+    new Response(stdout).text(),
     proc.exited,
   ]);
 
@@ -229,8 +242,9 @@ export async function claudeJSON(opts: ClaudeOptions): Promise<ClaudeResult> {
   const args = buildArgs(opts, ["--output-format", "json"]);
   const proc = spawnClaude(args, opts);
 
+  const stdout = proc.stdout as ReadableStream<Uint8Array>;
   const [rawOutput, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
+    new Response(stdout).text(),
     proc.exited,
   ]);
 
@@ -296,7 +310,7 @@ export async function claudeBatch(
   let error: string | null = null;
 
   try {
-    const reader = proc.stdout.getReader();
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let earlyExit = false;
@@ -396,7 +410,7 @@ export async function claudeStream(
   let error: string | null = null;
 
   try {
-    const reader = proc.stdout.getReader();
+    const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
     const decoder = new TextDecoder();
     let buf = "";
     let earlyExit = false;

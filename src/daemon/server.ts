@@ -128,6 +128,12 @@ export async function startDaemon(): Promise<void> {
     logger.info("Messaging connectors active", { connectors: activeConnectors });
   }
 
+  // Resume interrupted tasks from previous daemon session
+  const { resumeInterruptedTasks } = await import("../orchestrator/resume-on-startup");
+  resumeInterruptedTasks().catch((err) => {
+    logger.error("Failed to resume interrupted tasks", { error: String(err) });
+  });
+
   // Write PID file
   await writeFile(config.pidFile, String(process.pid));
 

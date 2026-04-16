@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { getDb } from "../../knowledge/db";
 import { logger } from "../../shared/logger";
 import { fixDatesAll } from "../dates";
+import { restartChildTaskPhase } from "../../orchestrator/child-task-runner";
+import { NotFoundError } from "../../orchestrator/errors";
 
 const childTasks = new Hono();
 
@@ -46,30 +48,19 @@ childTasks.post("/:taskId/children/:childId/cancel", async (c) => {
   return c.json({ id: childId, status: "cancelled" });
 });
 
-// Retry a failed child task
-childTasks.post("/:taskId/children/:childId/retry", async (c) => {
-  const childId = c.req.param("childId");
-  const db = getDb();
-
-  const child = db.query(
-    "SELECT * FROM child_tasks WHERE id = ? AND status IN ('error', 'cancelled')"
-  ).get(childId) as Record<string, unknown> | null;
-
-  if (!child) {
-    return c.json({ error: "Child task not found or not in retryable state" }, 400);
+// Restart a child task from a specific phase
+childTasks.post("/:taskId/children/:childId/restart-phase", async (c) => {
+  const { taskId, childId } = c.req.param();
+  const { phase } = await c.req.json();
+  try {
+    await restartChildTaskPhase(taskId, childId, phase);
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    if (err instanceof Error && err.message.startsWith("Unknown phase"))
+      return c.json({ error: err.message }, 400);
+    throw err;
   }
-
-  const now = new Date().toISOString();
-  db.run("UPDATE child_tasks SET status = 'pending', updated_at = ? WHERE id = ?", [now, childId]);
-
-  // Re-run the child task
-  const { runChildTask } = await import("../../orchestrator/child-task-runner");
-  runChildTask(childId).catch((err) => {
-    logger.error("Child task retry failed", { childId, error: String(err) });
-    db.run("UPDATE child_tasks SET status = 'error', updated_at = datetime('now') WHERE id = ?", [childId]);
-  });
-
-  return c.json({ id: childId, status: "pending" });
 });
 
 export { childTasks };

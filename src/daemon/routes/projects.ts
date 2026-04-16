@@ -16,7 +16,7 @@ projects.get("/", (c) => {
 });
 
 projects.post("/", async (c) => {
-  const body = await c.req.json<Record<string, unknown>>();
+  const body = await c.req.json<Record<string, string | null>>();
   if (!body.title) return c.json({ error: "title is required" }, 400);
   if (!body.description) return c.json({ error: "description is required" }, 400);
 
@@ -50,8 +50,8 @@ projects.patch("/:id", async (c) => {
   const existing = db.query("SELECT id FROM projects WHERE id = ?").get(id);
   if (!existing) return c.json({ error: "Not found" }, 404);
 
-  const body = await c.req.json<Record<string, unknown>>();
-  const updates: Record<string, unknown> = {};
+  const body = await c.req.json<Record<string, string | null>>();
+  const updates: Record<string, string | null> = {};
   for (const field of ALLOWED_PATCH_FIELDS) {
     if (field in body) updates[field] = body[field];
   }
@@ -62,6 +62,15 @@ projects.patch("/:id", async (c) => {
   db.run(`UPDATE projects SET ${sets}, updated_at = datetime('now') WHERE id = ?`, values);
   const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown>;
   return c.json(fixDates(row, "created_at", "updated_at"));
+});
+
+projects.delete("/:id", (c) => {
+  const db = getDb();
+  const id = c.req.param("id");
+  const existing = db.query("SELECT id FROM projects WHERE id = ?").get(id);
+  if (!existing) return c.json({ error: "Not found" }, 404);
+  db.run("DELETE FROM projects WHERE id = ?", [id]);
+  return c.json({ id, deleted: true });
 });
 
 export default projects;

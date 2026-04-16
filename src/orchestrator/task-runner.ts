@@ -1,14 +1,14 @@
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
-import type { Task, Repo, BlueprintState, TaskStatus } from "../shared/types";
-import { createInitialState, advanceState } from "./blueprint";
+import type { Task, Repo, BlueprintState, TaskStatus, BlueprintNodeType } from "../shared/types";
+import { createInitialState, advanceState, restartFromPhase } from "./blueprint";
+import { NotFoundError } from "./errors";
 import { executePlan } from "./nodes/agentic/plan";
 import { rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { createTaskClone, generateBranchName } from "../workspace/git";
-import { ensureTaskDir, taskDir, } from "../workspace/manager";
+import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
@@ -22,8 +22,6 @@ const _MAX_LINT_ROUNDS = 2;
 const _MAX_CI_ROUNDS = 2;
 const INPUT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 const INPUT_POLL_INTERVAL_MS = 2000;
-
-import type { MessagingManager } from "../messaging/manager";
 
 /**
  * Create an onEvent callback that routes agent stream events to a messaging
@@ -86,7 +84,7 @@ export function makeAgentOutputForwarder(
   return { onEvent, done };
 }
 
-function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
+export function updateTaskStatus(taskId: string, status: TaskStatus, blueprintState?: BlueprintState) {
   const db = getDb();
   const now = new Date().toISOString();
   if (blueprintState) {
@@ -309,7 +307,7 @@ function isTaskCancelled(taskId: string): boolean {
 
 export async function cleanupTask(taskId: string): Promise<void> {
   // Kill any running subprocesses for this task
-  killTaskSubprocesses(taskId);
+  await killTaskSubprocesses(taskId);
 
   // Tear down Docker container if one exists
   try {
@@ -412,8 +410,8 @@ export async function runTask(taskId: string): Promise<void> {
 
   let { task, repos } = loaded;
 
-  // Set up branch name first so we can announce it
-  const branchName = generateBranchName(task.id, task.title);
+  // Reuse existing branch name if the task already has one (e.g. resume after restart)
+  const branchName = task.branch_name || generateBranchName(task.id, task.title);
   updateTaskBranch(task.id, branchName);
 
   // Create messaging channel for this task
@@ -479,13 +477,19 @@ export async function runTask(taskId: string): Promise<void> {
   const workDirs = new Map<string, string>(); // repoName -> workDir
 
   for (const repo of repos) {
-    try {
-      const wd = await createTaskClone(repo.path, task.id, repo.name, branchName);
-      workDirs.set(repo.name, wd);
-    } catch (err) {
-      logger.error("Failed to clone repo for task", { repo: repo.name, error: String(err) });
-      updateTaskStatus(task.id, "failed");
-      return;
+    const existingDir = worktreeDir(task.id, repo.name);
+    if (existsSync(existingDir)) {
+      logger.info("Worktree already exists, skipping clone", { repo: repo.name, dir: existingDir });
+      workDirs.set(repo.name, existingDir);
+    } else {
+      try {
+        const wd = await createTaskClone(repo.path, task.id, repo.name, branchName);
+        workDirs.set(repo.name, wd);
+      } catch (err) {
+        logger.error("Failed to clone repo for task", { repo: repo.name, error: String(err) });
+        updateTaskStatus(task.id, "failed");
+        return;
+      }
     }
   }
 
@@ -754,6 +758,24 @@ export async function runTask(taskId: string): Promise<void> {
 
     return; // Parent task is done orchestrating
   }
+}
+
+export async function restartTaskPhase(taskId: string, phase: string): Promise<void> {
+  const db = getDb();
+  const row = db.query("SELECT * FROM tasks WHERE id = ?").get(taskId) as Record<string, unknown> | undefined;
+  if (!row) throw new NotFoundError(`Task not found: ${taskId}`);
+  const currentState: BlueprintState = row.blueprint_state
+    ? JSON.parse(row.blueprint_state as string)
+    : createInitialState();
+  const newState = restartFromPhase(currentState, phase as BlueprintNodeType);
+  await killTaskSubprocesses(taskId);
+  db.run(
+    "UPDATE tasks SET status = 'running', blueprint_state = ? WHERE id = ?",
+    [JSON.stringify(newState), taskId]
+  );
+  runTask(taskId).catch((err) =>
+    logger.error("restartTaskPhase: runTask failed", { taskId, err })
+  );
 }
 
 export async function reviseTask(taskId: string, feedback: string): Promise<void> {

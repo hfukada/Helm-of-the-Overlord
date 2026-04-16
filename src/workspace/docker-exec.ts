@@ -76,13 +76,13 @@ async function sandboxImageExists(): Promise<boolean> {
 
 async function buildSandboxImage(dockerfilePath: string): Promise<boolean> {
   const contextDir = join(dockerfilePath, "..");
-  logger.info({ dockerfilePath }, "building sandbox image");
+  logger.info("building sandbox image", { dockerfilePath });
   const result = Bun.spawnSync(
     ["docker", "build", "-t", "hoto-sandbox:latest", "-f", dockerfilePath, contextDir],
     { stdout: "pipe", stderr: "pipe" }
   );
   if (result.exitCode !== 0) {
-    logger.error({ stderr: new TextDecoder().decode(result.stderr) }, "failed to build sandbox image");
+    logger.error("failed to build sandbox image", { stderr: new TextDecoder().decode(result.stderr) });
     return false;
   }
   return true;
@@ -103,7 +103,7 @@ export async function startSandboxContainer(
 
   const imageReady = (await sandboxImageExists()) || (await buildSandboxImage(dockerfilePath));
   if (!imageReady) {
-    logger.error({ taskId }, "sandbox image not available; cannot start sandbox container");
+    logger.error("sandbox image not available; cannot start sandbox container", { taskId });
     return null;
   }
 
@@ -153,10 +153,10 @@ export async function startSandboxContainer(
 
   const runResult = Bun.spawnSync(args, { stdout: "pipe", stderr: "pipe" });
   if (runResult.exitCode !== 0) {
-    logger.error({
+    logger.error("failed to start sandbox container", {
       taskId,
       stderr: new TextDecoder().decode(runResult.stderr),
-    }, "failed to start sandbox container");
+    });
     return null;
   }
 

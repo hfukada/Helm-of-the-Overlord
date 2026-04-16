@@ -6,7 +6,7 @@ import * as crypto from "node:crypto";
 process.env.HOTO_WORKSPACE = path.join(os.tmpdir(), `hoto-test-${crypto.randomUUID()}`);
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { getDb, closeDb } from "../knowledge/db";
+import { getDb } from "../knowledge/db";
 import { checkParentCompletion } from "./child-task-runner";
 
 /** Clear all mutable tables between tests so each test starts clean. */
@@ -114,10 +114,10 @@ describe("task_prs row for child task PR", () => {
     ).get(parentTaskId, repoId) as { task_id: string; repo_id: number; pr_number: number; pr_url: string } | null;
 
     expect(row).not.toBeNull();
-    expect(row!.task_id).toBe(parentTaskId);
-    expect(row!.repo_id).toBe(repoId);
-    expect(row!.pr_number).toBe(prNumber);
-    expect(row!.pr_url).toBe(prUrl);
+    expect(row?.task_id).toBe(parentTaskId);
+    expect(row?.repo_id).toBe(repoId);
+    expect(row?.pr_number).toBe(prNumber);
+    expect(row?.pr_url).toBe(prUrl);
   });
 
   it("review poller resolves repo_id via child_tasks fallback when task_prs row is absent", () => {

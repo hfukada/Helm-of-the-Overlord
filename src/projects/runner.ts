@@ -78,7 +78,8 @@ export async function createProject(
       completed: false,
     }));
 
-    const project = getProject(id)!;
+    const project = getProject(id);
+    if (!project) throw new Error(`Project ${id} not found after creation`);
     project.title = plan.title;
     project.milestones = milestones;
     project.status = "in_progress";

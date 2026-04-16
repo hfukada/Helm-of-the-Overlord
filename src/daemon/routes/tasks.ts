@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
-import { runTask, cleanupTask } from "../../orchestrator/task-runner";
+import { runTask, cleanupTask, restartTaskPhase } from "../../orchestrator/task-runner";
+import { NotFoundError } from "../../orchestrator/errors";
 import { getDiff, getDiffSummary } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
@@ -287,6 +288,20 @@ tasks.post("/:id/cancel", async (c) => {
   });
 
   return c.json({ id, status: "cancelled" });
+});
+
+tasks.post("/:id/restart-phase", async (c) => {
+  const taskId = c.req.param("id");
+  const { phase } = await c.req.json();
+  try {
+    await restartTaskPhase(taskId, phase);
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    if (err instanceof Error && err.message.startsWith("Unknown phase"))
+      return c.json({ error: err.message }, 400);
+    throw err;
+  }
 });
 
 /**
