@@ -34,6 +34,24 @@ const PARENT_SKIP_STATUSES = new Set(["waiting_for_children"]);
 /** Early phases cheap enough to restart from scratch. */
 const EARLY_PHASES = new Set(["pending", "indexing", "scoping"]);
 
+/**
+ * Maps task status values to the blueprint node to restart from when no
+ * blueprint_state is available. "resuming" is a transient meta-state; without
+ * blueprint_state the prior phase is unknowable, so it falls back to "index".
+ */
+const STATUS_TO_PHASE: Record<string, string> = {
+  planning:        "plan",
+  scrutinizing:    "scrutinize",
+  replanning:      "plan_again",
+  finalizing_plan: "finalize_plan",
+  implementing:    "implement",
+  linting:         "lint",
+  fix_linting:     "fix_lint",
+  ci_running:      "ci",
+  ci_fixing:       "fix_ci",
+  resuming:        "index",
+};
+
 /** Delay between parent task resumptions to avoid API rate limits. */
 const STAGGER_MS = 2000;
 
@@ -59,8 +77,8 @@ function phaseForParentStatus(
     return node;
   }
 
-  // No blueprint state saved -- restart from scratch
-  return "index";
+  // No blueprint state saved -- derive phase from status, or restart from scratch
+  return STATUS_TO_PHASE[status] ?? "index";
 }
 
 function phaseForChildStatus(
