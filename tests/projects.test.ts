@@ -55,6 +55,8 @@ describe("projects API", () => {
     expect(data.carry_over_notes).toBeNull();
     expect(typeof data.created_at).toBe("string");
     expect(typeof data.updated_at).toBe("string");
+    expect(Array.isArray(data.milestones)).toBe(true);
+    expect(typeof data.current_milestone).toBe("number");
   });
 
   test("POST /projects creates a project", async () => {
@@ -71,6 +73,8 @@ describe("projects API", () => {
     expect(data.carry_over_notes).toBeNull();
     expect(typeof data.created_at).toBe("string");
     expect(typeof data.updated_at).toBe("string");
+    expect(Array.isArray(data.milestones)).toBe(true);
+    expect(typeof data.current_milestone).toBe("number");
   });
 
   test("POST /projects with architecture_notes", async () => {
@@ -100,6 +104,8 @@ describe("projects API", () => {
     expect(data.id).toBe(created.id);
     expect(Array.isArray(data.tasks)).toBe(true);
     expect((data.tasks as unknown[]).length).toBe(0);
+    expect(Array.isArray(data.milestones)).toBe(true);
+    expect(typeof data.current_milestone).toBe("number");
   });
 
   test("GET /projects/:id includes associated tasks", async () => {
@@ -144,6 +150,8 @@ describe("projects API", () => {
     // Most recently created is first
     expect(data[0].description).toBe("b");
     expect(data[1].description).toBe("a");
+    expect(Array.isArray(data[0].milestones)).toBe(true);
+    expect(Array.isArray(data[1].milestones)).toBe(true);
   });
 
   test("PATCH /projects/:id updates fields", async () => {

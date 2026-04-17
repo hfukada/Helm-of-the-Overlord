@@ -8,12 +8,19 @@ const projects = new Hono();
 
 const ALLOWED_PATCH_FIELDS = ["title", "description", "status", "architecture_notes", "carry_over_notes"] as const;
 
+function parseProjectRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    milestones: typeof row.milestones === "string" ? JSON.parse(row.milestones) : (row.milestones ?? []),
+  };
+}
+
 projects.get("/", (c) => {
   const db = getDb();
   const rows = db
     .query("SELECT * FROM projects ORDER BY created_at DESC, rowid DESC LIMIT 100")
     .all() as Record<string, unknown>[];
-  return c.json(fixDatesAll(rows, "created_at", "updated_at"));
+  return c.json(fixDatesAll(rows.map(parseProjectRow), "created_at", "updated_at"));
 });
 
 projects.post("/", async (c) => {
@@ -47,7 +54,7 @@ projects.post("/", async (c) => {
   });
 
   const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown>;
-  return c.json(fixDates(row, "created_at", "updated_at"), 201);
+  return c.json(fixDates(parseProjectRow(row), "created_at", "updated_at"), 201);
 });
 
 projects.get("/:id", (c) => {
@@ -59,7 +66,7 @@ projects.get("/:id", (c) => {
     .query("SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at ASC")
     .all(id) as Record<string, unknown>[];
   return c.json({
-    ...fixDates(row, "created_at", "updated_at"),
+    ...fixDates(parseProjectRow(row), "created_at", "updated_at"),
     tasks: fixDatesAll(tasks, "created_at", "updated_at"),
   });
 });
@@ -81,7 +88,7 @@ projects.patch("/:id", async (c) => {
   const values = [...Object.values(updates), id];
   db.run(`UPDATE projects SET ${sets}, updated_at = datetime('now') WHERE id = ?`, values);
   const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown>;
-  return c.json(fixDates(row, "created_at", "updated_at"));
+  return c.json(fixDates(parseProjectRow(row), "created_at", "updated_at"));
 });
 
 projects.delete("/:id", (c) => {
