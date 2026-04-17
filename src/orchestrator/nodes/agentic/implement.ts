@@ -16,13 +16,14 @@ const MAX_TURNS = 50;
 
 /**
  * Estimate the number of tool turns needed based on the plan content.
- * Heuristic: ~3 baseline + ~2.5 per unique file + ~1 per new file.
+ * Heuristic: ~5 baseline + ~3.5 per unique file + ~2 per new file.
+ * Each file typically needs Read + Edit (2 turns min), plus retries.
  */
 function estimateTurns(plan: string): number {
   const fileRefs = plan.match(/`[^`]+\.\w+`/g) ?? [];
   const uniqueFiles = new Set(fileRefs.map((f) => f.replace(/`/g, ""))).size;
   const newFiles = (plan.match(/\(new\s*file\)|\bnew file\b|\(create\)/gi) ?? []).length;
-  const estimate = 3 + Math.ceil(uniqueFiles * 2.5) + newFiles;
+  const estimate = 5 + Math.ceil(uniqueFiles * 3.5) + newFiles * 2;
   const clamped = Math.max(MIN_TURNS, Math.min(MAX_TURNS, estimate));
   logger.info("Estimated implement turns", { uniqueFiles, newFiles, estimate, clamped });
   return clamped;

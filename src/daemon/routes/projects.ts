@@ -26,7 +26,7 @@ projects.post("/", async (c) => {
   db.run(
     `INSERT INTO projects (id, title, description, status, architecture_notes, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
      VALUES (?, ?, ?, 'planning', ?, '[]', 0, NULL, ?, ?, ?, ?)`,
-    [id, "Planning\u2026", body.description as string, (body.architecture_notes as string | null) ?? null, body.source_sender_id ?? null, body.source_provider ?? null, now, now]
+    [id, "Planning\u2026", body.description as string, (body.architecture_notes as string | null) ?? null, (body.source_sender_id as string | null) ?? null, (body.source_provider as string | null) ?? null, now, now]
   );
 
   const repoNames: string[] = Array.isArray(body.repo_names)
