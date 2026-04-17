@@ -40,6 +40,7 @@ export async function indexTaskChatHistory(taskId: string): Promise<void> {
     docker_image: repoRow.docker_image as string | null,
     ci_on_host: !!(repoRow.ci_on_host as number),
     metadata: null,
+    extra_context: (repoRow.extra_context as string | null) ?? null,
   };
 
   const content = messages.map((m) => {

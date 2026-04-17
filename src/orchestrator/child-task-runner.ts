@@ -137,6 +137,7 @@ function parseRepoRow(row: Record<string, unknown>): Repo {
     docker_image: row.docker_image as string | null,
     ci_on_host: !!(row.ci_on_host as number),
     metadata: null,
+    extra_context: (row.extra_context as string | null) ?? null,
   };
 }
 

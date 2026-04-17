@@ -52,13 +52,19 @@ const COMMAND_HELP: Record<string, string> = {
   "repo": [
     "!repo add <git-url> [--name <name>]",
     "!repo remove <name>",
-    "Add or remove a repo.",
+    "!repo set-context <name> <text...>",
+    "!repo clear-context <name>",
+    "Add, remove, or annotate a repo.",
     "  add: Clone a git repo and register it. Auto-detects language, framework, and commands.",
     "  remove: Hard-delete a repo and its embeddings (blocked if active tasks).",
+    "  set-context: Set extra context text appended to the knowledge context in prompts.",
+    "  clear-context: Remove the extra context from a repo.",
     "Examples:",
     "  !repo add https://github.com/org/project.git",
     "  !repo add git@github.com:org/project.git --name my-project",
     "  !repo remove my-project",
+    "  !repo set-context my-project When adding CLI features, also update the API and messaging platform.",
+    "  !repo clear-context my-project",
   ].join("\n"),
   "newrepo": [
     "!newrepo <name> <seed prompt>",
@@ -895,6 +901,47 @@ export class MessagingManager {
       return;
     }
 
+    if (sub === "set-context") {
+      const name = cmd.args[1];
+      const text = cmd.args.slice(2).join(" ");
+      if (!name || !text) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !repo set-context <name> <text...>");
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/${name}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extra_context: text }),
+      });
+      if (res.ok) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Extra context set for ${name}.`);
+      } else {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error ?? res.statusText}`);
+      }
+      return;
+    }
+
+    if (sub === "clear-context") {
+      const name = cmd.args[1];
+      if (!name) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !repo clear-context <name>");
+        return;
+      }
+      const res = await fetch(`http://127.0.0.1:${config.daemonPort}/repos/${name}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extra_context: null }),
+      });
+      if (res.ok) {
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Extra context cleared for ${name}.`);
+      } else {
+        const err = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+        await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed: ${err.error ?? res.statusText}`);
+      }
+      return;
+    }
+
     if (sub !== "add" || !cmd.args[1]) {
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !repo add <git-url> [--name <name>] | !repo remove <name>\nType !help repo for details.");
       return;
@@ -1166,6 +1213,7 @@ export class MessagingManager {
       docker_image: repoRow.docker_image as string | null,
       ci_on_host: !!(repoRow.ci_on_host as number),
       metadata: null,
+      extra_context: (repoRow.extra_context as string | null) ?? null,
     };
 
     const senderProvider = this.getSenderProvider(cmd);

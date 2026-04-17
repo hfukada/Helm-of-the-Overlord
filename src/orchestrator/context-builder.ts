@@ -89,7 +89,7 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
 
   // List all repos with metadata
   const repos = db.query(
-    "SELECT id, name, path, description, language, framework FROM repos WHERE archived = 0 ORDER BY name"
+    "SELECT id, name, path, description, language, framework, extra_context FROM repos WHERE archived = 0 ORDER BY name"
   ).all() as Array<{
     id: number;
     name: string;
@@ -97,6 +97,7 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
     description: string | null;
     language: string | null;
     framework: string | null;
+    extra_context: string | null;
   }>;
 
   const repoLines = repos.map((r) => {
@@ -167,6 +168,12 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
   }
   const repoMapContext = mapSections.length > 0 ? mapSections.join("\n\n") : "";
 
+  for (const repo of repos) {
+    if (repo.extra_context) {
+      knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+    }
+  }
+
   return renderTemplate("pre-plan", {
     repoList,
     relationshipContext: relationshipContext || undefined,
@@ -234,6 +241,12 @@ export async function buildPlanPrompt(task: Task, repos: Repo | Repo[]): Promise
   }
   const repoMapContext = mapSections.length > 0 ? mapSections.join("\n\n") : "";
 
+  for (const repo of reposArray) {
+    if (repo.extra_context) {
+      knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+    }
+  }
+
   return renderTemplate("plan", {
     repoList,
     taskDescription: task.description,
@@ -252,6 +265,9 @@ export async function buildRevisionPlanPrompt(
   let knowledgeContext = "";
   if (repo.id) {
     knowledgeContext = await getKnowledgeContext(task.description, repo.id);
+  }
+  if (repo.extra_context) {
+    knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
   }
 
   const chatContext = await getChatContext(task.id);
@@ -329,6 +345,12 @@ export async function buildImplementPrompt(
   let knowledgeContext = "";
   if (knowledgeSections.length > 0) {
     knowledgeContext = ["## Repository Knowledge Base", ...knowledgeSections].join("\n");
+  }
+
+  for (const repo of reposArray) {
+    if (repo.extra_context) {
+      knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+    }
   }
 
   const chatContext = await getChatContext(task.id);

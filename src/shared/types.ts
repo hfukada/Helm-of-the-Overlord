@@ -86,6 +86,7 @@ export interface Repo {
   ci_on_host: boolean;
   metadata: Record<string, unknown> | null;
   index_commit_hash?: string | null;
+  extra_context: string | null;
 }
 
 export type AgentRunStatus = "running" | "completed" | "failed";
