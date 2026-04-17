@@ -32,6 +32,7 @@ repos.post("/", async (c) => {
     run_cmd?: string;
     lint_cmd?: string;
     ci_on_host?: boolean;
+    extra_context?: string | null;
   }>();
 
   if (!body.url && !body.path) {
@@ -103,8 +104,8 @@ repos.post("/", async (c) => {
   const parsed = await parseRepo(repoPath);
 
   const result = db.run(
-    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path, docker_image, ci_on_host)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path, docker_image, ci_on_host, extra_context)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       repoPath,
@@ -118,6 +119,7 @@ repos.post("/", async (c) => {
       parsed.docker_compose_path,
       parsed.docker_image,
       body.ci_on_host ? 1 : 0,
+      body.extra_context ?? null,
     ]
   );
 
@@ -138,6 +140,7 @@ repos.post("/", async (c) => {
     docker_image: parsed.docker_image,
     ci_on_host: body.ci_on_host ?? false,
     metadata: null,
+    extra_context: body.extra_context ?? null,
   };
   indexRepo(repo)
     .then((result) => {
@@ -172,9 +175,10 @@ repos.patch("/:name", async (c) => {
     run_cmd?: string | null;
     lint_cmd?: string | null;
     ci_on_host?: boolean;
+    extra_context?: string | null;
   }>();
 
-  const allowed = ["description", "language", "framework", "build_cmd", "test_cmd", "run_cmd", "lint_cmd", "ci_on_host"] as const;
+  const allowed = ["description", "language", "framework", "build_cmd", "test_cmd", "run_cmd", "lint_cmd", "ci_on_host", "extra_context"] as const;
   const sets: string[] = [];
   const values: (string | number | null)[] = [];
 
@@ -260,8 +264,8 @@ repos.post("/init", async (c) => {
   const parsed = await parseRepo(repoPath);
 
   const result = db.run(
-    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path, docker_image, ci_on_host)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO repos (name, path, description, language, framework, build_cmd, test_cmd, run_cmd, lint_cmd, docker_compose_path, docker_image, ci_on_host, extra_context)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       repoPath,
@@ -275,6 +279,7 @@ repos.post("/init", async (c) => {
       parsed.docker_compose_path,
       parsed.docker_image,
       0,
+      null,
     ]
   );
 
@@ -294,6 +299,7 @@ repos.post("/init", async (c) => {
     docker_image: parsed.docker_image,
     ci_on_host: false,
     metadata: null,
+    extra_context: null,
   };
   indexRepo(repo)
     .then((r) => {

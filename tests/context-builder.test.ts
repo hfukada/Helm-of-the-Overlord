@@ -1,5 +1,12 @@
 import { describe, test, expect, mock } from "bun:test";
 
+// Mock the DB module before importing context-builder (needed for getRelationshipContext and buildRevisionPlanPrompt)
+mock.module("../src/knowledge/db", () => ({
+  getDb: () => ({
+    query: () => ({ all: () => [], get: () => null }),
+  }),
+}));
+
 // Mock the search module before importing context-builder
 mock.module("../src/knowledge/search", () => ({
   search: async () => [],
@@ -18,6 +25,7 @@ mock.module("../src/shared/logger", () => ({
 import {
   buildPlanPrompt,
   buildImplementPrompt,
+  buildRevisionPlanPrompt,
   buildSystemPrompt,
 } from "../src/orchestrator/context-builder";
 import type { Task, Repo } from "../src/shared/types";
@@ -57,6 +65,7 @@ function makeRepo(overrides?: Partial<Repo>): Repo {
     framework: "Hono",
     docker_compose_path: null,
     metadata: null,
+    extra_context: null,
     ...overrides,
   };
 }
@@ -120,6 +129,17 @@ describe("buildPlanPrompt", () => {
     const prompt = await buildPlanPrompt(makeTask(), makeRepo());
     expect(prompt).toContain("[repo-name]");
   });
+
+  test("appends extra_context to knowledge context when set", async () => {
+    const prompt = await buildPlanPrompt(makeTask(), makeRepo({ extra_context: "always update the API too" }));
+    expect(prompt).toContain("## Extra Repository Context");
+    expect(prompt).toContain("always update the API too");
+  });
+
+  test("omits Extra Repository Context section when extra_context is null", async () => {
+    const prompt = await buildPlanPrompt(makeTask(), makeRepo({ extra_context: null }));
+    expect(prompt).not.toContain("## Extra Repository Context");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -173,6 +193,44 @@ describe("buildImplementPrompt", () => {
     const prompt = await buildImplementPrompt(makeTask(), repos, samplePlan);
     expect(prompt).toContain("api");
     expect(prompt).toContain("web");
+  });
+
+  test("appends extra_context to knowledge context when set", async () => {
+    const prompt = await buildImplementPrompt(makeTask(), makeRepo({ extra_context: "always update the API too" }), samplePlan);
+    expect(prompt).toContain("## Extra Repository Context");
+    expect(prompt).toContain("always update the API too");
+  });
+
+  test("omits Extra Repository Context section when extra_context is null", async () => {
+    const prompt = await buildImplementPrompt(makeTask(), makeRepo({ extra_context: null }), samplePlan);
+    expect(prompt).not.toContain("## Extra Repository Context");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildRevisionPlanPrompt
+// ---------------------------------------------------------------------------
+
+describe("buildRevisionPlanPrompt", () => {
+  test("appends extra_context to knowledge context when set", async () => {
+    const prompt = await buildRevisionPlanPrompt(
+      makeTask(),
+      makeRepo({ extra_context: "CLI changes must also update API" }),
+      "looks good",
+      "## Plan\n..."
+    );
+    expect(prompt).toContain("## Extra Repository Context");
+    expect(prompt).toContain("CLI changes must also update API");
+  });
+
+  test("omits Extra Repository Context section when extra_context is null", async () => {
+    const prompt = await buildRevisionPlanPrompt(
+      makeTask(),
+      makeRepo({ extra_context: null }),
+      "looks good",
+      "## Plan\n..."
+    );
+    expect(prompt).not.toContain("## Extra Repository Context");
   });
 });
 

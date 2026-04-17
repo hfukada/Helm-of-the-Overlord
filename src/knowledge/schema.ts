@@ -288,6 +288,7 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE projects ADD COLUMN repo_id INTEGER REFERENCES repos(id)",
   "ALTER TABLE projects ADD COLUMN source_sender_id TEXT",
   "ALTER TABLE projects ADD COLUMN source_provider TEXT",
+  "ALTER TABLE repos ADD COLUMN extra_context TEXT",
 ];
 
 export function runMigrations(db: Database): void {
