@@ -157,9 +157,39 @@ describe("resumeInterruptedTasks", () => {
     expect(restartChildTaskPhaseCalls).toHaveLength(0);
   });
 
-  it("defaults to index when no blueprint_state is saved", async () => {
+  it("derives resume phase from status when no blueprint_state is saved (planning)", async () => {
     seedRepo();
-    seedTask("task-no-bp", "planning");
+    seedTask("task-no-bp-planning", "planning");
+
+    await resumeInterruptedTasks(makeHandlers());
+
+    expect(restartTaskPhaseCalls).toHaveLength(1);
+    expect(restartTaskPhaseCalls[0].phase).toBe("plan");
+  });
+
+  it("derives resume phase from status when no blueprint_state is saved (implementing)", async () => {
+    seedRepo();
+    seedTask("task-no-bp-implementing", "implementing");
+
+    await resumeInterruptedTasks(makeHandlers());
+
+    expect(restartTaskPhaseCalls).toHaveLength(1);
+    expect(restartTaskPhaseCalls[0].phase).toBe("implement");
+  });
+
+  it("derives resume phase from status when no blueprint_state is saved (ci_running)", async () => {
+    seedRepo();
+    seedTask("task-no-bp-ci", "ci_running");
+
+    await resumeInterruptedTasks(makeHandlers());
+
+    expect(restartTaskPhaseCalls).toHaveLength(1);
+    expect(restartTaskPhaseCalls[0].phase).toBe("ci");
+  });
+
+  it("falls back to index for resuming status when no blueprint_state is saved", async () => {
+    seedRepo();
+    seedTask("task-no-bp-resuming", "resuming");
 
     await resumeInterruptedTasks(makeHandlers());
 
