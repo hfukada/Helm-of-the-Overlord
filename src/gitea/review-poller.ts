@@ -522,7 +522,7 @@ export function restartPollersForReviewTasks(): void {
      FROM task_prs tp
      JOIN repos r ON r.id = tp.repo_id
      JOIN tasks t ON t.id = tp.task_id
-     WHERE t.status = 'review' AND tp.status = 'open'`
+     WHERE (t.status = 'review' OR t.status = 'waiting_for_children') AND tp.status = 'open'`
   ).all() as Array<{
     task_id: string;
     pr_number: number;
