@@ -15,7 +15,8 @@ import { generateMcpConfig } from "./subprocess";
 import { teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { getMessagingManager } from "../messaging/manager";
-import { ClaudeCodeCliAgent, type AgentEvent } from "../agent";
+import { type AgentEvent } from "../agent";
+import { createAgent } from "../agent/factory";
 import { StreamFormatter } from "../cli/stream-formatter";
 
 const _MAX_LINT_ROUNDS = 2;
@@ -433,7 +434,7 @@ export async function runTask(taskId: string): Promise<void> {
 
     const { executePrePlan } = await import("./nodes/agentic/pre-plan");
     // Pre-plan runs before sandbox/MCP are set up -- use a bare agent.
-    const prePlanAgent = new ClaudeCodeCliAgent({});
+    const prePlanAgent = createAgent({});
     const prePlanResult = await executePrePlan(task, prePlanAgent, { hasMcp: false });
 
     if (prePlanResult.error) {
@@ -530,7 +531,7 @@ export async function runTask(taskId: string): Promise<void> {
   }
 
   // Construct the agent once for this task (used by all parent-level nodes).
-  const agent = new ClaudeCodeCliAgent({
+  const agent = createAgent({
     sandbox: sandbox
       ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
       : undefined,

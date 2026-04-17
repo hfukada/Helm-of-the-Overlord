@@ -186,7 +186,7 @@ knowledge.post("/ask", async (c) => {
 
   if (results.length === 0) {
     const msg = "No relevant knowledge found. Try indexing repos first with: hoto repos reindex";
-    return c.json({ id: null, answer: msg, sources: [] });
+    return c.json({ id: null, answer: msg, sources: [] }, 200);
   }
 
   const askId = ulid();
@@ -196,7 +196,7 @@ knowledge.post("/ask", async (c) => {
 
   runAskInBackground(askId, body.query, results);
 
-  return c.json({ id: askId, status: "running" });
+  return c.json({ id: askId, status: "running" }, 200);
 });
 
 knowledge.get("/ask/:id/stream", (c) => {
