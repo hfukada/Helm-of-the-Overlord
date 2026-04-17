@@ -29,7 +29,7 @@ import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
 import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
 import type { SandboxOptions } from "./nodes/agentic/types";
-import { ClaudeCodeCliAgent } from "../agent";
+import { createAgent } from "../agent/factory";
 import { makeAgentOutputForwarder } from "./task-runner";
 import { claudeText } from "../shared/claude-cli";
 
@@ -209,7 +209,7 @@ export async function runChildTask(childId: string): Promise<void> {
   } catch {}
 
   // Construct the agent for this child (used by implement, fix-ci, fix-lint).
-  const agent = new ClaudeCodeCliAgent({
+  const agent = createAgent({
     sandbox: sandbox
       ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
       : undefined,
@@ -571,7 +571,7 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
     );
   } catch {}
 
-  const agent = new ClaudeCodeCliAgent({
+  const agent = createAgent({
     sandbox: sandbox
       ? { containerName: sandbox.containerName, containerWorkDir: sandbox.containerWorkDir }
       : undefined,

@@ -142,8 +142,8 @@ describe("onTaskCompleted", () => {
       ["task-carry", "Task", "desc", "committed", "cli"],
     );
     db.run(
-      `INSERT INTO agent_runs (id, task_id, status, output, started_at, finished_at)
-       VALUES (?, ?, 'completed', ?, datetime('now'), datetime('now'))`,
+      `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, output, model, started_at, finished_at)
+       VALUES (?, ?, 'implement', 'claude', 'completed', 'test', ?, 'test', datetime('now'), datetime('now'))`,
       ["run-1", "task-carry", "Important carry-over context from this milestone."],
     );
 

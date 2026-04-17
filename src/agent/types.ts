@@ -117,3 +117,21 @@ export interface AgentRunResult {
 export interface Agent {
   run(opts: AgentRunOptions): Promise<AgentRunResult>;
 }
+
+/**
+ * Provider-agnostic construction options passed to createAgent().
+ * Fields map to the intersection of what any provider might need;
+ * provider-specific fields are extracted inside the factory.
+ */
+export interface AgentOptions {
+  /** Docker sandbox to run inside. Omit for local execution. */
+  sandbox?: { containerName: string; containerWorkDir: string };
+  /** Path to an MCP config JSON file. */
+  mcpConfigPath?: string;
+  /** Model override. */
+  model?: string;
+  /** Extra directories the agent may access. */
+  addDirs?: string[];
+  /** Registry key for subprocess tracking. */
+  registryKey?: string;
+}

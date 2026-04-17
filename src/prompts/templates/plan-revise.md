@@ -2,6 +2,10 @@ Revision cycle. The previous implementation was reviewed and rejected. Plan chan
 
 ## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
 > {{taskDescription}}
+{{#if knowledgeContext}}
+
+{{knowledgeContext}}
+{{/if}}
 
 ## Previous Plan
 {{previousPlan}}
