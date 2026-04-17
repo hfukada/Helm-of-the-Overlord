@@ -1,6 +1,7 @@
 // Configuration for Hoto daemon
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { logger } from "./logger";
 
 export interface Config {
   workspaceDir: string;
@@ -25,6 +26,9 @@ export interface Config {
   sandboxClaude: boolean;
   mcpHttpPort: number;
   autoResumeOnStartup: boolean;
+  provider: 'claude' | 'ollama';
+  ollamaHost: string;
+  ollamaModel: string;
 }
 
 function expandHome(p: string): string {
@@ -59,6 +63,15 @@ function loadConfig(): Config {
   const mcpHttpPort = parseInt(process.env.HOTO_MCP_HTTP_PORT ?? "7778", 10);
   const autoResumeOnStartup = process.env.HOTO_AUTO_RESUME !== "false" && process.env.HOTO_AUTO_RESUME !== "0";
 
+  const providerRaw = process.env.HOTO_PROVIDER ?? 'claude';
+  if (providerRaw !== 'claude' && providerRaw !== 'ollama') {
+    logger.error(`Invalid HOTO_PROVIDER value: "${providerRaw}". Must be "claude" or "ollama".`);
+    throw new Error(`Invalid HOTO_PROVIDER value: "${providerRaw}". Must be "claude" or "ollama".`);
+  }
+  const provider = providerRaw as 'claude' | 'ollama';
+  const ollamaHost = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434';
+  const ollamaModel = process.env.OLLAMA_MODEL ?? 'llama3.2';
+
   return {
     workspaceDir,
     daemonPort,
@@ -82,6 +95,9 @@ function loadConfig(): Config {
     sandboxClaude,
     mcpHttpPort,
     autoResumeOnStartup,
+    provider,
+    ollamaHost,
+    ollamaModel,
   };
 }
 
