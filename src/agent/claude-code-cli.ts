@@ -13,6 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 import { claudeStream, type ClaudeOptions, type ClaudeEvent } from "../shared/claude-cli";
+import { detectLoop } from "./loop-detection";
 import { logger } from "../shared/logger";
 import { getDb } from "../knowledge/db";
 import type { TokenUsage } from "../shared/types";
@@ -336,13 +337,3 @@ function translateEvent(evt: ClaudeEvent, turnNumber: number): AgentEvent | null
   }
 }
 
-// ---------------------------------------------------------------------------
-// Loop detection
-// ---------------------------------------------------------------------------
-
-function detectLoop(recentToolNames: string[][]): boolean {
-  if (recentToolNames.length < 3) return false;
-  const last3 = recentToolNames.slice(-3);
-  const sig = (names: string[]) => JSON.stringify([...names].sort());
-  return sig(last3[0]) === sig(last3[1]) && sig(last3[1]) === sig(last3[2]);
-}
