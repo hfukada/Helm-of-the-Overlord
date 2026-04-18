@@ -3,9 +3,31 @@ import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { logger } from "../shared/logger";
+import { config } from "../shared/config";
 import type { Repo, ContainerSecret } from "../shared/types";
 import { getRepoSecrets } from "../daemon/routes/secrets";
 import { discoverSecrets } from "./secret-discovery";
+
+/**
+ * Translate an in-container path under `workspaceDir` to the corresponding
+ * host-side path under `workspaceHostDir`. Used when spawning sibling
+ * containers via the mounted Docker socket -- the host's Docker daemon
+ * resolves bind-mount paths on the host filesystem, not hoto's.
+ *
+ * On bare-metal deployments where both dirs are equal, this is a no-op.
+ */
+export function toHostPath(
+  inContainerPath: string,
+  workspaceDir: string,
+  workspaceHostDir: string,
+): string {
+  if (workspaceDir === workspaceHostDir) return inContainerPath;
+  if (inContainerPath === workspaceDir) return workspaceHostDir;
+  if (inContainerPath.startsWith(`${workspaceDir}/`)) {
+    return workspaceHostDir + inContainerPath.slice(workspaceDir.length);
+  }
+  return inContainerPath;
+}
 
 function containerName(taskId: string): string {
   return `hoto-${taskId.slice(-8)}`;
@@ -109,28 +131,13 @@ export async function startSandboxContainer(
 
   const name = containerName(taskId);
 
-  // Determine how to mount the workspace into the sandbox.
-  // When hoto runs in Docker, /data is a named volume -- we can't bind-mount a path
-  // inside it. Instead, use --volumes-from to share the hoto container's volumes,
-  // or mount the named volume directly.
-  const hotoContainerName = process.env.HOSTNAME; // Docker sets this to the container ID
-  const hotoVolume = process.env.HOTO_DATA_VOLUME; // e.g. "helm-of-the-overlord_hoto-data"
-
-  let volumeArgs: string[];
-  if (hotoVolume) {
-    // Mount the named volume at the same path so /data/tasks/<id> resolves
-    volumeArgs = ["-v", `${hotoVolume}:/data`];
-  } else if (hotoContainerName && taskDirectory.startsWith("/data")) {
-    // Share volumes from the hoto container
-    volumeArgs = ["--volumes-from", hotoContainerName];
-  } else {
-    // Running on bare metal -- bind mount the task directory directly
-    volumeArgs = ["-v", `${taskDirectory}:/workspace`];
-  }
-
-  // Map workspace path: if using shared /data volume, workspace is /data/tasks/<id>
-  // If using direct bind mount, workspace is /workspace
-  const sandboxWorkspace = (hotoVolume || hotoContainerName) ? taskDirectory : "/workspace";
+  // Bind-mount only this task's directory into the sandbox. The sandbox is
+  // spawned via the host's Docker socket, so the source path must be a host
+  // path. `toHostPath` translates the in-container taskDirectory (under
+  // workspaceDir) to the corresponding host path (under workspaceHostDir).
+  const hostTaskDir = toHostPath(taskDirectory, config.workspaceDir, config.workspaceHostDir);
+  const sandboxWorkspace = "/workspace";
+  const volumeArgs = ["-v", `${hostTaskDir}:${sandboxWorkspace}`];
 
   const args = [
     "docker", "run", "-d",
@@ -200,7 +207,18 @@ export async function setupTaskContainer(
     });
   }
 
+  // The Docker socket we use is the host's, so bind-mount sources are resolved
+  // against the host filesystem. Translate workDir (in-container) to the host
+  // path for Options 2/3 below.
+  const hostWorkDir = toHostPath(workDir, config.workspaceDir, config.workspaceHostDir);
+
   // Option 1: docker-compose
+  // NOTE: When hoto runs in Docker, `docker compose -f <composePath> up` is
+  // executed against the host daemon, but the compose file itself is at an
+  // in-container path. Relative bind mounts inside the compose file resolve
+  // against the compose file's directory -- which doesn't exist on the host.
+  // This path is broken for containerized deployments and is not being fixed
+  // in this change.
   if (repo.docker_compose_path) {
     // docker_compose_path may be absolute or relative to repo.path
     const composePath = repo.docker_compose_path.startsWith("/")
@@ -270,7 +288,7 @@ export async function setupTaskContainer(
       const args = [
         "docker", "run", "-d",
         "--name", name,
-        "-v", `${workDir}:/workspace`,
+        "-v", `${hostWorkDir}:/workspace`,
         "-w", "/workspace",
         ...secretFlags,
         imageName,
@@ -303,7 +321,7 @@ export async function setupTaskContainer(
     const args = [
       "docker", "run", "-d",
       "--name", name,
-      "-v", `${workDir}:/workspace`,
+      "-v", `${hostWorkDir}:/workspace`,
       "-w", "/workspace",
       ...secretFlags,
       repo.docker_image,

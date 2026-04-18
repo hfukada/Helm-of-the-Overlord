@@ -119,7 +119,44 @@ describe("SandboxOptions", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. Config flag
+// 4. toHostPath translation for sandbox/CI bind mounts
+// ---------------------------------------------------------------------------
+
+describe("toHostPath", () => {
+  test("returns input unchanged when workspaceDir == workspaceHostDir (bare metal)", async () => {
+    const { toHostPath } = await import("../src/workspace/docker-exec");
+    const p = toHostPath("/home/u/.hoto-workspace/tasks/abc", "/home/u/.hoto-workspace", "/home/u/.hoto-workspace");
+    expect(p).toBe("/home/u/.hoto-workspace/tasks/abc");
+  });
+
+  test("translates in-container path to host path when dirs differ (containerized)", async () => {
+    const { toHostPath } = await import("../src/workspace/docker-exec");
+    const p = toHostPath("/data/tasks/abc/myrepo", "/data", "/home/u/hoto/data");
+    expect(p).toBe("/home/u/hoto/data/tasks/abc/myrepo");
+  });
+
+  test("translates the workspace root itself", async () => {
+    const { toHostPath } = await import("../src/workspace/docker-exec");
+    const p = toHostPath("/data", "/data", "/home/u/hoto/data");
+    expect(p).toBe("/home/u/hoto/data");
+  });
+
+  test("leaves paths outside workspaceDir untouched", async () => {
+    const { toHostPath } = await import("../src/workspace/docker-exec");
+    const p = toHostPath("/tmp/somewhere", "/data", "/home/u/hoto/data");
+    expect(p).toBe("/tmp/somewhere");
+  });
+
+  test("does not match a prefix that is not a path boundary", async () => {
+    // /datastore should NOT match /data as a prefix
+    const { toHostPath } = await import("../src/workspace/docker-exec");
+    const p = toHostPath("/datastore/foo", "/data", "/home/u/hoto/data");
+    expect(p).toBe("/datastore/foo");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5. Config flag
 // ---------------------------------------------------------------------------
 
 describe("config: sandbox flag", () => {

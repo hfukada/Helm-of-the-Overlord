@@ -5,6 +5,7 @@ import { logger } from "./logger";
 
 export interface Config {
   workspaceDir: string;
+  workspaceHostDir: string;
   daemonPort: number;
   daemonHost: string;
   defaultModel: string;
@@ -41,6 +42,15 @@ function loadConfig(): Config {
   const workspaceDir = expandHome(
     process.env.HOTO_WORKSPACE ?? join(homedir(), ".hoto-workspace")
   );
+  // Host-side path for the workspace. When hoto runs in Docker, this may
+  // differ from workspaceDir -- workspaceDir is the in-container mount point
+  // (e.g. /data) and workspaceHostDir is the host directory being bind-mounted
+  // (e.g. /home/user/hoto/data). Sandbox/CI containers are spawned via the
+  // host's Docker socket, so their bind mounts must use host paths.
+  // Defaults to workspaceDir when not set (bare-metal case).
+  const workspaceHostDir = process.env.HOTO_WORKSPACE_HOST
+    ? expandHome(process.env.HOTO_WORKSPACE_HOST)
+    : workspaceDir;
   const daemonPort = parseInt(process.env.HOTO_PORT ?? "7777", 10);
   const daemonHost = process.env.HOTO_HOST ?? "127.0.0.1";
   const defaultModel = process.env.HOTO_MODEL ?? "claude-sonnet-4-6";
@@ -74,6 +84,7 @@ function loadConfig(): Config {
 
   return {
     workspaceDir,
+    workspaceHostDir,
     daemonPort,
     daemonHost,
     defaultModel,

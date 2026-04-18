@@ -165,7 +165,7 @@ When `HOTO_SANDBOX_CLAUDE=true`, all Claude subprocesses run inside Docker sandb
 
 Key env vars for containerized deployment:
 - `HOTO_SANDBOX_CLAUDE=true` - Enable sandboxed execution
-- `HOTO_DATA_VOLUME` - Docker named volume for workspace (e.g. `helm-of-the-overlord_hoto-data`)
+- `HOTO_WORKSPACE_HOST` - Host-side path of the workspace (e.g. `${PWD}/data`); used for sandbox bind mounts
 - `HOTO_MCP_HTTP_PORT` - Port for MCP HTTP server (default: 7778)
 
 ## Multi-Repo Tasks (Child Task Architecture)
@@ -203,7 +203,7 @@ Services: hoto, chromadb, synapse (Matrix), gitea, ollama, sandbox (image build 
 The hoto container needs:
 - Docker socket mount (`/var/run/docker.sock`) for sandbox/CI containers
 - Claude credentials directory mount (`~/.claude:/root/.claude`) -- read-write so claude can refresh tokens
-- Named volume `hoto-data` for workspace persistence
+- Host bind mount `./data:/data` for workspace persistence. Sandboxes are spawned via the host Docker socket and bind-mount only the specific task's subdirectory (`${HOTO_WORKSPACE_HOST}/tasks/<id>`), so the DB and sibling tasks are not visible to the sandbox.
 
 Environment overrides in docker-compose use Docker service names (e.g. `gitea:3777`, `chromadb:8000`, `ollama:11434`).
 

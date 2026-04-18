@@ -6,7 +6,7 @@ services:
       - "7777:7777"
       - "7778:7778"
     volumes:
-      - hoto-data:/data
+      - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOME}/.claude:/root/.claude
       - ${HOME}/.claude.json:/root/.claude.json
@@ -17,10 +17,14 @@ services:
       HOTO_HOST: "0.0.0.0"
       HOTO_PORT: "7777"
       HOTO_WORKSPACE: /data
+      # Host-side path for the workspace bind mount above. Sandbox and CI
+      # containers are spawned via the host Docker socket, so their bind mounts
+      # must reference host paths. Must match the source of the ./data:/data
+      # mount above, resolved as absolute.
+      HOTO_WORKSPACE_HOST: ${PWD}/data
       CHROMA_URL: http://chromadb:8000
       MATRIX_HOMESERVER_URL: http://synapse:8008
       OLLAMA_HOST: http://ollama:11434
-      HOTO_DATA_VOLUME: ${COMPOSE_PROJECT_NAME:-helm-of-the-overlord}_hoto-data
       HOTO_GIT_COMMIT: ${GIT_COMMIT:-}
       HOTO_GIT_DATETIME: ${GIT_DATETIME:-}
     depends_on:
@@ -77,7 +81,6 @@ services:
       GITEA__server__DISABLE_SSH: "true"
 
 volumes:
-  hoto-data:
   ollama-data:
   chroma-data:
   synapse-data:
