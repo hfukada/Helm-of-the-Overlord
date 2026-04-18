@@ -36,7 +36,10 @@ Parent: pre-plan -> plan -> scrutinize -> finalize -> spawn children -> wait
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) (`claude` must be on your PATH)
 - Git
 - [Gitea](https://gitea.io) instance with an admin token (optional -- required for PR review workflow)
-- [Ollama](https://ollama.ai) with `nomic-embed-text` (optional -- for local vector embeddings)
+- [Ollama](https://ollama.ai) (optional):
+  - `nomic-embed-text` — local vector embeddings (falls back to keyword search without it)
+  - `llama3.2` (or the model set in `OLLAMA_MODEL`) — alternative agent backend when `HOTO_PROVIDER=ollama`
+  - `llama3.2:3b` (or `HOTO_INTENT_MODEL`) — intent classification for plain-text chat messages
 - [ChromaDB](https://www.trychroma.com) (optional -- vector search backend; falls back to keyword search)
 
 ## Install
@@ -120,6 +123,7 @@ src/
     tools.ts                 Tool definitions passed to the agent
     persistence.ts           Agent run persistence helpers
     types.ts                 Agent-related TypeScript types
+    ollama.ts                OllamaAgent: in-process tool execution via Ollama API
   projects/                  Projects feature: breaks long-horizon tasks into sequential milestones
     planner.ts               Generates milestone plans for projects
     runner.ts                Executes project milestones sequentially
@@ -186,6 +190,8 @@ All configuration is via environment variables. The daemon reads these at startu
 | `HOTO_HOSTNAME` | `localhost` | Hostname for external URLs (Gitea PR links) |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL for intent classification |
 | `HOTO_INTENT_MODEL` | `llama3.2:3b` | Ollama model for classifying chat messages |
+| `OLLAMA_MODEL` | `llama3.2` | Ollama model used by OllamaAgent for task execution (`HOTO_PROVIDER=ollama`) |
+| `HOTO_PROVIDER` | `claude` | Agent backend: `claude` (Claude CLI subagents) or `ollama` (local Ollama) |
 
 ## Chat integration
 
@@ -217,6 +223,10 @@ General (any channel):
   !reindex <repo> [--force]             Reindex repo knowledge base
   !tokens                               Show token usage and cost
   !ask <question>                       Query the knowledge base
+  !project "<description>" [-r repo]    Start a new project (long-horizon, sequential milestones)
+  !project list                         List all projects
+  !project status <id>                  Show project detail and milestone progress
+  !project delete <id>                  Delete a project
   !relate <a> <b> <desc>                Define a repo relationship
   !unrelate <a> <b> [type]              Remove a repo relationship
   !relationships [repo]                 List repo relationships
@@ -230,6 +240,16 @@ In task channels:
 ```
 
 Plain-text messages in the main channel are classified by intent (via Ollama) and routed to either `!run` or `!ask` automatically.
+
+## Projects
+
+Projects break long-horizon tasks into a sequence of milestones, each executed as its own task with its own PR. Use projects when a feature is too large for a single agent run.
+
+- Start a project with `!project "description"` (chat) or `POST /projects` (API)
+- Hoto generates a milestone plan using Claude and the knowledge base
+- Each milestone runs through the full task pipeline (plan -> implement -> CI/lint -> PR -> review)
+- Milestones execute sequentially; a failed milestone pauses the project
+- Progress is tracked per-milestone; projects can be resumed after the underlying issue is fixed
 
 ## MCP server
 
@@ -481,6 +501,34 @@ The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO
 **`GET /knowledge/search`**
 - Query params: `q` (required, search query), `repo` (optional, filter by repo name), `limit` (optional, default 10)
 - Response: `{ "results": [{ "repo_name": string, "source_file": string, "chunk_type": string, "content": string, "score": number }], "count": number }`
+
+---
+
+### Projects
+
+**`GET /projects`**
+- Response: Array of project objects (last 100, ordered by `created_at` DESC) with fields `id, title, description, status, repo_names, architecture_notes, carry_over_notes, created_at, updated_at`.
+
+**`POST /projects`**
+- Request body:
+  ```json
+  {
+    "description": "string (required)",
+    "repo_names": ["string (optional, target specific repos by name)"],
+    "architecture_notes": "string (optional, planner context)"
+  }
+  ```
+- Response (201): `{ "id": string, "title": string, "status": "planning" }`
+
+**`GET /projects/:id`**
+- Response: Full project object including `tasks` array with milestone task summaries.
+
+**`PATCH /projects/:id`**
+- Request body: Any subset of `{ "title": string, "description": string, "status": string, "architecture_notes": string, "carry_over_notes": string }`.
+- Response: Updated project object.
+
+**`DELETE /projects/:id`**
+- Response: `{ "deleted": true }`
 
 ## License
 

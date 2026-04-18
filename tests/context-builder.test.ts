@@ -1,11 +1,6 @@
-import { describe, test, expect, mock } from "bun:test";
+import { describe, test, expect, mock, beforeAll } from "bun:test";
 
-// Mock the DB module before importing context-builder (needed for getRelationshipContext and buildRevisionPlanPrompt)
-mock.module("../src/knowledge/db", () => ({
-  getDb: () => ({
-    query: () => ({ all: () => [], get: () => null }),
-  }),
-}));
+process.env.HOTO_WORKSPACE = "/tmp/hoto-test-context-builder";
 
 // Mock the search module before importing context-builder
 mock.module("../src/knowledge/search", () => ({
@@ -29,6 +24,13 @@ import {
   buildSystemPrompt,
 } from "../src/orchestrator/context-builder";
 import type { Task, Repo } from "../src/shared/types";
+
+beforeAll(async () => {
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync("/tmp/hoto-test-context-builder", { recursive: true });
+  const { getDb } = await import("../src/knowledge/db");
+  getDb();
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
