@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git bash ca-certificates unzip xz-utils \
+    curl git bash ca-certificates unzip xz-utils python3 python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && git config --global user.email "hoto@localhost" \
     && git config --global user.name "hoto"

@@ -24,7 +24,6 @@ import { getDb } from "../knowledge/db";
 import type { TokenUsage } from "../shared/types";
 import type {
   Agent,
-  AgentEvent,
   AgentOptions,
   AgentRunOptions,
   AgentRunResult,
@@ -155,7 +154,7 @@ export class OllamaAgent implements Agent {
       // Parse streaming NDJSON response line by line.
       const accumulated: OllamaStreamChunk[] = [];
       try {
-        const reader = response.body!.getReader();
+        const reader = (response.body as ReadableStream<Uint8Array>).getReader();
         const decoder = new TextDecoder();
         let buffer = "";
 

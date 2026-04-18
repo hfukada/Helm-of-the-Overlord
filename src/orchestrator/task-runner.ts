@@ -15,7 +15,7 @@ import { generateMcpConfig } from "./subprocess";
 import { teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { getMessagingManager } from "../messaging/manager";
-import { type AgentEvent } from "../agent";
+import type { AgentEvent } from "../agent";
 import { createAgent } from "../agent/factory";
 import { StreamFormatter } from "../cli/stream-formatter";
 

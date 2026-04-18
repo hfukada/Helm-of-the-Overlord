@@ -6,8 +6,8 @@ import * as crypto from "node:crypto";
 process.env.HOTO_WORKSPACE = path.join(os.tmpdir(), `hoto-test-${crypto.randomUUID()}`);
 
 import { describe, it, expect, beforeEach, spyOn } from "bun:test";
-import { MessagingManager } from "./manager";
-import type { MessagingProvider } from "./interface";
+import { MessagingManager } from "../src/messaging/manager";
+import type { MessagingProvider } from "../src/messaging/interface";
 
 function _makeStubProvider(): MessagingProvider {
   return {

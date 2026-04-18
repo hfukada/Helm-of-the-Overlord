@@ -170,7 +170,7 @@ export async function buildPrePlanPrompt(task: Task): Promise<string> {
 
   for (const repo of repos) {
     if (repo.extra_context) {
-      knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+      knowledgeContext += `\n\n## Extra Repository Context\n${repo.extra_context}`;
     }
   }
 
@@ -243,7 +243,7 @@ export async function buildPlanPrompt(task: Task, repos: Repo | Repo[]): Promise
 
   for (const repo of reposArray) {
     if (repo.extra_context) {
-      knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+      knowledgeContext += `\n\n## Extra Repository Context\n${repo.extra_context}`;
     }
   }
 
@@ -267,7 +267,7 @@ export async function buildRevisionPlanPrompt(
     knowledgeContext = await getKnowledgeContext(task.description, repo.id);
   }
   if (repo.extra_context) {
-    knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+    knowledgeContext += `\n\n## Extra Repository Context\n${repo.extra_context}`;
   }
 
   const chatContext = await getChatContext(task.id);
@@ -349,7 +349,7 @@ export async function buildImplementPrompt(
 
   for (const repo of reposArray) {
     if (repo.extra_context) {
-      knowledgeContext += "\n\n## Extra Repository Context\n" + repo.extra_context;
+      knowledgeContext += `\n\n## Extra Repository Context\n${repo.extra_context}`;
     }
   }
 

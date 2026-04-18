@@ -13,7 +13,8 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/knowledge/schema";
-import { parseRepo } from "../src/knowledge/repo-parser";
+// Dynamic import with cache-bust to bypass mock.module pollution from repos.test.ts
+const { parseRepo } = await import(`../src/knowledge/repo-parser?t=${Date.now()}`);
 
 // ---------------------------------------------------------------------------
 // Helper: create a temp directory with specific files

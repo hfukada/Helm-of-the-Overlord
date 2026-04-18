@@ -8,3 +8,9 @@ services:
       HOTO_LOG_LEVEL: warn
     tmpfs:
       - /tmp/hoto-test
+    networks:
+      - test-isolated
+
+networks:
+  test-isolated:
+    driver: bridge

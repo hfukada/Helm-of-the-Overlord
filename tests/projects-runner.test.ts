@@ -1,9 +1,10 @@
-import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
+import { describe, test, expect, beforeAll, beforeEach, afterAll } from "bun:test";
 import { getDb } from "../src/knowledge/db";
 
 process.env.HOTO_WORKSPACE = "/tmp/hoto-test-projects-runner";
 
 // Intercept fetch before runner is imported so advanceProject does not need a live daemon
+const originalFetch = globalThis.fetch;
 let lastFetchUrl = "";
 let lastFetchBody: Record<string, unknown> | null = null;
 let mockTaskIdCounter = 0;
@@ -23,6 +24,10 @@ const fakeFetch = async (url: string, opts?: RequestInit): Promise<Response> => 
 };
 
 globalThis.fetch = fakeFetch as unknown as typeof fetch;
+
+afterAll(() => {
+  globalThis.fetch = originalFetch;
+});
 
 let onTaskCompleted: (taskId: string) => Promise<void>;
 let resumeProjects: () => Promise<void>;
