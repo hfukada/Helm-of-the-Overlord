@@ -2,17 +2,12 @@
  * OllamaAgent -- implements the Agent interface using the Ollama /api/chat
  * REST endpoint with streaming NDJSON and tool-calling support.
  *
- * Tool execution model (Milestone 3 scope):
- *   Ollama produces tool_calls in its response but this agent cannot execute
- *   filesystem tools (Read, Bash, etc.) in-process. Tool calls are emitted as
- *   AgentEvents. After each tool-bearing turn, onTurnComplete() is called to
- *   get a continuation prompt which is injected as a role:"user" message.
- *
- *   NOTE: This means the message history will contain role:"user" continuations
- *   rather than role:"tool" messages with structured results. Models that enforce
- *   strict tool message sequencing may behave unexpectedly. This is a known
- *   limitation of Milestone 3 — full role:"tool" injection is deferred.
- *   A warning is logged when this path is taken.
+ * Tool execution model (Milestone 4):
+ *   Ollama produces tool_calls in its response. Tools are executed in-process
+ *   via tool-executor.ts (Read, Glob, Grep, Write, Edit, Bash). Results are
+ *   injected as role:"tool" messages with matching tool_call_id fields so that
+ *   models with strict tool message sequencing receive well-formed history.
+ *   onTurnComplete() is NOT called in the tool-use path.
  *
  * session_id: Ollama has no session concept. The agent_runs.session_id column
  *   is left unchanged (not updated) at run end. This is intentional.
@@ -32,6 +27,7 @@ import type {
   AgentStopReason,
 } from "./types";
 import { detectLoop } from "./loop-detection";
+import { executeTool } from "./tool-executor";
 
 // ---------------------------------------------------------------------------
 // Ollama REST API types (subset)
@@ -49,6 +45,7 @@ interface OllamaTool {
 }
 
 interface OllamaToolCall {
+  id?: string;
   function: {
     name: string;
     arguments: Record<string, unknown>;
@@ -59,6 +56,7 @@ interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
   tool_calls?: OllamaToolCall[];
+  tool_call_id?: string;
 }
 
 interface OllamaStreamChunk {
@@ -282,24 +280,26 @@ export class OllamaAgent implements Agent {
         });
       }
 
-      // Push the assistant message with tool_calls onto the history.
+      // Assign resolved IDs to each tool call (Ollama does not guarantee IDs).
+      const resolvedToolCalls = rawToolCalls.map((tc, i) => ({
+        ...tc,
+        id: tc.id ?? `call_${turnNum}_${i}`,
+      }));
+
+      // Push assistant message with ID-resolved tool_calls.
       messages.push({
         role: "assistant",
         content: turnText,
-        tool_calls: rawToolCalls,
+        tool_calls: resolvedToolCalls,
       });
 
-      // Milestone 3 limitation: we cannot inject role:"tool" messages because
-      // tools are not executed in-process. Instead, call onTurnComplete() to get
-      // a continuation string and push it as role:"user". Models that enforce strict
-      // tool message sequencing may behave unexpectedly. Log a warning.
-      logger.warn(
-        "OllamaAgent: injecting tool results as role:user (Milestone 3 limitation -- role:tool not yet supported)",
-        { agentRunId: opts.agentRunId, turn: turnNum, toolCalls: turnToolCalls.map((tc) => tc.name) },
-      );
-      const injected = opts.onTurnComplete ? await opts.onTurnComplete(turn) : null;
-      const continuation = injected ?? "continue";
-      messages.push({ role: "user", content: continuation });
+      // Execute each tool in-process and push a role:"tool" result message.
+      for (const tc of resolvedToolCalls) {
+        const name = tc.function.name;
+        const result = await executeTool(name, tc.function.arguments, opts.workDir);
+        opts.onEvent?.({ type: "tool_result", turnNumber: turnNum, toolName: name, content: result });
+        messages.push({ role: "tool", tool_call_id: tc.id as string, content: result });
+      }
     }
 
     const output = lastText || (turns.length > 0 ? turns[turns.length - 1].text : "");
