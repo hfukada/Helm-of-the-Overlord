@@ -72,6 +72,7 @@ export async function executeUnderstandReview(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 
@@ -119,6 +120,7 @@ export async function executeReviewSmallFeedback(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 
@@ -182,6 +184,7 @@ export async function executeReviewLargeFeedback(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 

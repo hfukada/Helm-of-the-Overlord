@@ -47,6 +47,7 @@ export async function executeFixCi(
     workDir,
     addDirs: [workDir],
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 
@@ -79,6 +80,7 @@ export async function executeFixCi(
     workDir,
     addDirs: [workDir],
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { logger } from "../shared/logger";
+import { callMcpTool } from "../mcp/client";
 
 /**
  * Executes a single tool call in-process for OllamaAgent.
@@ -7,12 +8,14 @@ import { logger } from "../shared/logger";
  * @param toolName   Name of the tool (matches ToolDefinition.name)
  * @param args       Parsed arguments from the model's tool_call
  * @param workDir    Absolute path to the repo working directory
+ * @param mcpOpts    MCP connection options; required for MCP-backed tools
  * @returns          Tool output as a plain string (never throws)
  */
 export async function executeTool(
   toolName: string,
   args: Record<string, unknown>,
   workDir: string,
+  mcpOpts?: { mcpUrl: string; repoName: string },
 ): Promise<string> {
   switch (toolName) {
     case "Read":
@@ -28,8 +31,21 @@ export async function executeTool(
     case "Bash":
       return execBash(args, workDir);
     case "SearchKnowledge":
-      logger.warn("executeTool: SearchKnowledge is not supported by OllamaAgent in-process executor", { toolName });
-      return "Tool 'SearchKnowledge' is not supported by OllamaAgent. Use a ClaudeCodeCliAgent for knowledge base access.";
+      if (mcpOpts) {
+        return callMcpTool("search_knowledge", { query: args.query, limit: args.limit }, mcpOpts);
+      }
+      logger.warn("executeTool: SearchKnowledge called without MCP connection", { toolName });
+      return "Tool 'SearchKnowledge' requires MCP connection";
+    case "ListFiles":
+      if (mcpOpts) {
+        return callMcpTool("list_files", { pattern: args.pattern }, mcpOpts);
+      }
+      return "Tool 'ListFiles' requires MCP connection";
+    case "ReadFile":
+      if (mcpOpts) {
+        return callMcpTool("read_file", { path: args.path, offset: args.offset, limit: args.limit }, mcpOpts);
+      }
+      return "Tool 'ReadFile' requires MCP connection";
     default:
       return `Tool '${toolName}' is not supported by OllamaAgent`;
   }

@@ -49,6 +49,7 @@ export async function executeFixLint(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 
