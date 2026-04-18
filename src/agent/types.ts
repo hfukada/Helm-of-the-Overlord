@@ -76,6 +76,8 @@ export interface AgentRunOptions {
   agentRunId: string;
   /** Optional task ID for debugging artifacts. */
   taskId?: string;
+  /** Repo name for MCP tool calls (used by OllamaAgent). */
+  repoName?: string;
 
   /** Fires for every AgentEvent as it's produced. */
   onEvent?: (event: AgentEvent) => void;

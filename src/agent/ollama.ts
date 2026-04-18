@@ -296,7 +296,10 @@ export class OllamaAgent implements Agent {
       // Execute each tool in-process and push a role:"tool" result message.
       for (const tc of resolvedToolCalls) {
         const name = tc.function.name;
-        const result = await executeTool(name, tc.function.arguments, opts.workDir);
+        const mcpOpts = opts.repoName !== undefined
+          ? { mcpUrl: `http://127.0.0.1:${config.mcpHttpPort}`, repoName: opts.repoName }
+          : undefined;
+        const result = await executeTool(name, tc.function.arguments, opts.workDir, mcpOpts);
         opts.onEvent?.({ type: "tool_result", turnNumber: turnNum, toolName: name, content: result });
         messages.push({ role: "tool", tool_call_id: tc.id as string, content: result });
       }

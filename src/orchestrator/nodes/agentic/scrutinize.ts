@@ -66,6 +66,7 @@ export async function executeScrutinize(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 
@@ -121,6 +122,7 @@ export async function executePlanAgain(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 
@@ -172,6 +174,7 @@ export async function executeFinalizePlan(
     maxTurns: 10,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 

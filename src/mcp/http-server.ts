@@ -25,6 +25,29 @@ const TOOLS = [
       required: ["query"],
     },
   },
+  {
+    name: "list_files",
+    description: "List files tracked by git in the repository, optionally filtered by glob pattern.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        pattern: { type: "string", description: "Glob pattern to filter files (e.g. 'src/**/*.ts')" },
+      },
+    },
+  },
+  {
+    name: "read_file",
+    description: "Read a file from the working directory.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        path: { type: "string", description: "Relative path to file" },
+        offset: { type: "number", description: "Line offset (0-based)" },
+        limit: { type: "number", description: "Max lines to read" },
+      },
+      required: ["path"],
+    },
+  },
 ];
 
 const DAEMON_URL = `http://127.0.0.1:${config.daemonPort}`;
@@ -51,6 +74,43 @@ async function handleToolCall(
         .join("\n\n");
       return { content: [{ type: "text", text: text || "No results found." }] };
     }
+
+    case "list_files": {
+      const pattern = args.pattern as string | undefined;
+      const res = await fetch(`${DAEMON_URL}/knowledge/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repo_name: repoName, pattern }),
+      });
+      const data = await res.json() as { files: string[] };
+      return { content: [{ type: "text", text: data.files.join("\n") || "No files found." }] };
+    }
+
+    case "read_file": {
+      const filePath = args.path as string;
+      const offset = (args.offset as number) || 0;
+      const limit = (args.limit as number) || 0;
+      const { join } = await import("node:path");
+      const fullPath = join(config.workspaceDir, repoName, filePath);
+      try {
+        const file = Bun.file(fullPath);
+        const text = await file.text();
+        const lines = text.split("\n");
+        let selected: string[];
+        if (offset > 0 || limit > 0) {
+          const start = offset;
+          const end = limit > 0 ? start + limit : lines.length;
+          selected = lines.slice(start, end);
+        } else {
+          selected = lines;
+        }
+        const numbered = selected.map((line, i) => `${offset + i + 1}\t${line}`);
+        return { content: [{ type: "text", text: numbered.join("\n") }] };
+      } catch {
+        return { content: [{ type: "text", text: `Error: file not found: ${filePath}` }], isError: true };
+      }
+    }
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }

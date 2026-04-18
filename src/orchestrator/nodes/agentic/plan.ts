@@ -39,6 +39,7 @@ export async function executePlan(
     maxTurns: 15,
     workDir,
     model: config.defaultModel,
+    repoName: repo.name,
     onEvent: opts.onEvent,
   });
 

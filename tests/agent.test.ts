@@ -309,7 +309,7 @@ describe("ClaudeCodeCliAgent tool translation", () => {
   test("withKnowledgeSearch prepends the search tool", () => {
     const tools = withKnowledgeSearch(READ_TOOLS);
     expect(tools[0].name).toBe("SearchKnowledge");
-    expect(tools).toHaveLength(READ_TOOLS.length + 1);
+    expect(tools).toHaveLength(READ_TOOLS.length + 3);
   });
 
   test("withKnowledgeSearch is idempotent", () => {

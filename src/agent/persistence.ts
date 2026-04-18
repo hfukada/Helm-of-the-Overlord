@@ -35,6 +35,8 @@ export interface AgentRunSpec {
   workDir: string;
   addDirs?: string[];
   model?: string;
+  /** Repo name forwarded to AgentRunOptions for MCP tool dispatch. */
+  repoName?: string;
 
   /** Forwarded to the agent (in addition to DB event storage). */
   onEvent?: (event: AgentEvent) => void;
@@ -85,6 +87,7 @@ export async function runAgent(
     addDirs: spec.addDirs,
     agentRunId,
     taskId: spec.taskId,
+    repoName: spec.repoName,
     onEvent: wrappedOnEvent,
     onTurnComplete: spec.onTurnComplete,
     shouldStop: spec.shouldStop,

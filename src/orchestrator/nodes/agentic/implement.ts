@@ -66,6 +66,7 @@ export async function executeImplement(
     workDir,
     addDirs: [effectiveWorkDir],
     model: config.defaultModel,
+    repoName: repos[0]?.name,
     onEvent: opts.onEvent,
   });
 
