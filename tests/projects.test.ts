@@ -58,25 +58,6 @@ describe("projects API", () => {
     expect(Array.isArray(data.milestones)).toBe(true);
     expect(typeof data.current_milestone).toBe("number");
   });
-
-  test("POST /projects creates a project", async () => {
-    const res = await req("POST", "/projects", {
-      description: "A big feature broken into tasks",
-    });
-    expect(res.status).toBe(201);
-    const data = await res.json() as Record<string, unknown>;
-    expect(typeof data.id).toBe("string");
-    expect(data.title).toBe("Planning\u2026");
-    expect(data.description).toBe("A big feature broken into tasks");
-    expect(data.status).toBe("planning");
-    expect(data.architecture_notes).toBeNull();
-    expect(data.carry_over_notes).toBeNull();
-    expect(typeof data.created_at).toBe("string");
-    expect(typeof data.updated_at).toBe("string");
-    expect(Array.isArray(data.milestones)).toBe(true);
-    expect(typeof data.current_milestone).toBe("number");
-  });
-
   test("POST /projects with architecture_notes", async () => {
     const res = await req("POST", "/projects", {
       description: "Refactor auth system",

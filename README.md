@@ -507,7 +507,7 @@ The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO
 ### Projects
 
 **`GET /projects`**
-- Response: Array of project objects (last 100, ordered by `created_at` DESC) with fields `id, title, description, status, repo_names, architecture_notes, carry_over_notes, created_at, updated_at`.
+- Response: Array of project objects (last 100, ordered by `created_at` DESC) with fields `id, title, description, status, architecture_notes, carry_over_notes, milestones, current_milestone, created_at, updated_at`.
 
 **`POST /projects`**
 - Request body:
@@ -518,7 +518,7 @@ The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO
     "architecture_notes": "string (optional, planner context)"
   }
   ```
-- Response (201): `{ "id": string, "title": string, "status": "planning" }`
+- Response (201): Full project object — same fields as `GET /projects` items (`id, title, description, status, architecture_notes, carry_over_notes, milestones, current_milestone, created_at, updated_at`).
 
 **`GET /projects/:id`**
 - Response: Full project object including `tasks` array with milestone task summaries.
