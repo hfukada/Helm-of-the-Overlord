@@ -19,6 +19,7 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `src/daemon/dates.ts` - ISO 8601 date helpers for API responses
 - `src/daemon/routes/projects.ts` - Projects REST endpoints
 - `src/daemon/routes/version.ts` - Version endpoint
+- `src/daemon/routes/comments.ts` - Diff comments REST endpoints
 - `src/cli/` - CLI arg parsing and commands
 - `src/gitea/` - Gitea REST client, PR creation, review polling
 - `src/knowledge/` - SQLite DB, schema, embeddings, search
@@ -29,6 +30,8 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 - `src/agent/tools.ts` - Tool definitions passed to the agent
 - `src/agent/persistence.ts` - Agent run persistence helpers
 - `src/agent/types.ts` - Agent-related TypeScript types
+- `src/agent/loop-detection.ts` - Detects and breaks infinite loops in agent runs
+- `src/agent/ollama.ts` - OllamaAgent implementation (local model alternative to Claude)
 - `src/projects/` - Projects feature: breaks long-horizon tasks into sequential milestones
 - `src/projects/planner.ts` - Generates milestone plans for projects
 - `src/projects/runner.ts` - Executes project milestones sequentially
@@ -53,9 +56,40 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 
 ## Key Commands
 
+### Daemon
 - `bun run src/index.ts daemon start` - Start daemon
+- `bun run src/index.ts daemon stop` - Stop daemon
+- `bun run src/index.ts daemon status` - Show daemon status
+
+### Tasks
 - `bun run src/index.ts run "task description"` - Submit task
 - `bun run src/index.ts status` - List tasks
+- `bun run src/index.ts cancel <id>` - Cancel a task
+- `bun run src/index.ts delete <id>` - Delete a task
+- `bun run src/index.ts ask <id> "question"` - Ask a running task a question
+- `bun run src/index.ts open <id>` - Open task in browser
+
+### Repos
+- `bun run src/index.ts repos` - List registered repos
+
+### Tokens
+- `bun run src/index.ts tokens` - Show token usage stats
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `HOTO_WORKSPACE` | `~/.hoto-workspace` | Workspace directory for repos, DB, and task data |
+| `HOTO_DAEMON_PORT` | `7777` | Port the daemon listens on |
+| `HOTO_SANDBOX_CLAUDE` | `false` | Run Claude subprocesses inside Docker sandbox containers |
+| `HOTO_DATA_VOLUME` | _(none)_ | Docker named volume for workspace (e.g. `helm-of-the-overlord_hoto-data`) |
+| `HOTO_MCP_HTTP_PORT` | `7778` | Port for MCP HTTP/SSE server |
+| `GITEA_URL` | _(required)_ | Base URL of Gitea instance (e.g. `http://localhost:3777`) |
+| `GITEA_TOKEN` | _(required)_ | Gitea API token |
+| `MATRIX_HOMESERVER` | _(optional)_ | Matrix homeserver URL for chat bot integration |
+| `MATRIX_TOKEN` | _(optional)_ | Matrix access token |
+| `DISCORD_TOKEN` | _(optional)_ | Discord bot token |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL (used by OllamaAgent) |
 
 ## Testing
 
@@ -64,6 +98,7 @@ Tests run in a Docker container to isolate them from the local workspace and DB.
 ```
 bun run test                # Run all tests in a container (default)
 bun run test:local          # Run tests locally (uses bun test directly -- avoid, leaks test data into ~/.hoto-workspace)
+bun run test:e2e            # Run the e2e hello-world integration test directly (no container)
 bun run typecheck           # Type-check without emitting
 bun run lint                # Lint with Biome
 ```
