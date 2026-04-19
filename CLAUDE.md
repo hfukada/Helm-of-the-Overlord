@@ -90,6 +90,9 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 | `MATRIX_TOKEN` | _(optional)_ | Matrix access token |
 | `DISCORD_TOKEN` | _(optional)_ | Discord bot token |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL (used by OllamaAgent) |
+| `MINIMAX_API_KEY` | _(none)_ | MiniMax API key (required when `HOTO_PROVIDER=minimax`) |
+| `MINIMAX_GROUP_ID` | _(none)_ | MiniMax Group ID (required when `HOTO_PROVIDER=minimax`) |
+| `MINIMAX_BASE_URL` | `https://api.minimax.chat/v1` | MiniMax API base URL |
 
 ## Testing
 

@@ -530,6 +530,46 @@ The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO
 **`DELETE /projects/:id`**
 - Response: `{ "deleted": true }`
 
+## MiniMax
+
+Hoto supports MiniMax as an alternative LLM provider via the Ollama-compatible endpoint path.
+
+### Prerequisites
+
+- A MiniMax account and API key: https://www.minimaxi.com/
+- Your MiniMax Group ID (visible in the MiniMax console under account settings)
+
+### Installation
+
+No additional software is required beyond a running Hoto instance. MiniMax is accessed directly via its REST API.
+
+### Configuration
+
+Set the following environment variables before starting the daemon:
+
+```
+HOTO_PROVIDER=ollama
+OLLAMA_URL=https://api.minimax.chat/v1
+MINIMAX_API_KEY=<your-api-key>
+MINIMAX_GROUP_ID=<your-group-id>
+```
+
+When `HOTO_PROVIDER=ollama` and `OLLAMA_URL` points to the MiniMax base URL, the OllamaAgent sends requests to MiniMax's OpenAI-compatible endpoint. Set the model name via the task or agent configuration to a supported MiniMax model (e.g. `MiniMax-Text-01`).
+
+### Docker
+
+Add the env vars to your `docker-compose.override.yml`:
+
+```yaml
+services:
+  hoto:
+    environment:
+      HOTO_PROVIDER: ollama
+      OLLAMA_URL: https://api.minimax.chat/v1
+      MINIMAX_API_KEY: <your-api-key>
+      MINIMAX_GROUP_ID: <your-group-id>
+```
+
 ## License
 
 MIT
