@@ -128,6 +128,7 @@ export class OllamaAgent implements Agent {
             messages,
             tools: ollamaTools.length > 0 ? ollamaTools : undefined,
             stream: true,
+            options: { num_ctx: 32768 },
           }),
         });
       } catch (fetchErr) {
