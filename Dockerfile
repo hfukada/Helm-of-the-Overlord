@@ -21,8 +21,12 @@ RUN curl -fsSL https://download.docker.com/linux/static/stable/$(uname -m)/docke
     | tar xz --strip-components=1 -C /usr/local/bin docker/docker
 
 # Install Claude Code CLI
-RUN bun install -g @anthropic-ai/claude-code \
-    && ln -s $(which bun) /usr/local/bin/node
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/root/.local/bin:$PATH"
+
+
+RUN ln -s $(which bun) /usr/local/bin/node
+
 
 WORKDIR /app
 

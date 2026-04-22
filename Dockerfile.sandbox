@@ -15,7 +15,6 @@ RUN curl -fsSL https://download.docker.com/linux/static/stable/$(uname -m)/docke
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:$PATH"
 
 # Install Node.js (includes npm)
 RUN ARCH=$(uname -m) \
@@ -27,14 +26,9 @@ RUN ARCH=$(uname -m) \
     && curl -fsSL "https://nodejs.org/dist/v22.13.1/node-v22.13.1-linux-${NODE_ARCH}.tar.xz" \
        | tar -xJ --strip-components=1 -C /usr/local
 
-RUN bun install -g @anthropic-ai/claude-code \
-    && ARCH=$(uname -m) \
-    && case "$ARCH" in \
-        x86_64) PKG_ARCH="x64" ;; \
-        aarch64) PKG_ARCH="arm64" ;; \
-        *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
-    esac \
-    && ln -s "/root/.bun/install/global/node_modules/@anthropic-ai/claude-code-linux-${PKG_ARCH}/claude" /root/.bun/bin/claude
+# Install Claude Code CLI
+RUN curl -fsSL https://claude.ai/install.sh | bash
+ENV PATH="/root/.bun/bin:/root/.local/bin:$PATH"
 
 WORKDIR /workspace
 
