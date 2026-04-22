@@ -290,7 +290,8 @@ The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO
 ### Tasks
 
 **`GET /tasks`**
-- Response: Array of task objects with fields `id, title, status, repo_id, branch_name, source, created_at, updated_at`.
+- Response: Array of task objects with fields `id, title, status, repo_id, branch_name, source, created_at, updated_at, total_tokens`.
+  - `total_tokens` (`number`): sum of `token_input + token_output` across all agent runs for the task; `0` if no agent runs exist.
 
 **`POST /tasks`**
 - Request body:
