@@ -10,6 +10,7 @@ import { indexRepo } from "../../knowledge/indexer";
 import type { Repo } from "../../shared/types";
 import { embedGiteaCredentials, mirrorRepoToGitea, isGiteaConfigured } from "../../gitea/client";
 import { getMessagingManager } from "../../messaging/manager";
+import { expandEnvVars } from "../../shared/expand-env";
 
 const repos = new Hono();
 
@@ -62,10 +63,19 @@ repos.post("/", async (c) => {
       return c.json({ error: `Repo '${name}' already exists` }, 409);
     }
 
+    let expandedUrl: string;
+    try {
+      expandedUrl = expandEnvVars(body.url);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("URL expansion failed", { url: body.url, error: msg });
+      return c.json({ error: msg }, 400);
+    }
+
     try {
       await $`mkdir -p ${reposDir}`.quiet();
       await $`rm -rf ${repoPath}`.quiet();
-      const cloneUrl = embedGiteaCredentials(body.url);
+      const cloneUrl = embedGiteaCredentials(expandedUrl);
       logger.info("Cloning repo", { url: body.url, dest: repoPath });
       const result = await $`git clone ${cloneUrl} ${repoPath}`.nothrow().quiet();
       if (result.exitCode !== 0) {
@@ -75,7 +85,7 @@ repos.post("/", async (c) => {
       }
 
       // If the source URL is not from this Gitea instance, mirror it up to Gitea
-      if (isGiteaConfigured() && embedGiteaCredentials(body.url) === body.url) {
+      if (isGiteaConfigured() && embedGiteaCredentials(expandedUrl) === expandedUrl) {
         await mirrorRepoToGitea(repoPath, name);
       }
     } catch (err) {
