@@ -43,7 +43,17 @@ Set needs_clarification to false always (reserved for future use).`;
     throw new Error(`Planning claude call failed: ${claudeResult.error}`);
   }
 
-  const result = JSON.parse(claudeResult.text) as PlanResult;
+  let result: PlanResult;
+  try {
+    result = JSON.parse(claudeResult.text);
+  } catch {
+    const match = claudeResult.text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (match) {
+      result = JSON.parse(match[1].trim());
+    } else {
+      throw new Error(`Failed to parse project plan JSON: ${claudeResult.text.slice(0, 200)}`);
+    }
+  }
 
   // needs_clarification is reserved — treat as no-op for now
   if (result.needs_clarification) {

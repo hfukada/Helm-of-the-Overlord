@@ -89,6 +89,21 @@ describe("projects API", () => {
     expect(typeof data.current_milestone).toBe("number");
   });
 
+  test("POST /projects persists repo_names", async () => {
+    const res = await req("POST", "/projects", {
+      description: "Feature with repos",
+      repo_names: ["my-repo"],
+    });
+    expect(res.status).toBe(201);
+    const data = await res.json() as Record<string, unknown>;
+    expect(Array.isArray(data.repo_names)).toBe(true);
+    expect(data.repo_names).toEqual(["my-repo"]);
+
+    const db = getDb();
+    const row = db.query("SELECT repo_names FROM projects WHERE id = ?").get(data.id) as { repo_names: string };
+    expect(JSON.parse(row.repo_names)).toEqual(["my-repo"]);
+  });
+
   test("GET /projects/:id includes associated tasks", async () => {
     const createRes = await req("POST", "/projects", {
       description: "desc",

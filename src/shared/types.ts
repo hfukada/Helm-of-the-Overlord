@@ -214,6 +214,7 @@ export interface Project {
   milestones: ProjectMilestone[];
   current_milestone: number;
   repo_id: number | null;
+  repo_names: string[];
   source_sender_id: string | null;
   source_provider: string | null;
   created_at: string;

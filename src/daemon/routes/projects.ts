@@ -12,6 +12,7 @@ function parseProjectRow(row: Record<string, unknown>): Record<string, unknown> 
   return {
     ...row,
     milestones: typeof row.milestones === "string" ? JSON.parse(row.milestones) : (row.milestones ?? []),
+    repo_names: typeof row.repo_names === "string" ? JSON.parse(row.repo_names) : (row.repo_names ?? []),
   };
 }
 
@@ -30,17 +31,18 @@ projects.post("/", async (c) => {
   const db = getDb();
   const id = ulid();
   const now = new Date().toISOString();
-  db.run(
-    `INSERT INTO projects (id, title, description, status, architecture_notes, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
-     VALUES (?, ?, ?, 'planning', ?, '[]', 0, NULL, ?, ?, ?, ?)`,
-    [id, "Planning\u2026", body.description as string, (body.architecture_notes as string | null) ?? null, (body.source_sender_id as string | null) ?? null, (body.source_provider as string | null) ?? null, now, now]
-  );
 
   const repoNames: string[] = Array.isArray(body.repo_names)
     ? body.repo_names
     : body.repo_name
     ? [body.repo_name as string]
     : [];
+
+  db.run(
+    `INSERT INTO projects (id, title, description, status, architecture_notes, milestones, current_milestone, repo_id, repo_names, source_sender_id, source_provider, created_at, updated_at)
+     VALUES (?, ?, ?, 'planning', ?, '[]', 0, NULL, ?, ?, ?, ?, ?)`,
+    [id, "Planning…", body.description as string, (body.architecture_notes as string | null) ?? null, JSON.stringify(repoNames), (body.source_sender_id as string | null) ?? null, (body.source_provider as string | null) ?? null, now, now]
+  );
 
   const { createProject } = await import("../../projects/runner");
   createProject(
