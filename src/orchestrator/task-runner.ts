@@ -522,10 +522,13 @@ export async function runTask(taskId: string): Promise<void> {
   // Generate MCP config for agent nodes (using primary repo)
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(
+    const mcp = await generateMcpConfig(
       task.id, primaryWorkDir, primaryRepo.name,
-      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+      sandbox
+        ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir, workspaceBase: sandbox.workspaceBase }
+        : undefined
     );
+    mcpConfigPath = mcp.claudePath;
   } catch (err) {
     logger.warn("Failed to generate MCP config, agents will use direct tools", { error: String(err) });
   }

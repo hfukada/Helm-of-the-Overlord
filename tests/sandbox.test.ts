@@ -67,19 +67,39 @@ describe("generateMcpConfig", () => {
     mkdirSync(taskDirPath, { recursive: true });
 
     const { generateMcpConfig } = await import("../src/orchestrator/subprocess");
-    const configPath = await generateMcpConfig(
+    const result = await generateMcpConfig(
+      taskId,
+      "/home/user/workspace/repo",
+      "my-repo",
+      { sandboxed: true, containerWorkDir: "/workspace/my-repo", workspaceBase: "/workspace" }
+    );
+
+    const config = JSON.parse(readFileSync(result.hostPath, "utf-8"));
+    expect(config.mcpServers.hoto.type).toBe("sse");
+    expect(config.mcpServers.hoto.url).toContain("host.docker.internal");
+    expect(config.mcpServers.hoto.url).toContain("repo=my-repo");
+    // Should NOT have command/args (stdio transport)
+    expect(config.mcpServers.hoto.command).toBeUndefined();
+    // claudePath should be the in-sandbox location under workspaceBase
+    expect(result.claudePath).toBe("/workspace/mcp-config.json");
+    // hostPath should end in mcp-config.json (exact dir depends on config load order)
+    expect(result.hostPath.endsWith("/mcp-config.json")).toBe(true);
+  });
+
+  test("sandboxed mode defaults workspaceBase to /workspace when unset", async () => {
+    const taskId = "test-sandbox-default";
+    const taskDirPath = join(tmpDir, "tasks", taskId);
+    mkdirSync(taskDirPath, { recursive: true });
+
+    const { generateMcpConfig } = await import("../src/orchestrator/subprocess");
+    const result = await generateMcpConfig(
       taskId,
       "/home/user/workspace/repo",
       "my-repo",
       { sandboxed: true, containerWorkDir: "/workspace/my-repo" }
     );
 
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
-    expect(config.mcpServers.hoto.type).toBe("sse");
-    expect(config.mcpServers.hoto.url).toContain("host.docker.internal");
-    expect(config.mcpServers.hoto.url).toContain("repo=my-repo");
-    // Should NOT have command/args (stdio transport)
-    expect(config.mcpServers.hoto.command).toBeUndefined();
+    expect(result.claudePath).toBe("/workspace/mcp-config.json");
   });
 
   test("host mode generates stdio config with command/args", async () => {
@@ -88,18 +108,20 @@ describe("generateMcpConfig", () => {
     mkdirSync(taskDirPath, { recursive: true });
 
     const { generateMcpConfig } = await import("../src/orchestrator/subprocess");
-    const configPath = await generateMcpConfig(
+    const result = await generateMcpConfig(
       taskId,
       "/home/user/workspace/repo",
       "my-repo"
     );
 
-    const config = JSON.parse(readFileSync(configPath, "utf-8"));
+    const config = JSON.parse(readFileSync(result.hostPath, "utf-8"));
     expect(config.mcpServers.hoto.command).toBe("bun");
     expect(config.mcpServers.hoto.args).toBeArray();
     expect(config.mcpServers.hoto.env.HOTO_REPO_NAME).toBe("my-repo");
     // Should NOT have type/url (SSE transport)
     expect(config.mcpServers.hoto.type).toBeUndefined();
+    // In host mode, claudePath equals hostPath
+    expect(result.claudePath).toBe(result.hostPath);
   });
 });
 

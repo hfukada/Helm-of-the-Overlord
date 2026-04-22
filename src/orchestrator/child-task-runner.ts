@@ -202,10 +202,13 @@ export async function runChildTask(childId: string): Promise<void> {
   // Generate MCP config
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(
+    const mcp = await generateMcpConfig(
       parentTaskId, workDir, repo.name,
-      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+      sandbox
+        ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir, workspaceBase: sandbox.workspaceBase }
+        : undefined
     );
+    mcpConfigPath = mcp.claudePath;
   } catch {}
 
   // Construct the agent for this child (used by implement, fix-ci, fix-lint).
@@ -565,10 +568,13 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
 
   let mcpConfigPath: string | undefined;
   try {
-    mcpConfigPath = await generateMcpConfig(
+    const mcp = await generateMcpConfig(
       parentTaskId, workDir, repo.name,
-      sandbox ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir } : undefined
+      sandbox
+        ? { sandboxed: true, containerWorkDir: sandbox.containerWorkDir, workspaceBase: sandbox.workspaceBase }
+        : undefined
     );
+    mcpConfigPath = mcp.claudePath;
   } catch {}
 
   const agent = createAgent({
