@@ -21,6 +21,7 @@ tasks.post("/", async (c) => {
     source?: string;
     source_sender_id?: string;
     source_provider?: string;
+    project_id?: string;
   }>();
 
   const db = getDb();
@@ -58,9 +59,9 @@ tasks.post("/", async (c) => {
 
   // Insert task with first repo as primary (legacy compat)
   db.run(
-    `INSERT INTO tasks (id, title, description, repo_id, source, source_sender_id, source_provider)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id, title, body.description, repoIds[0], body.source ?? "cli", body.source_sender_id ?? null, body.source_provider ?? null]
+    `INSERT INTO tasks (id, title, description, repo_id, source, source_sender_id, source_provider, project_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, title, body.description, repoIds[0], body.source ?? "cli", body.source_sender_id ?? null, body.source_provider ?? null, body.project_id ?? null]
   );
 
   // Insert task_repos junction rows

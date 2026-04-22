@@ -14,6 +14,7 @@ function getProject(id: string): Project | null {
   return {
     ...(row as unknown as Project),
     milestones: JSON.parse(row.milestones as string),
+    repo_names: JSON.parse((row.repo_names as string) || '[]'),
   };
 }
 
@@ -21,12 +22,13 @@ function saveProject(project: Project): void {
   const db = getDb();
   const now = new Date().toISOString();
   db.run(
-    `UPDATE projects SET title=?, description=?, status=?, milestones=?, current_milestone=?, carry_over_notes=?, updated_at=? WHERE id=?`,
+    `UPDATE projects SET title=?, description=?, status=?, milestones=?, repo_names=?, current_milestone=?, carry_over_notes=?, updated_at=? WHERE id=?`,
     [
       project.title,
       project.description,
       project.status,
       JSON.stringify(project.milestones),
+      JSON.stringify(project.repo_names),
       project.current_milestone,
       project.carry_over_notes ?? null,
       now,
@@ -47,9 +49,9 @@ export async function createProject(
   if (!preAllocatedId) {
     const now = new Date().toISOString();
     db.run(
-      `INSERT INTO projects (id, title, description, status, milestones, current_milestone, repo_id, source_sender_id, source_provider, created_at, updated_at)
-       VALUES (?, ?, ?, 'planning', '[]', 0, NULL, ?, ?, ?, ?)`,
-      [id, "Planning\u2026", description, sourceSenderId, sourceProvider, now, now]
+      `INSERT INTO projects (id, title, description, status, milestones, current_milestone, repo_id, repo_names, source_sender_id, source_provider, created_at, updated_at)
+       VALUES (?, ?, ?, 'planning', '[]', 0, NULL, ?, ?, ?, ?, ?)`,
+      [id, "Planning…", description, JSON.stringify(repoNames), sourceSenderId, sourceProvider, now, now]
     );
   }
 
@@ -110,7 +112,7 @@ export async function advanceProject(projectId: string): Promise<void> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         description: [
-          `[Project: ${project.title} \u2014 Milestone ${milestone.index + 1}/${project.milestones.length}]`,
+          `[Project: ${project.title} — Milestone ${milestone.index + 1}/${project.milestones.length}]`,
           "",
           milestone.description,
           ...(project.carry_over_notes
@@ -119,6 +121,8 @@ export async function advanceProject(projectId: string): Promise<void> {
         ].join("\n"),
         source_sender_id: project.source_sender_id,
         source_provider: project.source_provider,
+        repo_names: project.repo_names,
+        project_id: projectId,
       }),
     });
 
@@ -149,6 +153,7 @@ export async function onTaskCompleted(taskId: string): Promise<void> {
     const project: Project = {
       ...(row as unknown as Project),
       milestones: JSON.parse(row.milestones as string),
+      repo_names: JSON.parse((row.repo_names as string) || '[]'),
     };
     const milestone = project.milestones[project.current_milestone];
     if (milestone?.task_id !== taskId) continue;
