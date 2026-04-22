@@ -54,7 +54,10 @@ async function listRepos(): Promise<void> {
 async function addRepo(args: string[]): Promise<void> {
   const target = args[0];
   if (!target) {
-    console.log("Usage: hoto repos add <git-url-or-path> [--name name] [--allow-ci-on-host]");
+    console.log(
+      "Usage: hoto repos add <git-url-or-path> [--name name] [--allow-ci-on-host]\n" +
+      "       URL may contain env var tokens: https://$TOKEN@host/org/repo.git or $BASE_URL/org/repo.git"
+    );
     process.exit(1);
   }
 
@@ -69,7 +72,7 @@ async function addRepo(args: string[]): Promise<void> {
   }
 
   // Detect if target is a URL or local path
-  const isUrl = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("git@") || target.includes("://");
+  const isUrl = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("git@") || target.includes("://") || /^\$\{?\w/.test(target);
   const body: Record<string, string | boolean> = isUrl ? { url: target } : { path: target };
   if (name) body.name = name;
   if (ciOnHost) body.ci_on_host = true;
