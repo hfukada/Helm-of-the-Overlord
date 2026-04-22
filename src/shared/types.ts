@@ -144,6 +144,18 @@ export interface BlueprintState {
 }
 
 
+export interface TaskListItem {
+  id: string;
+  title: string;
+  status: TaskStatus;
+  repo_id: number | null;
+  branch_name: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+  total_tokens: number;
+}
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;

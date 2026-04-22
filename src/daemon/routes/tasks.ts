@@ -8,6 +8,7 @@ import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
 import { getMessagingManager } from "../../messaging/manager";
 import { fixDates, fixDatesAll } from "../dates";
+import type { TaskListItem } from "../../shared/types";
 
 const tasks = new Hono();
 
@@ -84,9 +85,18 @@ tasks.post("/", async (c) => {
 
 tasks.get("/", (c) => {
   const db = getDb();
-  const rows = db.query(
-    "SELECT id, title, status, repo_id, branch_name, source, created_at, updated_at FROM tasks ORDER BY created_at DESC"
-  ).all() as Array<Record<string, unknown>>;
+  const rows = db.query(`
+    SELECT t.id, t.title, t.status, t.repo_id, t.branch_name, t.source,
+           t.created_at, t.updated_at,
+           COALESCE(SUM(
+             COALESCE(ar.token_input, 0) +
+             COALESCE(ar.token_output, 0)
+           ), 0) AS total_tokens
+    FROM tasks t
+    LEFT JOIN agent_runs ar ON ar.task_id = t.id
+    GROUP BY t.id
+    ORDER BY t.created_at DESC
+  `).all() as TaskListItem[];
   return c.json(fixDatesAll(rows, "created_at", "updated_at"));
 });
 
