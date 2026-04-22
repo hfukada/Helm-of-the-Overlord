@@ -82,6 +82,7 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 | `HOTO_WORKSPACE` | `~/.hoto-workspace` | Workspace directory for repos, DB, and task data |
 | `HOTO_DAEMON_PORT` | `7777` | Port the daemon listens on |
 | `HOTO_SANDBOX_CLAUDE` | `false` | Run Claude subprocesses inside Docker sandbox containers |
+| `HOTO_DOTENV` | `$HOTO_WORKSPACE/.env` | Path to a `.env` file loaded at startup; values do not override existing env vars |
 | `HOTO_DATA_VOLUME` | _(none)_ | Docker named volume for workspace (e.g. `helm-of-the-overlord_hoto-data`) |
 | `HOTO_MCP_HTTP_PORT` | `7778` | Port for MCP HTTP/SSE server |
 | `GITEA_URL` | _(required)_ | Base URL of Gitea instance (e.g. `http://localhost:3777`) |
