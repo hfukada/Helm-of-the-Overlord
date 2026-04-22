@@ -77,9 +77,7 @@ async function addRepo(args: string[]): Promise<void> {
   if (name) body.name = name;
   if (ciOnHost) body.ci_on_host = true;
 
-  if (isUrl) {
-    console.log(`Cloning ${target}...`);
-  }
+  console.log(`Cloning ${target}...`);
 
   const res = await fetch(daemonUrl("/repos"), {
     method: "POST",
