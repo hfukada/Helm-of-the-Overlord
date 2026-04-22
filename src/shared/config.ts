@@ -32,7 +32,7 @@ export interface Config {
   ollamaModel: string;
 }
 
-function expandHome(p: string): string {
+export function expandHome(p: string): string {
   if (p.startsWith("~/")) return join(homedir(), p.slice(2));
   if (p === "~") return homedir();
   return p;
