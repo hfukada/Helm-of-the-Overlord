@@ -10,8 +10,8 @@
     "dev": "bun run src/index.ts",
     "daemon": "bun run src/index.ts daemon start",
     "test": "docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test",
-    "test:local": "bun test",
-    "test:e2e": "bun test tests/e2e-hello-world.test.ts",
+    "test:local": "bun test --path-ignore-patterns='**/*.e2e.test.ts' --path-ignore-patterns='**/data/**' tests/",
+    "test:claude-e2e": "bun test --path-ignore-patterns='**/data/**' tests/*.e2e.test.ts",
     "lint": "bunx biome lint ./src/",
     "typecheck": "bunx tsc --noEmit"
   },

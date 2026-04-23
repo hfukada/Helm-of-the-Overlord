@@ -1,19 +1,14 @@
 /**
  * Tests for the "hoto ask" flow end-to-end.
  *
- * Layers tested:
- *  1. claude-cli interface (claudeText, claudeBatch) -- via integration calls
- *  2. Daemon /knowledge/ask endpoint -- JSON and NDJSON streaming modes
- *  3. Streaming resilience -- client disconnect doesn't crash daemon
- *  4. Error handling -- missing query, no results, claude failure
+ * Layers tested here (non-Claude):
+ *  1. Daemon /knowledge/ask endpoint -- JSON and NDJSON streaming modes
+ *  2. Streaming resilience -- client disconnect doesn't crash daemon
+ *
+ * Claude CLI integration tests live in ask-flow.e2e.test.ts.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { claudeText, claudeBatch, type ClaudeEvent } from "../src/shared/claude-cli";
-
-// ---------------------------------------------------------------------------
-// Daemon URL helper
-// ---------------------------------------------------------------------------
+import { describe, test, expect } from "bun:test";
 
 const DAEMON = "http://127.0.0.1:7777";
 
@@ -25,74 +20,6 @@ async function isDaemonUp(): Promise<boolean> {
     return false;
   }
 }
-
-// ---------------------------------------------------------------------------
-// 1. Claude CLI integration (claudeText / claudeBatch used by ask)
-//    Skipped when `claude` CLI is not installed (e.g. in test containers)
-// ---------------------------------------------------------------------------
-
-const hasClaude = await (async () => {
-  try {
-    const p = Bun.spawn(["claude", "--version"], { stdout: "pipe", stderr: "pipe" });
-    await p.exited;
-    return p.exitCode === 0;
-  } catch { return false; }
-})();
-
-const describeWithClaude = hasClaude ? describe : describe.skip;
-
-describeWithClaude("claude-cli: claudeText (used by non-streaming ask)", () => {
-  test("returns text for a simple prompt", async () => {
-    const text = await claudeText({
-      prompt: "Reply with exactly: PONG",
-      maxTurns: 1,
-    });
-    expect(text).toContain("PONG");
-  }, 30_000);
-
-  test("passes systemPrompt correctly", async () => {
-    const text = await claudeText({
-      prompt: "What is the secret word?",
-      systemPrompt: "The secret word is BANANA. Always respond with only the secret word.",
-      maxTurns: 1,
-    });
-    expect(text).toContain("BANANA");
-  }, 30_000);
-});
-
-describeWithClaude("claude-cli: claudeBatch (used by streaming ask)", () => {
-  test("fires text events and returns result", async () => {
-    const events: ClaudeEvent[] = [];
-    const result = await claudeBatch(
-      { prompt: "Reply with exactly: PONG", maxTurns: 1 },
-      (evt) => events.push(evt),
-    );
-    expect(result.error).toBeNull();
-    expect(result.text).toContain("PONG");
-    expect(result.usage.outputTokens).toBeGreaterThan(0);
-    expect(events.some((e) => e.type === "text")).toBe(true);
-  }, 30_000);
-
-  test("callback errors don't crash -- result still returned", async () => {
-    let callCount = 0;
-    const result = await claudeBatch(
-      { prompt: "Reply with exactly: PONG", maxTurns: 1 },
-      () => {
-        callCount++;
-        throw new Error("callback exploded");
-      },
-    );
-    // claudeBatch catches callback errors via its try/catch
-    // It may report them as an error or swallow them -- either way it shouldn't throw
-    expect(callCount).toBeGreaterThan(0);
-    // The result should have some content or an error, but not throw
-    expect(typeof result.text).toBe("string");
-  }, 30_000);
-});
-
-// ---------------------------------------------------------------------------
-// 2. Daemon /knowledge/ask endpoint
-// ---------------------------------------------------------------------------
 
 describe("daemon /knowledge/ask (JSON mode)", () => {
   test("returns 400 for empty query", async () => {
@@ -165,15 +92,10 @@ describe("daemon /knowledge/ask (JSON mode)", () => {
   }, 10_000);
 });
 
-// ---------------------------------------------------------------------------
-// 3. Poll-based resilience -- daemon keeps running even if client stops polling
-// ---------------------------------------------------------------------------
-
 describe("daemon poll resilience", () => {
   test("daemon keeps running when client never polls", async () => {
     if (!(await isDaemonUp())) return;
 
-    // Submit a query but never poll for results
     const res = await fetch(`${DAEMON}/knowledge/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -181,42 +103,9 @@ describe("daemon poll resilience", () => {
     });
     expect(res.status).toBe(200);
 
-    // Just wait and check daemon is still alive
     await new Promise((r) => setTimeout(r, 5000));
 
     const health = await fetch(`${DAEMON}/health`);
     expect(health.ok).toBe(true);
-  }, 30_000);
-});
-
-// ---------------------------------------------------------------------------
-// 4. Subprocess integration (runClaude wrapper)
-// ---------------------------------------------------------------------------
-
-describeWithClaude("subprocess runClaude", () => {
-  // This requires DB to be initialized, so only run if daemon is up
-  test("maps claudeBatch result to SubprocessResult format", async () => {
-    // Test the claudeBatch -> SubprocessResult mapping logic directly
-    const result = await claudeBatch(
-      { prompt: "Reply with exactly: PONG", maxTurns: 1 },
-    );
-    expect(result.error).toBeNull();
-    expect(result.text).toContain("PONG");
-
-    // Verify the shape matches what subprocess.ts produces
-    const mapped = {
-      output: result.text,
-      usage: {
-        input_tokens: result.usage.inputTokens,
-        output_tokens: result.usage.outputTokens,
-        cost_usd: result.usage.costUsd,
-      },
-      error: result.error,
-    };
-    expect(mapped.output).toContain("PONG");
-    expect(mapped.usage.input_tokens).toBeGreaterThan(0);
-    expect(mapped.usage.output_tokens).toBeGreaterThan(0);
-    expect(mapped.usage.cost_usd).toBeGreaterThan(0);
-    expect(mapped.error).toBeNull();
   }, 30_000);
 });

@@ -15,4 +15,4 @@ COPY tsconfig.json biome.json ./
 ENV HOTO_WORKSPACE=/tmp/hoto-test
 ENV HOTO_LOG_LEVEL=warn
 
-CMD ["bun", "test"]
+CMD ["bun", "test", "--path-ignore-patterns=**/*.e2e.test.ts"]

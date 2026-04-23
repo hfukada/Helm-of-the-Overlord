@@ -2,11 +2,6 @@ import { describe, test, expect } from "bun:test";
 import {
   parseBatchLine,
   parseStreamLine,
-  claudeText,
-  claudeJSON,
-  claudeBatch,
-  claudeStream,
-  type ClaudeEvent,
 } from "../src/shared/claude-cli";
 
 // ---------------------------------------------------------------------------
@@ -277,91 +272,4 @@ describe("parseStreamLine", () => {
     expect(result!.result).toBe("final answer");
     expect(result!.usage!.costUsd).toBe(0.01);
   });
-});
-
-// ---------------------------------------------------------------------------
-// Integration tests: actual Claude CLI invocation
-// Skipped when `claude` CLI is not installed (e.g. in test containers)
-// ---------------------------------------------------------------------------
-
-const hasClaude = await (async () => {
-  try {
-    const p = Bun.spawn(["claude", "--version"], { stdout: "pipe", stderr: "pipe" });
-    await p.exited;
-    return p.exitCode === 0;
-  } catch { return false; }
-})();
-
-const describeIntegration = hasClaude ? describe : describe.skip;
-
-describeIntegration("claudeText (integration)", () => {
-  test("returns a text response", async () => {
-    const result = await claudeText({
-      prompt: "Reply with exactly: PONG",
-      maxTurns: 1,
-    });
-    expect(result).toContain("PONG");
-  }, 30_000);
-});
-
-describeIntegration("claudeJSON (integration)", () => {
-  test("returns result with usage", async () => {
-    const result = await claudeJSON({
-      prompt: "Reply with exactly: PONG",
-      maxTurns: 1,
-    });
-    expect(result.error).toBeNull();
-    expect(result.text).toContain("PONG");
-    expect(result.usage.outputTokens).toBeGreaterThan(0);
-    expect(result.usage.costUsd).toBeGreaterThan(0);
-  }, 30_000);
-});
-
-describeIntegration("claudeBatch (integration)", () => {
-  test("returns result and fires events", async () => {
-    const events: ClaudeEvent[] = [];
-    const result = await claudeBatch(
-      { prompt: "Reply with exactly: PONG", maxTurns: 1 },
-      (evt) => events.push(evt),
-    );
-    expect(result.error).toBeNull();
-    expect(result.text).toContain("PONG");
-    expect(result.usage.costUsd).toBeGreaterThan(0);
-    // Should have at least one text event
-    expect(events.some((e) => e.type === "text")).toBe(true);
-  }, 30_000);
-});
-
-describeIntegration("claudeStream (integration)", () => {
-  test("streams incremental deltas and returns result", async () => {
-    const events: ClaudeEvent[] = [];
-    const result = await claudeStream(
-      { prompt: "Reply with exactly: PONG", maxTurns: 1 },
-      (evt) => { events.push(evt); },
-    );
-    expect(result.error).toBeNull();
-    expect(result.text).toContain("PONG");
-    expect(result.usage.costUsd).toBeGreaterThan(0);
-    // Stream mode should have text events from deltas
-    expect(events.some((e) => e.type === "text")).toBe(true);
-  }, 30_000);
-
-  test("streams tool use events", async () => {
-    const events: ClaudeEvent[] = [];
-    const result = await claudeStream(
-      {
-        prompt: "Read the file package.json and tell me the project name",
-        maxTurns: 2,
-        allowedTools: ["Read"],
-        cwd: "/home/hiroshi/src/helm-of-the-overlord",
-      },
-      (evt) => { events.push(evt); },
-    );
-    expect(result.error).toBeNull();
-    expect(result.text.length).toBeGreaterThan(0);
-    // Should have tool_use events
-    expect(events.some((e) => e.type === "tool_use")).toBe(true);
-    // Should have tool_result events (from batch-line fallthrough)
-    expect(events.some((e) => e.type === "tool_result")).toBe(true);
-  }, 60_000);
 });
