@@ -182,12 +182,13 @@ export interface TaskPR {
 export interface ContainerSecret {
   id: number;
   repo_id: number;
-  secret_type: "env_var" | "auth_file";
+  secret_type: "env_var" | "auth_file" | "ssh_key";
   key: string;
   value_source: "host_env" | "host_file";
   host_path: string | null;
   container_path: string | null;
   description: string | null;
+  known_hosts_path: string | null;
   discovered_by: "manual" | "auto";
   verified: boolean;
   created_at: string;

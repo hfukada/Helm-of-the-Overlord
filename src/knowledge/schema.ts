@@ -290,6 +290,7 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE projects ADD COLUMN source_provider TEXT",
   "ALTER TABLE repos ADD COLUMN extra_context TEXT",
   "ALTER TABLE projects ADD COLUMN repo_names TEXT NOT NULL DEFAULT '[]'",
+  "ALTER TABLE container_secrets ADD COLUMN known_hosts_path TEXT",
 ];
 
 export function runMigrations(db: Database): void {

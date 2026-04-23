@@ -21,12 +21,13 @@ secrets.get("/:repoName/secrets", (c) => {
 secrets.post("/:repoName/secrets", async (c) => {
   const repoName = c.req.param("repoName");
   const body = await c.req.json<{
-    secret_type: "env_var" | "auth_file";
+    secret_type: "env_var" | "auth_file" | "ssh_key";
     key: string;
     value_source: "host_env" | "host_file";
     host_path?: string;
     container_path?: string;
     description?: string;
+    known_hosts_path?: string;
   }>();
 
   const db = getDb();
@@ -37,14 +38,14 @@ secrets.post("/:repoName/secrets", async (c) => {
     return c.json({ error: "secret_type, key, and value_source are required" }, 400);
   }
 
-  if (body.secret_type === "auth_file" && !body.host_path) {
-    return c.json({ error: "host_path is required for auth_file secrets" }, 400);
+  if ((body.secret_type === "auth_file" || body.secret_type === "ssh_key") && !body.host_path) {
+    return c.json({ error: "host_path is required for auth_file and ssh_key secrets" }, 400);
   }
 
   try {
     const result = db.run(
-      `INSERT INTO container_secrets (repo_id, secret_type, key, value_source, host_path, container_path, description, discovered_by, verified)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'manual', 1)`,
+      `INSERT INTO container_secrets (repo_id, secret_type, key, value_source, host_path, container_path, description, known_hosts_path, discovered_by, verified)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'manual', 1)`,
       [
         repo.id,
         body.secret_type,
@@ -53,6 +54,7 @@ secrets.post("/:repoName/secrets", async (c) => {
         body.host_path ?? null,
         body.container_path ?? null,
         body.description ?? null,
+        body.known_hosts_path ?? null,
       ]
     );
     logger.info("Container secret added", { repo: repoName, key: body.key, type: body.secret_type });
@@ -87,11 +89,11 @@ secrets.delete("/:repoName/secrets/:secretId", (c) => {
   return c.json({ removed: secretId });
 });
 
-// Mark a secret as verified
+// Mark a secret as verified / update fields
 secrets.patch("/:repoName/secrets/:secretId", async (c) => {
   const repoName = c.req.param("repoName");
   const secretId = parseInt(c.req.param("secretId"), 10);
-  const body = await c.req.json<{ verified?: boolean; description?: string }>();
+  const body = await c.req.json<{ verified?: boolean; description?: string; known_hosts_path?: string }>();
 
   const db = getDb();
   const repo = db.query("SELECT id FROM repos WHERE name = ?").get(repoName) as { id: number } | null;
@@ -107,6 +109,10 @@ secrets.patch("/:repoName/secrets/:secretId", async (c) => {
   if (body.description !== undefined) {
     sets.push("description = ?");
     params.push(body.description);
+  }
+  if (body.known_hosts_path !== undefined) {
+    sets.push("known_hosts_path = ?");
+    params.push(body.known_hosts_path);
   }
 
   if (sets.length === 0) {
