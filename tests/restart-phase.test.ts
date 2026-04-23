@@ -1,9 +1,36 @@
-import { describe, it, expect } from "bun:test";
+import { describe, it, expect, beforeAll, beforeEach, mock } from "bun:test";
 import {
   restartFromPhase,
   createInitialState,
   advanceState,
 } from "../src/orchestrator/blueprint";
+
+process.env.HOTO_WORKSPACE = "/tmp/hoto-test-restart-phase";
+
+mock.module("../src/orchestrator/subprocess-registry", () => ({
+  killTaskSubprocesses: async () => {},
+}));
+
+mock.module("../src/messaging/manager", () => ({
+  getMessagingManager: () => null,
+}));
+
+mock.module("../src/shared/logger", () => ({
+  logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
+}));
+
+mock.module("../src/workspace/git", () => ({
+  createTaskClone: async () => { throw new Error("no git in tests"); },
+  generateBranchName: () => "test-branch",
+}));
+
+mock.module("../src/workspace/manager", () => ({
+  ensureTaskDir: async () => {},
+  taskDir: () => "/tmp/task",
+  worktreeDir: () => "/tmp/worktree",
+}));
+
+import { getDb } from "../src/knowledge/db";
 
 describe("restartFromPhase", () => {
   it("resets current_node and zeroes round counts", () => {
@@ -38,6 +65,72 @@ describe("restartFromPhase", () => {
     const state = createInitialState();
     expect(() => restartFromPhase(state, "does_not_exist" as any)).toThrow(
       "Unknown phase: does_not_exist"
+    );
+  });
+});
+
+describe("restartTaskPhase — pre_plan", () => {
+  let restartFn: (taskId: string, phase: string) => Promise<void>;
+  let taskId: string;
+  let repoId: number;
+
+  beforeAll(async () => {
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync("/tmp/hoto-test-restart-phase", { recursive: true });
+    getDb();
+    const mod = await import("../src/orchestrator/task-runner");
+    restartFn = mod.restartTaskPhase;
+  });
+
+  beforeEach(() => {
+    const db = getDb();
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.run("DELETE FROM task_repos");
+    db.run("DELETE FROM tasks");
+    db.run("DELETE FROM repos");
+    db.exec("PRAGMA foreign_keys = ON");
+
+    taskId = "RESTARTTEST01";
+    const insertResult = db.run(
+      "INSERT INTO repos (name, path) VALUES ('test-repo', '/tmp/test-repo')"
+    );
+    repoId = Number(insertResult.lastInsertRowid);
+    db.run(
+      "INSERT INTO tasks (id, title, description, status) VALUES (?, 'Test', 'desc', 'scoping')",
+      [taskId]
+    );
+    db.run(
+      "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')",
+      [taskId, repoId]
+    );
+    db.run(
+      "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'original_target')",
+      [taskId, repoId]
+    );
+  });
+
+  it("restores target rows from original_target without throwing Unknown phase", async () => {
+    const db = getDb();
+    // Simulate pre-plan narrowing removing target rows
+    db.run("DELETE FROM task_repos WHERE task_id = ? AND role = 'target'", [taskId]);
+
+    await restartFn(taskId, "pre_plan");
+
+    const targetRows = db
+      .query("SELECT * FROM task_repos WHERE task_id = ? AND role = 'target'")
+      .all(taskId);
+    expect(targetRows).toHaveLength(1);
+  });
+
+  it("throws when no original_target rows exist", async () => {
+    const db = getDb();
+    db.run(
+      "DELETE FROM task_repos WHERE task_id = ? AND role = 'original_target'",
+      [taskId]
+    );
+
+    await expect(restartFn(taskId, "pre_plan")).rejects.toThrow(
+      "no original_target repos found"
     );
   });
 });

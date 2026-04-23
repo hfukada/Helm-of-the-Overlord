@@ -97,7 +97,7 @@ describe("messaging project creation", () => {
 
     const db = getDb();
     const rows = db.query(
-      "SELECT repo_id FROM task_repos WHERE task_id = ? ORDER BY repo_id"
+      "SELECT repo_id FROM task_repos WHERE task_id = ? AND role = 'target' ORDER BY repo_id"
     ).all(data.id) as Array<{ repo_id: number }>;
     expect(rows.length).toBe(2);
     expect(rows[0].repo_id).toBe(300);

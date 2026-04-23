@@ -464,7 +464,7 @@ export async function runTask(taskId: string): Promise<void> {
 
     // Update task_repos to reflect the narrowed scope
     const db = getDb();
-    db.run("DELETE FROM task_repos WHERE task_id = ?", [task.id]);
+    db.run("DELETE FROM task_repos WHERE task_id = ? AND role = 'target'", [task.id]);
     for (const r of narrowed) {
       db.run("INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')", [task.id, r.id]);
     }
@@ -772,7 +772,24 @@ export async function restartTaskPhase(taskId: string, phase: string): Promise<v
   const currentState: BlueprintState = row.blueprint_state
     ? JSON.parse(row.blueprint_state as string)
     : createInitialState();
-  const newState = restartFromPhase(currentState, phase as BlueprintNodeType);
+  let newState: BlueprintState;
+  if (phase === "pre_plan") {
+    db.run("DELETE FROM task_repos WHERE task_id = ? AND role = 'target'", [taskId]);
+    const result = db.run(
+      `INSERT INTO task_repos (task_id, repo_id, role)
+       SELECT task_id, repo_id, 'target' FROM task_repos
+       WHERE task_id = ? AND role = 'original_target'`,
+      [taskId]
+    );
+    if (result.changes === 0) {
+      throw new Error(
+        `Cannot restart pre_plan for task ${taskId}: no original_target repos found (task may predate this feature)`
+      );
+    }
+    newState = createInitialState();
+  } else {
+    newState = restartFromPhase(currentState, phase as BlueprintNodeType);
+  }
   await killTaskSubprocesses(taskId);
   db.run(
     "UPDATE tasks SET status = 'running', blueprint_state = ? WHERE id = ?",

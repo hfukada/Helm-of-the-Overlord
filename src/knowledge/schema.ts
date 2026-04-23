@@ -177,7 +177,7 @@ const MIGRATIONS_V3 = [
     task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
     role TEXT NOT NULL DEFAULT 'target',
-    PRIMARY KEY (task_id, repo_id)
+    PRIMARY KEY (task_id, repo_id, role)
   )`,
 
   `CREATE TABLE IF NOT EXISTS task_prs (
@@ -350,6 +350,24 @@ export function runMigrations(db: Database): void {
     );
     db.exec("DROP TABLE messaging_channels");
     db.exec("ALTER TABLE messaging_channels_v2 RENAME TO messaging_channels");
+  }
+
+  // Migrate task_repos PRIMARY KEY from (task_id, repo_id) to (task_id, repo_id, role)
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_repos_new (
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        role TEXT NOT NULL DEFAULT 'target',
+        PRIMARY KEY (task_id, repo_id, role)
+      );
+      INSERT OR IGNORE INTO task_repos_new SELECT task_id, repo_id, role FROM task_repos;
+      DROP TABLE task_repos;
+      ALTER TABLE task_repos_new RENAME TO task_repos;
+    `);
+    logger.info("Migrated task_repos PRIMARY KEY to (task_id, repo_id, role)");
+  } catch (e) {
+    // Already migrated or table does not exist yet
   }
 
   // Backfill task_repos from existing tasks.repo_id (only where the repo still exists)
