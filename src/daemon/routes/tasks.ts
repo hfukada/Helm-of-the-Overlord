@@ -70,6 +70,10 @@ tasks.post("/", async (c) => {
       "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')",
       [id, repoId]
     );
+    db.run(
+      "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'original_target')",
+      [id, repoId]
+    );
   }
 
   logger.info("Task created", { taskId: id, title, repoCount: repoIds.length });

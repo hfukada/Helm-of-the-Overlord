@@ -68,7 +68,7 @@ describe("B1: multi-repo task creation", () => {
 
     // Check task_repos
     const db = getDb();
-    const rows = db.query("SELECT * FROM task_repos WHERE task_id = ?").all(data.id) as Array<{ repo_id: number; role: string }>;
+    const rows = db.query("SELECT * FROM task_repos WHERE task_id = ? AND role = 'target'").all(data.id) as Array<{ repo_id: number; role: string }>;
     expect(rows.length).toBe(1);
     expect(rows[0].repo_id).toBe(200);
     expect(rows[0].role).toBe("target");
@@ -89,7 +89,7 @@ describe("B1: multi-repo task creation", () => {
 
     const db = getDb();
     const rows = db.query(
-      "SELECT repo_id FROM task_repos WHERE task_id = ? ORDER BY repo_id"
+      "SELECT repo_id FROM task_repos WHERE task_id = ? AND role = 'target' ORDER BY repo_id"
     ).all(data.id) as Array<{ repo_id: number }>;
     expect(rows.length).toBe(2);
     expect(rows[0].repo_id).toBe(200);
@@ -110,7 +110,7 @@ describe("B1: multi-repo task creation", () => {
     expect(data.repo_count).toBe(3);
 
     const db = getDb();
-    const rows = db.query("SELECT * FROM task_repos WHERE task_id = ?").all(data.id);
+    const rows = db.query("SELECT * FROM task_repos WHERE task_id = ? AND role = 'target'").all(data.id);
     expect(rows.length).toBe(3);
   });
 
@@ -143,7 +143,7 @@ describe("B1: multi-repo task creation", () => {
     const data = await res.json() as { id: string; repo_count: number };
     expect(data.repo_count).toBe(1);
 
-    const rows = db.query("SELECT repo_id FROM task_repos WHERE task_id = ?").all(data.id) as Array<{ repo_id: number }>;
+    const rows = db.query("SELECT repo_id FROM task_repos WHERE task_id = ? AND role = 'target'").all(data.id) as Array<{ repo_id: number }>;
     expect(rows.length).toBe(1);
     expect(rows[0].repo_id).toBe(200);
   });
@@ -157,7 +157,7 @@ describe("B1: multi-repo task creation", () => {
     expect(data.repo_count).toBe(3); // all 3 seeded repos
 
     const db = getDb();
-    const rows = db.query("SELECT * FROM task_repos WHERE task_id = ?").all(data.id);
+    const rows = db.query("SELECT * FROM task_repos WHERE task_id = ? AND role = 'target'").all(data.id);
     expect(rows.length).toBe(3);
   });
 });
