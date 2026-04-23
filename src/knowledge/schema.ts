@@ -378,6 +378,9 @@ export function runMigrations(db: Database): void {
      WHERE t.repo_id IS NOT NULL`
   );
 
+  // Drop any legacy 'original_target' rows from prior schema (no longer used)
+  db.exec(`DELETE FROM task_repos WHERE role = 'original_target'`);
+
   // Backfill task_prs from existing tasks with gitea_pr_number
   db.exec(
     `INSERT OR IGNORE INTO task_prs (task_id, repo_id, pr_number, pr_url, last_review_id, last_comment_id)

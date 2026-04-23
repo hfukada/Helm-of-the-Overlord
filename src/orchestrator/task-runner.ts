@@ -379,7 +379,6 @@ export function loadTaskAndRepos(taskId: string): { task: Task; repos: Repo[] } 
 
   const task = parseTaskRow(taskRow);
 
-  // Try task_repos junction table first
   const repoRows = db.query(
     `SELECT r.* FROM repos r
      JOIN task_repos tr ON tr.repo_id = r.id
@@ -399,7 +398,8 @@ export function loadTaskAndRepos(taskId: string): { task: Task; repos: Repo[] } 
     }
   }
 
-  return null;
+  // Task exists but has no target repos yet -- pre-plan will populate them.
+  return { task, repos: [] };
 }
 
 export async function runTask(taskId: string): Promise<void> {
@@ -427,13 +427,13 @@ export async function runTask(taskId: string): Promise<void> {
   }
 
   // === PRE-PLAN (scope repos) ===
-  // If multiple repos are assigned, run pre-plan to determine which ones actually need changes
-  if (repos.length > 1) {
+  // Run pre-plan only when no explicit targets were given at task creation.
+  // If the user specified -r, `repos` is already populated and we trust it.
+  if (repos.length === 0) {
     updateTaskStatus(task.id, "scoping");
-    logger.info("Running pre-plan to scope repos", { taskId, repoCount: repos.length });
+    logger.info("Running pre-plan to scope repos", { taskId });
 
     const { executePrePlan } = await import("./nodes/agentic/pre-plan");
-    // Pre-plan runs before sandbox/MCP are set up -- use a bare agent.
     const prePlanAgent = createAgent({});
     const prePlanResult = await executePrePlan(task, prePlanAgent, { hasMcp: false });
 
@@ -444,34 +444,32 @@ export async function runTask(taskId: string): Promise<void> {
       return;
     }
 
-    // Narrow repos to the ones pre-plan identified
-    const targetNames = new Set(prePlanResult.repoNames);
-    const narrowed = repos.filter((r) => targetNames.has(r.name));
+    const db = getDb();
+    const selected: Repo[] = [];
+    for (const name of prePlanResult.repoNames) {
+      const row = db.query("SELECT * FROM repos WHERE name = ? AND archived = 0").get(name) as Record<string, unknown> | null;
+      if (row) selected.push(parseRepoRow(row));
+    }
 
-    if (narrowed.length === 0) {
+    if (selected.length === 0) {
       logger.error("Pre-plan identified no valid repos", { taskId, suggested: prePlanResult.repoNames });
       updateTaskStatus(task.id, "failed");
       return;
     }
 
-    logger.info("Pre-plan scoped repos", { taskId, repos: narrowed.map((r) => r.name) });
+    logger.info("Pre-plan scoped repos", { taskId, repos: selected.map((r) => r.name) });
 
-    // Notify channel of scoping result
     if (manager) {
-      const repoList = narrowed.map((r) => r.name).join(", ");
+      const repoList = selected.map((r) => r.name).join(", ");
       manager.notifyAgentOutput(task.id, `Repos to modify: ${repoList}`).catch(() => {});
     }
 
-    // Update task_repos to reflect the narrowed scope
-    const db = getDb();
-    db.run("DELETE FROM task_repos WHERE task_id = ? AND role = 'target'", [task.id]);
-    for (const r of narrowed) {
+    for (const r of selected) {
       db.run("INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')", [task.id, r.id]);
     }
-    // Update legacy repo_id to first narrowed repo
-    db.run("UPDATE tasks SET repo_id = ? WHERE id = ?", [narrowed[0].id, task.id]);
+    db.run("UPDATE tasks SET repo_id = ? WHERE id = ?", [selected[0].id, task.id]);
 
-    repos = narrowed;
+    repos = selected;
   }
 
   // === CLONE ALL REPOS ===
@@ -774,18 +772,9 @@ export async function restartTaskPhase(taskId: string, phase: string): Promise<v
     : createInitialState();
   let newState: BlueprintState;
   if (phase === "pre_plan") {
+    // Clear any prior pre-plan result so runTask re-runs pre-plan from scratch.
     db.run("DELETE FROM task_repos WHERE task_id = ? AND role = 'target'", [taskId]);
-    const result = db.run(
-      `INSERT INTO task_repos (task_id, repo_id, role)
-       SELECT task_id, repo_id, 'target' FROM task_repos
-       WHERE task_id = ? AND role = 'original_target'`,
-      [taskId]
-    );
-    if (result.changes === 0) {
-      throw new Error(
-        `Cannot restart pre_plan for task ${taskId}: no original_target repos found (task may predate this feature)`
-      );
-    }
+    db.run("UPDATE tasks SET repo_id = NULL WHERE id = ?", [taskId]);
     newState = createInitialState();
   } else {
     newState = restartFromPhase(currentState, phase as BlueprintNodeType);

@@ -26,7 +26,8 @@ tasks.post("/", async (c) => {
 
   const db = getDb();
 
-  // Resolve repo IDs -- support both single and multi-repo
+  // Resolve repo IDs from explicit user input. If none given, leave empty and
+  // let pre-plan populate `target` from the full set of registered repos.
   const repoIds: number[] = [];
 
   if (body.repo_names && body.repo_names.length > 0) {
@@ -44,34 +45,26 @@ tasks.post("/", async (c) => {
     }
     repoIds.push(repo.id);
   } else {
-    // No repo specified -- assign all active repos, let pre-plan narrow it down
-    const repos = db.query("SELECT id FROM repos WHERE archived = 0").all() as Array<{ id: number }>;
-    if (repos.length === 0) {
+    // No repo specified -- require at least one registered repo to exist,
+    // but do not pin `target` here: pre-plan picks from the live repo list.
+    const count = db.query("SELECT COUNT(*) AS c FROM repos WHERE archived = 0").get() as { c: number };
+    if (count.c === 0) {
       return c.json({ error: "No repos registered. Use 'hoto repos add' first." }, 400);
-    }
-    for (const r of repos) {
-      repoIds.push(r.id);
     }
   }
 
   const id = ulid();
   const title = body.title ?? body.description.slice(0, 80);
 
-  // Insert task with first repo as primary (legacy compat)
   db.run(
     `INSERT INTO tasks (id, title, description, repo_id, source, source_sender_id, source_provider, project_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, title, body.description, repoIds[0], body.source ?? "cli", body.source_sender_id ?? null, body.source_provider ?? null, body.project_id ?? null]
+    [id, title, body.description, repoIds[0] ?? null, body.source ?? "cli", body.source_sender_id ?? null, body.source_provider ?? null, body.project_id ?? null]
   );
 
-  // Insert task_repos junction rows
   for (const repoId of repoIds) {
     db.run(
       "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')",
-      [id, repoId]
-    );
-    db.run(
-      "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'original_target')",
       [id, repoId]
     );
   }

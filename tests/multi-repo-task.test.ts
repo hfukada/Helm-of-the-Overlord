@@ -130,35 +130,32 @@ describe("B1: multi-repo task creation", () => {
     expect(res.status).toBe(404);
   });
 
-  test("auto-selects when only one repo exists", async () => {
-    const db = getDb();
-    db.exec("PRAGMA foreign_keys = OFF");
-    db.run("DELETE FROM repos WHERE id != 200");
-    db.exec("PRAGMA foreign_keys = ON");
-
-    const res = await req("POST", "/tasks", {
-      description: "test auto select",
-    });
-    expect(res.status).toBe(201);
-    const data = await res.json() as { id: string; repo_count: number };
-    expect(data.repo_count).toBe(1);
-
-    const rows = db.query("SELECT repo_id FROM task_repos WHERE task_id = ? AND role = 'target'").all(data.id) as Array<{ repo_id: number }>;
-    expect(rows.length).toBe(1);
-    expect(rows[0].repo_id).toBe(200);
-  });
-
-  test("assigns all repos when none specified (pre-plan will narrow)", async () => {
+  test("creates task with no target rows when no repo specified (pre-plan will pick)", async () => {
     const res = await req("POST", "/tasks", {
       description: "test auto scope",
     });
     expect(res.status).toBe(201);
     const data = await res.json() as { id: string; repo_count: number };
-    expect(data.repo_count).toBe(3); // all 3 seeded repos
+    expect(data.repo_count).toBe(0);
 
     const db = getDb();
     const rows = db.query("SELECT * FROM task_repos WHERE task_id = ? AND role = 'target'").all(data.id);
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(0);
+
+    const task = db.query("SELECT repo_id FROM tasks WHERE id = ?").get(data.id) as { repo_id: number | null };
+    expect(task.repo_id).toBeNull();
+  });
+
+  test("rejects creation when no repos are registered at all", async () => {
+    const db = getDb();
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.run("DELETE FROM repos");
+    db.exec("PRAGMA foreign_keys = ON");
+
+    const res = await req("POST", "/tasks", {
+      description: "test no repos",
+    });
+    expect(res.status).toBe(400);
   });
 });
 
@@ -195,11 +192,14 @@ describe("B1: loadTaskAndRepos", () => {
     expect(loadTaskAndRepos("nonexistent")).toBeNull();
   });
 
-  test("returns null for task with no repo", () => {
+  test("returns task with empty repos when target is not yet populated", () => {
     const db = getDb();
     db.run("INSERT INTO tasks (id, title, description, source) VALUES ('t3', 'orphan', 'orphan', 'cli')");
 
-    expect(loadTaskAndRepos("t3")).toBeNull();
+    const loaded = loadTaskAndRepos("t3");
+    expect(loaded).not.toBeNull();
+    expect(loaded!.task.id).toBe("t3");
+    expect(loaded!.repos).toEqual([]);
   });
 
   test("ignores context-role repos", () => {

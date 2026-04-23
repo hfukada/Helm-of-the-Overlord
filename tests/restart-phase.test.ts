@@ -96,41 +96,34 @@ describe("restartTaskPhase — pre_plan", () => {
     );
     repoId = Number(insertResult.lastInsertRowid);
     db.run(
-      "INSERT INTO tasks (id, title, description, status) VALUES (?, 'Test', 'desc', 'scoping')",
-      [taskId]
+      "INSERT INTO tasks (id, title, description, status, repo_id) VALUES (?, 'Test', 'desc', 'scoping', ?)",
+      [taskId, repoId]
     );
     db.run(
       "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'target')",
       [taskId, repoId]
     );
-    db.run(
-      "INSERT INTO task_repos (task_id, repo_id, role) VALUES (?, ?, 'original_target')",
-      [taskId, repoId]
-    );
   });
 
-  it("restores target rows from original_target without throwing Unknown phase", async () => {
+  it("clears target rows and legacy repo_id so pre-plan re-scopes on next run", async () => {
     const db = getDb();
-    // Simulate pre-plan narrowing removing target rows
-    db.run("DELETE FROM task_repos WHERE task_id = ? AND role = 'target'", [taskId]);
 
     await restartFn(taskId, "pre_plan");
 
     const targetRows = db
       .query("SELECT * FROM task_repos WHERE task_id = ? AND role = 'target'")
       .all(taskId);
-    expect(targetRows).toHaveLength(1);
+    expect(targetRows).toHaveLength(0);
+
+    const taskRow = db.query("SELECT repo_id FROM tasks WHERE id = ?").get(taskId) as { repo_id: number | null };
+    expect(taskRow.repo_id).toBeNull();
   });
 
-  it("throws when no original_target rows exist", async () => {
+  it("does not require any pre-existing rows to restart pre_plan", async () => {
     const db = getDb();
-    db.run(
-      "DELETE FROM task_repos WHERE task_id = ? AND role = 'original_target'",
-      [taskId]
-    );
+    db.run("DELETE FROM task_repos WHERE task_id = ?", [taskId]);
+    db.run("UPDATE tasks SET repo_id = NULL WHERE id = ?", [taskId]);
 
-    await expect(restartFn(taskId, "pre_plan")).rejects.toThrow(
-      "no original_target repos found"
-    );
+    await expect(restartFn(taskId, "pre_plan")).resolves.toBeUndefined();
   });
 });
