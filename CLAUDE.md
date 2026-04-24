@@ -222,6 +222,6 @@ When tasks run inside Docker containers, those containers often need host creden
 ### API endpoints
 
 - `GET /repos/:name/secrets` - list secrets for a repo
-- `POST /repos/:name/secrets` - add a secret (manual, auto-verified)
-- `PATCH /repos/:name/secrets/:id` - update verified/description
+- `POST /repos/:name/secrets` - add a secret (manual, auto-verified); `secret_type` accepts `"env_var"`, `"auth_file"`, or `"ssh_key"`; `ssh_key` secrets accept an optional `known_hosts_path`
+- `PATCH /repos/:name/secrets/:id` - update `verified`, `description`, or `known_hosts_path`
 - `DELETE /repos/:name/secrets/:id` - remove a secret

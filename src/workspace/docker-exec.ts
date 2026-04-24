@@ -72,6 +72,20 @@ function buildSecretFlags(secrets: ContainerSecret[]): string[] {
       } else {
         logger.warn("Auth file not found on host, skipping", { key: s.key, path: s.host_path });
       }
+    } else if (s.secret_type === "ssh_key" && s.host_path) {
+      const keyTarget = s.container_path ?? "/root/.ssh/id_rsa";
+      if (existsSync(s.host_path)) {
+        flags.push("-v", `${s.host_path}:${keyTarget}:ro`);
+      } else {
+        logger.warn("SSH key not found on host, skipping", { key: s.key, path: s.host_path });
+      }
+      if (s.known_hosts_path) {
+        if (existsSync(s.known_hosts_path)) {
+          flags.push("-v", `${s.known_hosts_path}:/root/.ssh/known_hosts:ro`);
+        } else {
+          logger.warn("known_hosts file not found on host, skipping", { key: s.key, path: s.known_hosts_path });
+        }
+      }
     }
   }
 
