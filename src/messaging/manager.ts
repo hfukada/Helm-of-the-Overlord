@@ -1,7 +1,7 @@
 import type { MessagingProvider, CommandEvent, MessageEvent } from "./interface";
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
-import { config } from "../shared/config";
+import { config, daemonUrl } from "../shared/config";
 import type { Task, TaskStatus } from "../shared/types";
 
 const COMMAND_HELP: Record<string, string> = {
@@ -450,7 +450,8 @@ export class MessagingManager {
         }
         if (newStatus === "review" && prs.length > 0) {
           const topic = prs.map((pr) => pr.pr_url).join(" | ");
-          await provider.setChannelTopic(channelId, `Review: ${topic}`);
+          const taskUrl = daemonUrl(`/tasks/${task.id}`);
+          await provider.setChannelTopic(channelId, `Task: ${taskUrl} | Review: ${topic}`);
         }
       } catch (err) {
         logger.warn("Failed to notify task status change", {

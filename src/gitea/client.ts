@@ -394,12 +394,14 @@ export async function createPullRequest(
   head: string,
   base: string,
   title: string,
-  body: string
+  body: string,
+  taskUrl?: string
 ): Promise<GiteaPR> {
   const org = config.giteaOrg;
+  const prBody = taskUrl ? `Task: ${taskUrl}\n\n${body}` : body;
   const res = await giteaFetch(`/api/v1/repos/${org}/${repoName}/pulls`, {
     method: "POST",
-    body: JSON.stringify({ title, body, head, base }),
+    body: JSON.stringify({ title, body: prBody, head, base }),
   });
 
   if (!res.ok) {

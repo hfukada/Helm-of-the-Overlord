@@ -7,7 +7,7 @@
 
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
-import { config } from "../shared/config";
+import { config, daemonUrl } from "../shared/config";
 import type { Repo, BlueprintState, BlueprintNodeType, ChildTaskStatus } from "../shared/types";
 import { createChildInitialState, advanceState, restartFromPhase } from "./blueprint";
 import { killTaskSubprocesses } from "./subprocess-registry";
@@ -416,7 +416,8 @@ export async function runChildTask(childId: string): Promise<void> {
     const pr = await createPullRequest(
       repo.name, branchName, baseBranch,
       `hoto: ${prTitle}`,
-      `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt}`
+      `Child task of parent ${parentTaskId}\n\n## Plan\n${planExcerpt}`,
+      daemonUrl(`/tasks/${parentTaskId}`)
     );
 
     const prUrl = rewriteGiteaUrl(pr.html_url);
