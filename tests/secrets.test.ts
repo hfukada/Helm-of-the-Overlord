@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll } from "bun:test";
 import { Hono } from "hono";
+import { buildSecretFlags } from "../src/workspace/docker-exec";
 
 process.env.HOTO_WORKSPACE = "/tmp/hoto-test-secrets";
 
@@ -189,5 +190,123 @@ describe("PATCH /repos/:repoName/secrets/:secretId", () => {
     const secrets = await listRes.json() as Array<{ id: number; known_hosts_path: string | null }>;
     const entry = secrets.find((s) => s.id === id);
     expect(entry?.known_hosts_path).toBe("/root/.ssh/known_hosts");
+  });
+});
+
+describe("buildSecretFlags", () => {
+  test("ssh_key with existing host_path emits -v flag", () => {
+    const flags = buildSecretFlags([
+      {
+        id: 1,
+        repo_id: 1,
+        secret_type: "ssh_key",
+        key: "MY_KEY",
+        value_source: "host_file",
+        host_path: "/root/.ssh/id_rsa",
+        container_path: "/root/.ssh/id_rsa",
+        known_hosts_path: null,
+        verified: 1,
+        description: null,
+      },
+    ]);
+    expect(flags).toContain("-v");
+    expect(flags.some((f) => f.includes("/root/.ssh/id_rsa") && f.endsWith(":ro"))).toBe(true);
+  });
+
+  test("ssh_key with missing host_path emits no flags", () => {
+    const flags = buildSecretFlags([
+      {
+        id: 2,
+        repo_id: 1,
+        secret_type: "ssh_key",
+        key: "MISSING_KEY",
+        value_source: "host_file",
+        host_path: "/tmp/does-not-exist-hoto-key",
+        container_path: null,
+        known_hosts_path: null,
+        verified: 1,
+        description: null,
+      },
+    ]);
+    expect(flags).toHaveLength(0);
+  });
+
+  test("ssh_key with existing known_hosts_path emits two -v flags", () => {
+    const flags = buildSecretFlags([
+      {
+        id: 3,
+        repo_id: 1,
+        secret_type: "ssh_key",
+        key: "KEY_WITH_KNOWN_HOSTS",
+        value_source: "host_file",
+        host_path: "/root/.ssh/id_rsa",
+        container_path: "/root/.ssh/id_rsa",
+        known_hosts_path: "/root/.ssh/id_rsa",
+        verified: 1,
+        description: null,
+      },
+    ]);
+    const vFlags = flags.filter((f) => f === "-v");
+    expect(vFlags).toHaveLength(2);
+  });
+
+  test("ssh_key with non-existent known_hosts_path emits only key -v flag", () => {
+    const flags = buildSecretFlags([
+      {
+        id: 4,
+        repo_id: 1,
+        secret_type: "ssh_key",
+        key: "KEY_MISSING_KNOWN_HOSTS",
+        value_source: "host_file",
+        host_path: "/root/.ssh/id_rsa",
+        container_path: "/root/.ssh/id_rsa",
+        known_hosts_path: "/tmp/does-not-exist-known-hosts",
+        verified: 1,
+        description: null,
+      },
+    ]);
+    const vFlags = flags.filter((f) => f === "-v");
+    expect(vFlags).toHaveLength(1);
+    expect(flags.some((f) => f.includes("/root/.ssh/id_rsa") && f.endsWith(":ro"))).toBe(true);
+  });
+
+  test("env_var host_env emits -e flag (regression)", () => {
+    process.env.TEST_REGRESSION_VAR = "hello";
+    const flags = buildSecretFlags([
+      {
+        id: 5,
+        repo_id: 1,
+        secret_type: "env_var",
+        key: "TEST_REGRESSION_VAR",
+        value_source: "host_env",
+        host_path: null,
+        container_path: null,
+        known_hosts_path: null,
+        verified: 1,
+        description: null,
+      },
+    ]);
+    expect(flags).toContain("-e");
+    expect(flags.some((f) => f.startsWith("TEST_REGRESSION_VAR="))).toBe(true);
+    delete process.env.TEST_REGRESSION_VAR;
+  });
+
+  test("auth_file with existing path emits -v flag (regression)", () => {
+    const flags = buildSecretFlags([
+      {
+        id: 6,
+        repo_id: 1,
+        secret_type: "auth_file",
+        key: "MY_AUTH",
+        value_source: "host_file",
+        host_path: "/root/.ssh/id_rsa",
+        container_path: "/root/.docker/config.json",
+        known_hosts_path: null,
+        verified: 1,
+        description: null,
+      },
+    ]);
+    expect(flags).toContain("-v");
+    expect(flags.some((f) => f.endsWith(":ro"))).toBe(true);
   });
 });

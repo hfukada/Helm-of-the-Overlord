@@ -43,7 +43,7 @@ function containerName(taskId: string): string {
  * auth_file secrets:
  *   - host_file: -v host_path:container_path:ro (bind mount)
  */
-function buildSecretFlags(secrets: ContainerSecret[]): string[] {
+export function buildSecretFlags(secrets: ContainerSecret[]): string[] {
   const flags: string[] = [];
 
   for (const s of secrets) {
@@ -90,6 +90,26 @@ function buildSecretFlags(secrets: ContainerSecret[]): string[] {
   }
 
   return flags;
+}
+
+function fixSshKeyPermissions(containerName: string, secrets: ContainerSecret[]): void {
+  for (const s of secrets) {
+    if (s.secret_type === "ssh_key" && s.host_path) {
+      const keyTarget = s.container_path ?? "/root/.ssh/id_rsa";
+      const result = Bun.spawnSync(
+        ["docker", "exec", containerName, "sh", "-c", `mkdir -p /root/.ssh && chmod 600 ${keyTarget}`],
+        { stdout: "pipe", stderr: "pipe" }
+      );
+      if (result.exitCode !== 0) {
+        logger.warn("Failed to set SSH key permissions in container", {
+          container: containerName,
+          key: s.key,
+          path: keyTarget,
+          stderr: new TextDecoder().decode(result.stderr),
+        });
+      }
+    }
+  }
 }
 
 /**
@@ -318,6 +338,7 @@ export async function setupTaskContainer(
         // Fall through
       } else {
         logger.info("Docker container started", { taskId, name });
+        fixSshKeyPermissions(name, secrets);
         return name;
       }
     }
@@ -352,6 +373,7 @@ export async function setupTaskContainer(
       // Fall through to sandbox
     } else {
       logger.info("Language-based Docker container started", { taskId, name, image: repo.docker_image });
+      fixSshKeyPermissions(name, secrets);
       return name;
     }
   }
