@@ -146,6 +146,7 @@ export async function startSandboxContainer(
     "-w", sandboxWorkspace,
     "-v", "/var/run/docker.sock:/var/run/docker.sock",
     "--add-host", "host.docker.internal:host-gateway",
+    "-e", "CLAUDE_CODE_OAUTH_TOKEN",
     "hoto-sandbox:latest",
     "sleep", "infinity",
   ];
