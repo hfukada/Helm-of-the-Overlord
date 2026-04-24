@@ -6,6 +6,10 @@ process.env.HOTO_WORKSPACE = "/tmp/hoto-test-secrets";
 import { mock } from "bun:test";
 
 mock.module("../src/knowledge/chromadb", () => ({
+  isChromaAvailable: async () => false,
+  upsertDocuments: async () => {},
+  queryDocuments: async () => [],
+  deleteCollectionItems: async () => {},
   deleteCollection: async () => {},
 }));
 
@@ -51,13 +55,15 @@ import { getDb } from "../src/knowledge/db";
 let app: Hono;
 
 beforeAll(async () => {
-  const { mkdirSync } = await import("node:fs");
+  const { mkdirSync, writeFileSync } = await import("node:fs");
   mkdirSync("/tmp/hoto-test-secrets", { recursive: true });
+  mkdirSync("/root/.ssh", { recursive: true });
+  writeFileSync("/root/.ssh/id_rsa", "");
   const db = getDb();
 
   db.run(
-    `INSERT OR IGNORE INTO repos (name, url, local_path, created_at, updated_at)
-     VALUES ('testrepo', 'http://example.com/testrepo.git', '/tmp/testrepo', datetime('now'), datetime('now'))`
+    `INSERT OR IGNORE INTO repos (name, path)
+     VALUES ('testrepo', '/tmp/testrepo')`
   );
 
   const { secrets } = await import("../src/daemon/routes/secrets");
@@ -93,6 +99,21 @@ describe("POST /repos/:repoName/secrets", () => {
       }),
     });
     expect(res.status).toBe(400);
+  });
+
+  test("ssh_key with non-existent host_path returns 400", async () => {
+    const res = await app.request("/repos/testrepo/secrets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        secret_type: "ssh_key",
+        name: "NONEXISTENT_KEY",
+        host_path: "/tmp/does-not-exist-hoto",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toContain("not readable");
   });
 
   test("ssh_key with known_hosts_path returns 201 and field is persisted", async () => {

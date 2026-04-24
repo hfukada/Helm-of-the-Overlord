@@ -1,3 +1,4 @@
+import { accessSync, constants } from "node:fs";
 import { Hono } from "hono";
 import { getDb } from "../../knowledge/db";
 import { logger } from "../../shared/logger";
@@ -40,6 +41,15 @@ secrets.post("/:repoName/secrets", async (c) => {
 
   if ((body.secret_type === "auth_file" || body.secret_type === "ssh_key") && !body.host_path) {
     return c.json({ error: "host_path is required for auth_file and ssh_key secrets" }, 400);
+  }
+
+  if (body.secret_type === "ssh_key") {
+    try {
+      accessSync(body.host_path!, constants.R_OK);
+    } catch {
+      logger.warn("ssh_key host_path not readable", { host_path: body.host_path });
+      return c.json({ error: "host_path does not exist or is not readable" }, 400);
+    }
   }
 
   try {
