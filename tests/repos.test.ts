@@ -4,6 +4,10 @@ import { Hono } from "hono";
 process.env.HOTO_WORKSPACE = "/tmp/hoto-test-repos";
 
 mock.module("../src/knowledge/chromadb", () => ({
+  isChromaAvailable: async () => false,
+  upsertDocuments: async () => {},
+  queryDocuments: async () => [],
+  deleteCollectionItems: async () => {},
   deleteCollection: async () => {},
 }));
 
