@@ -371,6 +371,34 @@ export function runMigrations(db: Database): void {
     // Already migrated or table does not exist yet
   }
 
+  // Migrate container_secrets CHECK constraint to allow 'ssh_key'
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS container_secrets_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo_id INTEGER NOT NULL REFERENCES repos(id) ON DELETE CASCADE,
+        secret_type TEXT NOT NULL CHECK (secret_type IN ('env_var', 'auth_file', 'ssh_key')),
+        key TEXT NOT NULL,
+        value_source TEXT NOT NULL CHECK (value_source IN ('host_env', 'host_file')),
+        host_path TEXT,
+        container_path TEXT,
+        description TEXT,
+        discovered_by TEXT NOT NULL DEFAULT 'manual' CHECK (discovered_by IN ('manual', 'auto')),
+        verified INTEGER NOT NULL DEFAULT 0,
+        known_hosts_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(repo_id, secret_type, key)
+      );
+      INSERT OR IGNORE INTO container_secrets_new
+        SELECT id, repo_id, secret_type, key, value_source, host_path, container_path, description, discovered_by, verified, known_hosts_path, created_at
+        FROM container_secrets;
+      DROP TABLE container_secrets;
+      ALTER TABLE container_secrets_new RENAME TO container_secrets;
+    `);
+  } catch {
+    // Already migrated or table does not exist yet
+  }
+
   // Backfill task_repos from existing tasks.repo_id (only where the repo still exists)
   db.exec(
     `INSERT OR IGNORE INTO task_repos (task_id, repo_id, role)
