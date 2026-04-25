@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeAll, beforeEach, mock } from "bun:test";
+import { isSshUrl } from "../src/daemon/routes/repos";
 import { Hono } from "hono";
 
 process.env.HOTO_WORKSPACE = "/tmp/hoto-test-repos";
@@ -83,6 +84,15 @@ async function req(method: string, path: string, body?: unknown) {
   if (body !== undefined) init.body = JSON.stringify(body);
   return app.request(path, init);
 }
+
+describe("isSshUrl", () => {
+  test("returns true for git@ URLs", () => {
+    expect(isSshUrl("git@github.com:org/repo.git")).toBe(true);
+  });
+  test("returns false for https URLs", () => {
+    expect(isSshUrl("https://github.com/org/repo.git")).toBe(false);
+  });
+});
 
 describe("repos API", () => {
   beforeEach(() => {
