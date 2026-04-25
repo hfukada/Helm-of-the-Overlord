@@ -418,7 +418,8 @@ The daemon exposes a REST API on `http://127.0.0.1:7777` (configurable via `HOTO
     "test_cmd": "string (optional)",
     "run_cmd": "string (optional)",
     "lint_cmd": "string (optional)",
-    "ci_on_host": "boolean (optional, allow CI to run on host without Docker)"
+    "ci_on_host": "boolean (optional, allow CI to run on host without Docker)",
+    "ssh_key_path": "string (optional, path to SSH private key for SSH-based clone URLs; env vars expanded; not persisted)"
   }
   ```
 - Response (201): `{ "id": number, "name": string, "path": string, "language": string | null, "framework": string | null }`

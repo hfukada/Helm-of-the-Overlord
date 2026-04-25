@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { $ } from "bun";
 import { getDb } from "../../knowledge/db";
 import { deleteCollection } from "../../knowledge/chromadb";
@@ -11,6 +11,10 @@ import type { Repo } from "../../shared/types";
 import { embedGiteaCredentials, mirrorRepoToGitea, isGiteaConfigured } from "../../gitea/client";
 import { getMessagingManager } from "../../messaging/manager";
 import { expandEnvVars } from "../../shared/expand-env";
+
+export function isSshUrl(url: string): boolean {
+  return url.startsWith("git@") || url.startsWith("ssh://");
+}
 
 const repos = new Hono();
 
@@ -34,6 +38,7 @@ repos.post("/", async (c) => {
     lint_cmd?: string;
     ci_on_host?: boolean;
     extra_context?: string | null;
+    ssh_key_path?: string;
   }>();
 
   if (!body.url && !body.path) {
@@ -76,8 +81,21 @@ repos.post("/", async (c) => {
       await $`mkdir -p ${reposDir}`.quiet();
       await $`rm -rf ${repoPath}`.quiet();
       const cloneUrl = embedGiteaCredentials(expandedUrl);
-      logger.info("Cloning repo", { url: body.url, dest: repoPath });
-      const result = await $`git clone ${cloneUrl} ${repoPath}`.nothrow().quiet();
+      const sshKeyPath = body.ssh_key_path ? expandEnvVars(body.ssh_key_path) : null;
+      const useSshKey = isSshUrl(expandedUrl) && sshKeyPath !== null;
+      if (useSshKey) {
+        const keyExists = await Bun.file(sshKeyPath!).exists();
+        if (!keyExists) {
+          return c.json({ error: `SSH key not found: ${sshKeyPath}` }, 400);
+        }
+      }
+      logger.info("Cloning repo", { url: body.url, dest: repoPath, sshKey: useSshKey ? basename(sshKeyPath!) : false });
+      const result = useSshKey
+        ? await $`git clone ${cloneUrl} ${repoPath}`.env({
+            ...process.env,
+            GIT_SSH_COMMAND: `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no`,
+          }).nothrow().quiet()
+        : await $`git clone ${cloneUrl} ${repoPath}`.nothrow().quiet();
       if (result.exitCode !== 0) {
         const stderr = result.stderr.toString().trim();
         logger.error("Clone failed", { url: body.url, exitCode: result.exitCode, stderr });
