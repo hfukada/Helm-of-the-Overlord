@@ -35,7 +35,7 @@ secrets.post("/:repoName/secrets", async (c) => {
   const repo = db.query("SELECT id FROM repos WHERE name = ?").get(repoName) as { id: number } | null;
   if (!repo) return c.json({ error: "Repo not found" }, 404);
 
-  if (!body.secret_type || !body.key || !body.value_source) {
+  if (!body.secret_type) {
     return c.json({ error: "secret_type, key, and value_source are required" }, 400);
   }
 
@@ -50,6 +50,10 @@ secrets.post("/:repoName/secrets", async (c) => {
       logger.warn("ssh_key host_path not readable", { host_path: body.host_path });
       return c.json({ error: "host_path does not exist or is not readable" }, 400);
     }
+  }
+
+  if (!body.key || !body.value_source) {
+    return c.json({ error: "secret_type, key, and value_source are required" }, 400);
   }
 
   try {

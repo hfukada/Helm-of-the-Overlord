@@ -28,10 +28,6 @@ mock.module("../src/knowledge/repo-parser", () => ({
   }),
 }));
 
-mock.module("../src/knowledge/indexer", () => ({
-  indexRepo: async () => ({ chunks: 0, embeddings: 0 }),
-}));
-
 mock.module("../src/gitea/client", () => ({
   embedGiteaCredentials: (u: string) => u,
   mirrorRepoToGitea: async () => {},
@@ -268,6 +264,92 @@ describe("buildSecretFlags", () => {
     const vFlags = flags.filter((f) => f === "-v");
     expect(vFlags).toHaveLength(1);
     expect(flags.some((f) => f.includes("/root/.ssh/id_rsa") && f.endsWith(":ro"))).toBe(true);
+  });
+
+  describe("buildSecretFlags GIT_SSH_COMMAND", () => {
+    test("ssh_key with existing key and no known_hosts emits GIT_SSH_COMMAND with StrictHostKeyChecking=no", () => {
+      const flags = buildSecretFlags([
+        {
+          id: 10,
+          repo_id: 1,
+          secret_type: "ssh_key",
+          key: "MY_KEY",
+          value_source: "host_file",
+          host_path: "/root/.ssh/id_rsa",
+          container_path: "/root/.ssh/id_rsa",
+          known_hosts_path: null,
+          verified: 1,
+          description: null,
+        },
+      ]);
+      const eIdx = flags.indexOf("-e");
+      expect(eIdx).toBeGreaterThanOrEqual(0);
+      const val = flags[eIdx + 1];
+      expect(val).toStartWith("GIT_SSH_COMMAND=ssh -i");
+      expect(val).toContain("StrictHostKeyChecking=no");
+    });
+
+    test("ssh_key with existing known_hosts file emits GIT_SSH_COMMAND with StrictHostKeyChecking=accept-new", () => {
+      const flags = buildSecretFlags([
+        {
+          id: 11,
+          repo_id: 1,
+          secret_type: "ssh_key",
+          key: "KEY_WITH_KNOWN_HOSTS",
+          value_source: "host_file",
+          host_path: "/root/.ssh/id_rsa",
+          container_path: "/root/.ssh/id_rsa",
+          known_hosts_path: "/root/.ssh/id_rsa",
+          verified: 1,
+          description: null,
+        },
+      ]);
+      const eIdx = flags.indexOf("-e");
+      expect(eIdx).toBeGreaterThanOrEqual(0);
+      const val = flags[eIdx + 1];
+      expect(val).toContain("StrictHostKeyChecking=accept-new");
+      expect(val).toContain("UserKnownHostsFile=/root/.ssh/known_hosts");
+    });
+
+    test("ssh_key with known_hosts_path set but file missing falls back to StrictHostKeyChecking=no", () => {
+      const flags = buildSecretFlags([
+        {
+          id: 12,
+          repo_id: 1,
+          secret_type: "ssh_key",
+          key: "KEY_MISSING_KNOWN_HOSTS",
+          value_source: "host_file",
+          host_path: "/root/.ssh/id_rsa",
+          container_path: "/root/.ssh/id_rsa",
+          known_hosts_path: "/tmp/does-not-exist-known-hosts",
+          verified: 1,
+          description: null,
+        },
+      ]);
+      const eIdx = flags.indexOf("-e");
+      expect(eIdx).toBeGreaterThanOrEqual(0);
+      const val = flags[eIdx + 1];
+      expect(val).toContain("StrictHostKeyChecking=no");
+      expect(val).not.toContain("StrictHostKeyChecking=accept-new");
+    });
+
+    test("ssh_key with missing host_path emits no GIT_SSH_COMMAND", () => {
+      const flags = buildSecretFlags([
+        {
+          id: 13,
+          repo_id: 1,
+          secret_type: "ssh_key",
+          key: "MISSING_KEY",
+          value_source: "host_file",
+          host_path: "/tmp/does-not-exist-hoto-key",
+          container_path: null,
+          known_hosts_path: null,
+          verified: 1,
+          description: null,
+        },
+      ]);
+      expect(flags.every((f) => !f.startsWith("GIT_SSH_COMMAND="))).toBe(true);
+    });
   });
 
   test("env_var host_env emits -e flag (regression)", () => {

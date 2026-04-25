@@ -5,7 +5,7 @@ import * as crypto from "node:crypto";
 // Set isolated workspace BEFORE any imports that load config/db
 process.env.HOTO_WORKSPACE = path.join(os.tmpdir(), `hoto-test-${crypto.randomUUID()}`);
 
-import { describe, it, expect, afterEach } from "bun:test";
+import { describe, it, expect, afterEach, beforeAll } from "bun:test";
 import { getDb } from "../src/knowledge/db";
 import { resumeInterruptedTasks, type ResumeHandlers } from "../src/orchestrator/resume-on-startup";
 
@@ -30,6 +30,10 @@ function makeHandlers(): ResumeHandlers {
     staggerMs: 0, // no delay in tests
   };
 }
+
+beforeAll(() => {
+  clearTables();
+});
 
 afterEach(() => {
   clearTables();
