@@ -55,19 +55,23 @@ async function addRepo(args: string[]): Promise<void> {
   const target = args[0];
   if (!target) {
     console.log(
-      "Usage: hoto repos add <git-url-or-path> [--name name] [--allow-ci-on-host]\n" +
-      "       URL may contain env var tokens: https://$TOKEN@host/org/repo.git or $BASE_URL/org/repo.git"
+      "Usage: hoto repos add <git-url-or-path> [--name name] [--ssh-key <key-path>] [--allow-ci-on-host]\n" +
+      "       URL may contain env var tokens: https://$TOKEN@host/org/repo.git\n" +
+      "       --ssh-key: path to SSH private key for SSH clone URLs (env vars expanded, not persisted)"
     );
     process.exit(1);
   }
 
   let name: string | undefined;
   let ciOnHost = false;
+  let sshKey = "";
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--name" || args[i] === "-n") {
       name = args[++i];
     } else if (args[i] === "--allow-ci-on-host") {
       ciOnHost = true;
+    } else if (args[i] === "--ssh-key") {
+      sshKey = args[++i];
     }
   }
 
@@ -76,6 +80,15 @@ async function addRepo(args: string[]): Promise<void> {
   const body: Record<string, string | boolean> = isUrl ? { url: target } : { path: target };
   if (name) body.name = name;
   if (ciOnHost) body.ci_on_host = true;
+
+  if (sshKey) {
+    const exists = await Bun.file(sshKey).exists();
+    if (!exists) {
+      console.error(`Error: SSH key not found: ${sshKey}`);
+      process.exit(1);
+    }
+    body.ssh_key_path = sshKey;
+  }
 
   console.log(`Cloning ${target}...`);
 
