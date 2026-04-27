@@ -11,7 +11,7 @@ interface SecretPattern {
   pattern: RegExp;
   /** Extract the secret definition from the match */
   extract: (match: RegExpMatchArray) => {
-    secret_type: "env_var" | "auth_file";
+    secret_type: "env_var" | "auth_file" | "ssh_key";
     key: string;
     value_source: "host_env" | "host_file";
     host_path?: string;
@@ -116,6 +116,50 @@ const PATTERNS: SecretPattern[] = [
       host_path: `${process.env.HOME ?? "/root"}/.pypirc`,
       container_path: "/root/.pypirc",
       description: "Auto-detected: Python package registry auth failure",
+    }),
+  },
+  // SSH: public key auth failure
+  {
+    pattern: /Permission denied \(publickey\)/i,
+    extract: () => ({
+      secret_type: "ssh_key",
+      key: "SSH_KEY",
+      value_source: "host_file",
+      description:
+        "Auto-detected: SSH public key auth failed. Register an SSH key with: hoto repos secrets add --ssh-key <path>, or use $ENV_VAR syntax in the repo URL.",
+    }),
+  },
+  // SSH: host key verification failure
+  {
+    pattern: /Host key verification failed/i,
+    extract: () => ({
+      secret_type: "ssh_key",
+      key: "SSH_KNOWN_HOSTS",
+      value_source: "host_file",
+      description:
+        "Auto-detected: SSH host key verification failed. Register a known_hosts file when adding an SSH key secret, or use $ENV_VAR syntax in the repo URL.",
+    }),
+  },
+  // HTTPS: invalid credentials
+  {
+    pattern: /remote: Invalid username or password/i,
+    extract: () => ({
+      secret_type: "env_var",
+      key: "GIT_TOKEN",
+      value_source: "host_env",
+      description:
+        "Auto-detected: Git HTTPS auth failed (invalid credentials). Set a token env var and use $ENV_VAR syntax in the repo URL (e.g. https://$GIT_TOKEN@host/repo).",
+    }),
+  },
+  // HTTPS: 403 Forbidden from git
+  {
+    pattern: /fatal:.*403|The requested URL returned error: 403/i,
+    extract: () => ({
+      secret_type: "env_var",
+      key: "GIT_TOKEN",
+      value_source: "host_env",
+      description:
+        "Auto-detected: Git HTTPS auth failed (403 Forbidden). Set a token env var and use $ENV_VAR syntax in the repo URL (e.g. https://$GIT_TOKEN@host/repo).",
     }),
   },
 ];
