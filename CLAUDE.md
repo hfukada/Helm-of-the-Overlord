@@ -208,6 +208,43 @@ The hoto container needs:
 
 Environment overrides in docker-compose use Docker service names (e.g. `gitea:3777`, `chromadb:8000`, `ollama:11434`).
 
+## Mac Deployment
+
+On macOS, Docker runs inside a Linux VM which adds virtualization overhead for compute-heavy workloads. To avoid this, run hoto, ollama, and hoto-ui natively on the host and use Docker only for the stateful infrastructure services.
+
+Start only the infrastructure services:
+
+```sh
+docker compose -f docker-compose.mac.yml up -d
+```
+
+This starts gitea, synapse, and chromadb. The mac compose file uses `extends:` to inherit service definitions from `docker-compose.yml`, so image versions, port mappings, and configuration stay in sync automatically when the main file is updated.
+
+Run the remaining components natively:
+
+```sh
+# Hoto daemon
+GITEA_URL=http://localhost:3777 \
+CHROMA_URL=http://localhost:8033 \
+MATRIX_HOMESERVER_URL=http://localhost:8098 \
+OLLAMA_URL=http://localhost:11434 \
+bun run src/index.ts daemon start
+
+# Ollama -- use the native Mac app or:
+ollama serve
+
+# hoto-ui -- see that repo for its start command
+```
+
+Key env vars when running locally against the containerized services:
+
+| Variable | Mac value |
+|---|---|
+| `GITEA_URL` | `http://localhost:3777` |
+| `CHROMA_URL` | `http://localhost:8033` |
+| `MATRIX_HOMESERVER_URL` | `http://localhost:8098` |
+| `OLLAMA_URL` | `http://localhost:11434` |
+
 ## Container Secrets
 
 When tasks run inside Docker containers, those containers often need host credentials (API keys, auth files, SSH keys, etc.).

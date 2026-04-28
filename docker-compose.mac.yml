@@ -1,0 +1,22 @@
+services:
+  chromadb:
+    extends:
+      file: docker-compose.yml
+      service: chromadb
+    environment:
+      CHROMA_SERVER_HTTP_PORT: "8000"
+
+  gitea:
+    extends:
+      file: docker-compose.yml
+      service: gitea
+
+  synapse:
+    extends:
+      file: docker-compose.yml
+      service: synapse
+
+volumes:
+  chroma-data:
+  synapse-data:
+  gitea-data:

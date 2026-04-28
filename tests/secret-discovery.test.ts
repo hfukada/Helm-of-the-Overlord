@@ -7,11 +7,11 @@ import { getDb } from "../src/knowledge/db";
 beforeAll(() => {
   getDb();
   const db = getDb();
-  db.run("INSERT INTO repos (id, name, url) VALUES (1, 'test-repo-1', 'git@example.com:test/repo1.git')");
-  db.run("INSERT INTO repos (id, name, url) VALUES (2, 'test-repo-2', 'git@example.com:test/repo2.git')");
-  db.run("INSERT INTO repos (id, name, url) VALUES (3, 'test-repo-3', 'https://example.com/repo3.git')");
-  db.run("INSERT INTO repos (id, name, url) VALUES (4, 'test-repo-4', 'https://example.com/repo4.git')");
-  db.run("INSERT INTO repos (id, name, url) VALUES (5, 'test-repo-5', 'https://example.com/repo5.git')");
+  db.run("INSERT INTO repos (id, name, path) VALUES (1, 'test-repo-1', 'git@example.com:test/repo1.git')");
+  db.run("INSERT INTO repos (id, name, path) VALUES (2, 'test-repo-2', 'git@example.com:test/repo2.git')");
+  db.run("INSERT INTO repos (id, name, path) VALUES (3, 'test-repo-3', 'https://example.com/repo3.git')");
+  db.run("INSERT INTO repos (id, name, path) VALUES (4, 'test-repo-4', 'https://example.com/repo4.git')");
+  db.run("INSERT INTO repos (id, name, path) VALUES (5, 'test-repo-5', 'https://example.com/repo5.git')");
 });
 
 describe("discoverSecrets — SSH and HTTPS auth patterns", () => {
