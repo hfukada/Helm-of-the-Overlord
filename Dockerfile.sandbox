@@ -26,9 +26,19 @@ RUN ARCH=$(uname -m) \
     && curl -fsSL "https://nodejs.org/dist/v22.13.1/node-v22.13.1-linux-${NODE_ARCH}.tar.xz" \
        | tar -xJ --strip-components=1 -C /usr/local
 
+# Install Go
+RUN ARCH=$(uname -m) \
+    && case "$ARCH" in \
+        x86_64) GO_ARCH="amd64" ;; \
+        aarch64) GO_ARCH="arm64" ;; \
+        *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac \
+    && curl -fsSL "https://go.dev/dl/go1.24.2.linux-${GO_ARCH}.tar.gz" \
+       | tar -xz -C /usr/local
+
 # Install Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/root/.bun/bin:/root/.local/bin:$PATH"
+ENV PATH="/usr/local/go/bin:/root/.bun/bin:/root/.local/bin:$PATH"
 
 WORKDIR /workspace
 
