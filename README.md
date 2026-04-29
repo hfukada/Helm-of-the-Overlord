@@ -34,6 +34,9 @@ Parent: pre-plan -> plan -> scrutinize -> finalize -> spawn children -> wait
 
 - [Bun](https://bun.sh) >= 1.0
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-cli) (`claude` must be on your PATH)
+  - Authenticate by running `claude setup-token`, then add the token to your `.env` file:
+    `CLAUDE_CODE_OAUTH_TOKEN=<token>`
+  - The `.env` file is loaded from `$HOTO_WORKSPACE/.env` by default (see `HOTO_DOTENV`)
 - Git
 - [Gitea](https://gitea.io) instance with an admin token (optional -- required for PR review workflow)
 - [Ollama](https://ollama.ai) (optional):
@@ -171,6 +174,7 @@ All configuration is via environment variables. The daemon reads these at startu
 | `HOTO_HOST` | `127.0.0.1` | Daemon bind address |
 | `HOTO_PORT` | `7777` | Daemon HTTP port |
 | `HOTO_MODEL` | `claude-sonnet-4-6` | Claude model used for agent runs |
+| `CLAUDE_CODE_OAUTH_TOKEN` | — | OAuth token for Claude CLI authentication; obtain via `claude setup-token` |
 | `CHROMA_URL` | `http://127.0.0.1:8033` | ChromaDB URL for vector search (optional) |
 | `MATRIX_HOMESERVER_URL` | — | Matrix homeserver URL for the bot (optional) |
 | `MATRIX_BOT_USER` | `@hoto:localhost` | Matrix bot user ID (optional) |
