@@ -161,13 +161,25 @@ knowledge.post("/ask", async (c) => {
     query: string;
     repo_name?: string;
     limit?: number;
+    general?: boolean;
   }>();
 
   if (!body.query?.trim()) {
     return c.json({ error: "query is required" }, 400);
   }
 
+  const general = body.general === true;
   const db = getDb();
+
+  if (general) {
+    const askId = ulid();
+    db.query(
+      "INSERT INTO ask_queries (id, query, status) VALUES (?, ?, 'running')"
+    ).run(askId, body.query);
+    runAskInBackground(askId, body.query, [], true);
+    return c.json({ id: askId, status: "running" }, 200);
+  }
+
   let repoId: number | undefined;
 
   if (body.repo_name) {
@@ -231,7 +243,13 @@ knowledge.get("/ask/:id/stream", (c) => {
   });
 });
 
-async function buildAskPrompt(query: string, results: SearchResult[]) {
+async function buildAskPrompt(query: string, results: SearchResult[], general: boolean = false) {
+  if (general) {
+    const systemPrompt = await renderTemplate("ask-general-system", {});
+    const prompt = await renderTemplate("ask-general-user", { query });
+    return { systemPrompt, prompt };
+  }
+
   const MAX_CONTENT_CHARS = 1200;
 
   const contextParts = results.map((r, i) => {
@@ -249,16 +267,16 @@ async function buildAskPrompt(query: string, results: SearchResult[]) {
   return { systemPrompt, prompt };
 }
 
-function runAskInBackground(askId: string, query: string, results: SearchResult[]): void {
+function runAskInBackground(askId: string, query: string, results: SearchResult[], general: boolean = false): void {
   const db = getDb();
 
-  buildAskPrompt(query, results).then(({ systemPrompt, prompt }) => {
+  buildAskPrompt(query, results, general).then(({ systemPrompt, prompt }) => {
     const insertEvent = db.query(
       "INSERT INTO ask_stream (ask_query_id, event_type, content) VALUES (?, ?, ?)"
     );
 
     return claudeStream(
-      { prompt, systemPrompt, maxTurns: 15, allowedTools: READ_EXEC_TOOLS.map(t => t.name) },
+      { prompt, systemPrompt, maxTurns: 15, allowedTools: general ? [] : READ_EXEC_TOOLS.map(t => t.name) },
       async (evt) => {
         insertEvent.run(askId, evt.type, evt.content);
       },

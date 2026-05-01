@@ -91,10 +91,12 @@ const COMMAND_HELP: Record<string, string> = {
     "Displays input tokens, output tokens, and estimated cost in USD.",
   ].join("\n"),
   ask: [
-    "!ask <question>",
+    "!ask [--general] <question>",
     "Query the knowledge base. Searches indexed repos and uses AI to synthesize an answer.",
+    "Use --general (-g) to ask Claude a general question without searching any repo.",
     "Plain messages in the main channel also trigger this.",
     "Example: !ask How does authentication work in my-api?",
+    "Example: !ask --general What is the difference between a mutex and a semaphore?",
   ].join("\n"),
   approve: [
     "!approve",
@@ -1254,16 +1256,18 @@ export class MessagingManager {
   }
 
   private async cmdAsk(cmd: CommandEvent): Promise<void> {
-    const query = cmd.args.join(" ");
+    const args = cmd.args.filter(a => a !== "--general" && a !== "-g");
+    const general = args.length !== cmd.args.length;
+    const query = args.join(" ");
     if (!query) {
-      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !ask <question>");
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !ask [--general] <question>");
       return;
     }
 
     const res = await fetch(`http://127.0.0.1:${config.daemonPort}/knowledge/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, general }),
     });
 
     if (!res.ok) {
