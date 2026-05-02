@@ -65,7 +65,7 @@ export async function reviseRemainingMilestones(
   });
 
   const { claudeJSON } = await import("../shared/claude-cli");
-  let claudeResult;
+  let claudeResult: Awaited<ReturnType<typeof claudeJSON>>;
   try {
     claudeResult = await claudeJSON({ prompt, mcpConfigPath });
   } catch (err) {
@@ -115,7 +115,7 @@ export async function reviseRemainingMilestones(
 
 export function parseRevisorResponse(text: string): RevisorResponse | null {
   // Try direct JSON first.
-  let raw = text.trim();
+  const raw = text.trim();
   try {
     return validate(JSON.parse(raw));
   } catch {}

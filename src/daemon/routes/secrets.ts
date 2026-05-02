@@ -45,7 +45,7 @@ secrets.post("/:repoName/secrets", async (c) => {
 
   if (body.secret_type === "ssh_key") {
     try {
-      accessSync(body.host_path!, constants.R_OK);
+      accessSync(body.host_path as string, constants.R_OK);
     } catch {
       logger.warn("ssh_key host_path not readable", { host_path: body.host_path });
       return c.json({ error: "host_path does not exist or is not readable" }, 400);

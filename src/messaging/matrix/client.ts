@@ -195,6 +195,21 @@ export class MatrixProvider implements MessagingProvider {
     }
   }
 
+  async reactivateChannel(channelId: string, _taskShortId: string, _taskTitle: string): Promise<string> {
+    if (!this.client) return channelId;
+    try {
+      await this.client.joinRoom(channelId);
+    } catch (err) {
+      logger.warn("Matrix: failed to rejoin room for reactivation", { channelId, error: String(err) });
+    }
+    try {
+      await this.client.setRoomTopic(channelId, "");
+    } catch (err) {
+      logger.warn("Matrix: failed to reset room topic", { channelId, error: String(err) });
+    }
+    return channelId;
+  }
+
   async listTaskChannels(): Promise<string[]> {
     if (!this.client) throw new Error("Matrix client not connected");
     const mainId = this.mainChannelId ?? null;

@@ -143,6 +143,16 @@ export class DiscordProvider implements MessagingProvider {
     }
   }
 
+  async reactivateChannel(_channelId: string, taskShortId: string, taskTitle: string): Promise<string> {
+    const guild = await this.client.guilds.fetch(this.guildId);
+    const channel = await guild.channels.create({
+      name: `hoto-task-${taskShortId}`,
+      type: ChannelType.GuildText,
+      topic: taskTitle,
+    }) as TextChannel;
+    return channel.id;
+  }
+
   async sendMessage(channelId: string, text: string): Promise<void> {
     try {
       const channel = await this.client.channels.fetch(channelId) as TextChannel;

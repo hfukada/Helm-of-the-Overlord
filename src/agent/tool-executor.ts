@@ -107,7 +107,7 @@ async function execGrep(args: Record<string, unknown>, workDir: string): Promise
 
   if (exitCode === 0) {
     // Matches found — truncate if large.
-    return stdout.length > 4000 ? stdout.slice(0, 4000) + "\n...(truncated)" : stdout;
+    return stdout.length > 4000 ? `${stdout.slice(0, 4000)}\n...(truncated)` : stdout;
   }
   if (exitCode === 1) {
     // grep exits 1 when there are no matches — not an error.
@@ -171,5 +171,5 @@ async function execBash(args: Record<string, unknown>, workDir: string): Promise
   if (exitCode !== 0) {
     logger.warn("bash command exited non-zero", { exitCode, command });
   }
-  return combined.length > 4000 ? combined.slice(0, 4000) + "\n...(truncated)" : combined;
+  return combined.length > 4000 ? `${combined.slice(0, 4000)}\n...(truncated)` : combined;
 }
