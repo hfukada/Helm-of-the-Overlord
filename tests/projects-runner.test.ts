@@ -1,7 +1,17 @@
-import { describe, test, expect, beforeAll, beforeEach, afterAll } from "bun:test";
+import { describe, test, expect, beforeAll, beforeEach, afterAll, mock } from "bun:test";
 import { getDb } from "../src/knowledge/db";
 
 process.env.HOTO_WORKSPACE = "/tmp/hoto-test-projects-runner";
+
+// Stub the revisor: return null (= no revision applied) so tests focus on the
+// runner's own milestone advancement logic. The revisor is exercised
+// separately in tests/project-revisor.test.ts. We preserve real exports for
+// other tests that load this module concurrently.
+const realRevisor = await import("../src/projects/revisor");
+mock.module("../src/projects/revisor", () => ({
+  ...realRevisor,
+  reviseRemainingMilestones: async () => null,
+}));
 
 // Intercept fetch before runner is imported so advanceProject does not need a live daemon
 const originalFetch = globalThis.fetch;

@@ -3,8 +3,9 @@ import { ulid } from "ulid";
 import { getDb } from "../knowledge/db";
 import { config } from "../shared/config";
 import { logger } from "../shared/logger";
-import { ensureProjectDir } from "../workspace/manager";
+import { ensureProjectDir, projectDir } from "../workspace/manager";
 import { planProject } from "./planner";
+import { reviseRemainingMilestones } from "./revisor";
 import type { Project, ProjectMilestone } from "../shared/types";
 
 function getProject(id: string): Project | null {
@@ -170,6 +171,7 @@ export async function onTaskCompleted(taskId: string): Promise<void> {
       project.carry_over_notes = null;
     }
 
+    const completedIndex = project.current_milestone;
     milestone.completed = true;
     project.current_milestone += 1;
 
@@ -192,10 +194,59 @@ export async function onTaskCompleted(taskId: string): Promise<void> {
       } catch {
         // Notification is best-effort
       }
-    } else {
-      saveProject(project);
-      await advanceProject(project.id);
+      return;
     }
+
+    // Revision step: between milestones, ask an agent whether the remaining
+    // plan still makes sense given feedback from the completed task. Failures
+    // here must not block project advancement.
+    project.status = "revising";
+    saveProject(project);
+    try {
+      const mcpConfigPath = join(projectDir(project.id), "mcp-config.json");
+      const revision = await reviseRemainingMilestones(project, taskId, completedIndex, mcpConfigPath);
+      if (revision && revision.changed) {
+        const completedMilestones = project.milestones.slice(0, completedIndex + 1);
+        project.milestones = [...completedMilestones, ...revision.remainingMilestones];
+        const note = `Revisor adjusted ${revision.remainingMilestones.length} remaining milestone(s). Reason: ${revision.rationale}`;
+        project.carry_over_notes = project.carry_over_notes
+          ? `${project.carry_over_notes}\n\n${note}`
+          : note;
+        logger.info("Project plan revised", {
+          projectId: project.id,
+          completedIndex,
+          newRemaining: revision.remainingMilestones.length,
+          rationale: revision.rationale,
+        });
+      } else if (revision) {
+        logger.info("Project plan unchanged after revision", {
+          projectId: project.id,
+          completedIndex,
+          rationale: revision.rationale,
+        });
+      }
+    } catch (err) {
+      logger.warn("Revision step threw; continuing without changes", {
+        projectId: project.id,
+        completedIndex,
+        error: String(err),
+      });
+    }
+
+    // Re-read the project in case the user cancelled or otherwise mutated it
+    // while the revisor was running.
+    const refreshed = getProject(project.id);
+    if (!refreshed || refreshed.status === "cancelled" || refreshed.status === "failed") {
+      logger.info("Project no longer in_progress after revision; not advancing", {
+        projectId: project.id,
+        status: refreshed?.status,
+      });
+      return;
+    }
+
+    project.status = "in_progress";
+    saveProject(project);
+    await advanceProject(project.id);
     return;
   }
 }
