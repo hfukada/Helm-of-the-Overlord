@@ -4,8 +4,6 @@ import { join } from "node:path";
 import { loadDotenv } from "./shared/dotenv";
 import { expandHome } from "./shared/config";
 
-export {};
-
 const args = process.argv.slice(2);
 
 const workspaceBase = expandHome(

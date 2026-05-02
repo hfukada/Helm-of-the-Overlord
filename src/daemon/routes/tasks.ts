@@ -2,8 +2,9 @@ import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
 import { runTask, cleanupTask, restartTaskPhase } from "../../orchestrator/task-runner";
+import { createInitialState } from "../../orchestrator/blueprint";
 import { NotFoundError } from "../../orchestrator/errors";
-import { getDiff, getDiffSummary } from "../../workspace/git";
+import { getDiff, getDiffSummary, createTaskClone } from "../../workspace/git";
 import { worktreeDir } from "../../workspace/manager";
 import { logger } from "../../shared/logger";
 import { getMessagingManager } from "../../messaging/manager";
@@ -298,6 +299,17 @@ tasks.post("/:id/cancel", async (c) => {
   return c.json({ id, status: "cancelled" });
 });
 
+tasks.post("/:id/restart", async (c) => {
+  const taskId = c.req.param("id");
+  try {
+    await restartTask(taskId);
+    return c.body(null, 204);
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    throw err;
+  }
+});
+
 tasks.post("/:id/restart-phase", async (c) => {
   const taskId = c.req.param("id");
   const { phase } = await c.req.json();
@@ -311,6 +323,23 @@ tasks.post("/:id/restart-phase", async (c) => {
     throw err;
   }
 });
+
+function teardownTaskData(taskId: string): void {
+  const db = getDb();
+  const agentRunIds = db
+    .query("SELECT id FROM agent_runs WHERE task_id = ?")
+    .all(taskId) as Array<{ id: string }>;
+  for (const run of agentRunIds) {
+    db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
+  }
+  db.run("DELETE FROM agent_runs WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM diff_comments WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_input_requests WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_messages WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_repos WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_prs WHERE task_id = ?", [taskId]);
+  db.run("DELETE FROM task_ci_lint_runs WHERE task_id = ?", [taskId]);
+}
 
 /**
  * Delete a task and all related data. Kicks members from the channel,
@@ -338,24 +367,65 @@ async function deleteTask(taskId: string): Promise<void> {
   }
 
   // Delete related rows in dependency order
-  const agentRunIds = db
-    .query("SELECT id FROM agent_runs WHERE task_id = ?")
-    .all(taskId) as Array<{ id: string }>;
-
-  for (const run of agentRunIds) {
-    db.run("DELETE FROM agent_stream WHERE agent_run_id = ?", [run.id]);
-  }
-  db.run("DELETE FROM agent_runs WHERE task_id = ?", [taskId]);
-  db.run("DELETE FROM diff_comments WHERE task_id = ?", [taskId]);
-  db.run("DELETE FROM task_input_requests WHERE task_id = ?", [taskId]);
-  db.run("DELETE FROM task_messages WHERE task_id = ?", [taskId]);
-  db.run("DELETE FROM task_repos WHERE task_id = ?", [taskId]);
-  db.run("DELETE FROM task_prs WHERE task_id = ?", [taskId]);
+  teardownTaskData(taskId);
   db.run("DELETE FROM messaging_channels WHERE task_id = ?", [taskId]);
-  db.run("DELETE FROM task_ci_lint_runs WHERE task_id = ?", [taskId]);
   db.run("DELETE FROM tasks WHERE id = ?", [taskId]);
 
   logger.info("Task deleted", { taskId });
+}
+
+async function restartTask(taskId: string): Promise<void> {
+  const db = getDb();
+
+  // 1. Load task — throw if missing
+  const task = db
+    .query("SELECT id, branch_name FROM tasks WHERE id = ?")
+    .get(taskId) as { id: string; branch_name: string } | null;
+  if (!task) throw new NotFoundError(`Task ${taskId} not found`);
+
+  // 2. Read repo info BEFORE teardown (teardownTaskData deletes task_repos)
+  const repoRow = db
+    .query(
+      `SELECT r.path AS repoPath, r.name AS repoName
+       FROM repos r
+       JOIN task_repos tr ON r.id = tr.repo_id
+       WHERE tr.task_id = ? AND tr.role = 'target'
+       LIMIT 1`
+    )
+    .get(taskId) as { repoPath: string; repoName: string } | null;
+
+  // 3. Stop container + remove on-disk clone (safe on already-stopped tasks)
+  await cleanupTask(taskId).catch((err) => {
+    logger.warn("Cleanup failed before restart", { taskId, error: String(err) });
+  });
+
+  // 4. Delete all related rows, keep tasks + messaging_channels rows
+  teardownTaskData(taskId);
+
+  // 5. Reactivate the messaging channel (Discord: creates new channel + updates DB)
+  const manager = getMessagingManager();
+  if (manager) {
+    await manager.reactivateTaskChannel(taskId).catch((err: unknown) => {
+      logger.warn("Failed to reactivate task channel", { taskId, error: String(err) });
+    });
+  }
+
+  // 6. Re-clone only if we found a repo row (tasks without a repo skip this)
+  if (repoRow) {
+    await createTaskClone(repoRow.repoPath, taskId, repoRow.repoName, task.branch_name);
+  }
+
+  // 7. Reset task state
+  db.run(
+    `UPDATE tasks
+     SET status = 'running',
+         blueprint_state = ?
+     WHERE id = ?`,
+    [JSON.stringify(createInitialState()), taskId]
+  );
+
+  // 8. Fire-and-forget re-execution
+  runTask(taskId);
 }
 
 tasks.delete("/done", async (c) => {

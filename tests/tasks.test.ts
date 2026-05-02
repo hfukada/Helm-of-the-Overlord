@@ -12,6 +12,7 @@ mock.module("../src/orchestrator/task-runner", () => ({
 mock.module("../src/workspace/git", () => ({
   getDiff: async () => null,
   getDiffSummary: async () => null,
+  createTaskClone: async () => "/tmp/worktree",
 }));
 
 mock.module("../src/workspace/manager", () => ({
@@ -111,5 +112,45 @@ describe("GET /tasks", () => {
     const taskB = body.find((t) => t.id === "tb");
     expect(taskA?.total_tokens).toBe(100);
     expect(taskB?.total_tokens).toBe(0);
+  });
+});
+
+describe("POST /tasks/:id/restart", () => {
+  test("returns 404 for unknown task ID", async () => {
+    const res = await app.request("/tasks/NOTEXIST/restart", { method: "POST" });
+    expect(res.status).toBe(404);
+  });
+
+  test("returns 204 for valid task ID", async () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO tasks (id, title, description, status) VALUES ('restart1', 'Restart task', 'desc', 'implementing')"
+    );
+    const res = await app.request("/tasks/restart1/restart", { method: "POST" });
+    expect(res.status).toBe(204);
+  });
+
+  test("clears agent_runs after restart", async () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO tasks (id, title, description, status) VALUES ('restart2', 'Restart task 2', 'desc', 'review')"
+    );
+    db.run(
+      `INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model)
+       VALUES ('run1', 'restart2', 'plan', 'agentic', 'completed', 'p', 'claude-3')`
+    );
+    await app.request("/tasks/restart2/restart", { method: "POST" });
+    const runs = db.query("SELECT id FROM agent_runs WHERE task_id = ?").all("restart2");
+    expect(runs).toHaveLength(0);
+  });
+
+  test("resets task status to running after restart", async () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO tasks (id, title, description, status) VALUES ('restart3', 'Restart task 3', 'desc', 'committed')"
+    );
+    await app.request("/tasks/restart3/restart", { method: "POST" });
+    const task = db.query("SELECT status FROM tasks WHERE id = ?").get("restart3") as { status: string };
+    expect(task.status).toBe("running");
   });
 });

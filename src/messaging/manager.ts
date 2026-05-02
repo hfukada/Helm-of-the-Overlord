@@ -56,7 +56,7 @@ const COMMAND_HELP: Record<string, string> = {
     "!repo clear-context <name>",
     "Add, remove, or annotate a repo.",
     "  add: Clone a git repo and register it. Auto-detects language, framework, and commands.",
-    "       The URL may contain $ENV_VAR or ${ENV_VAR} tokens -- the daemon expands them server-side.",
+    `       The URL may contain $ENV_VAR or \${ENV_VAR} tokens -- the daemon expands them server-side.`,
     "  remove: Hard-delete a repo and its embeddings (blocked if active tasks).",
     "  set-context: Set extra context text appended to the knowledge context in prompts.",
     "  clear-context: Remove the extra context from a repo.",
@@ -108,6 +108,15 @@ const COMMAND_HELP: Record<string, string> = {
     "Request changes to the implementation. Only works in task channels.",
     "The agent will revise based on your feedback, then re-push for review.",
     "Example: !revise Use a map instead of an array for O(1) lookups",
+  ].join("\n"),
+  restart: [
+    "!restart [id]",
+    "Restart a task from scratch. Throws away all prior work, re-pulls a clean state from the remote, and re-runs the task.",
+    "In the main channel: !restart <id>  (use the first few characters of the ID)",
+    "In a task channel:   !restart       (no argument needed)",
+    "Examples:",
+    "  !restart 01JA3B",
+    "  !restart  (from inside the task's channel)",
   ].join("\n"),
   "delete-task": [
     "!delete-task [id]",
@@ -242,6 +251,9 @@ export class MessagingManager {
         break;
       case "cancel":
         await this.cmdCancel(cmd);
+        break;
+      case "restart":
+        await this.cmdRestart(cmd);
         break;
       case "resume":
         await this.cmdResume(cmd);
@@ -630,6 +642,32 @@ export class MessagingManager {
         await p.archiveChannel(channelRow.channel_id);
       } catch (err) {
         logger.warn("Failed to archive task channel", { taskId, error: String(err) });
+      }
+    }
+  }
+
+  async reactivateTaskChannel(taskId: string): Promise<void> {
+    const db = getDb();
+    const task = db
+      .query("SELECT short_id, title FROM tasks WHERE id = ?")
+      .get(taskId) as { short_id: string; title: string } | null;
+    const row = db
+      .query("SELECT channel_id FROM messaging_channels WHERE task_id = ?")
+      .get(taskId) as { channel_id: string } | null;
+    if (!row || !task) return;
+
+    for (const [, provider] of this.providers) {
+      const newChannelId = await provider.reactivateChannel(
+        row.channel_id,
+        task.short_id,
+        task.title
+      );
+
+      if (newChannelId !== row.channel_id) {
+        db.run(
+          "UPDATE messaging_channels SET channel_id = ? WHERE task_id = ?",
+          [newChannelId, taskId]
+        );
       }
     }
   }
@@ -1081,6 +1119,26 @@ export class MessagingManager {
     } else {
       const body = await res.text();
       await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to cancel: ${body}`);
+    }
+  }
+
+  private async cmdRestart(cmd: CommandEvent): Promise<void> {
+    const db = getDb();
+    const channelRow = db.query(
+      "SELECT task_id FROM messaging_channels WHERE channel_id = ?"
+    ).get(cmd.channelId) as { task_id: string } | null;
+    const rawId = cmd.args[0] ?? channelRow?.task_id;
+    if (!rawId) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, "Usage: !restart [task-id]");
+      return;
+    }
+
+    const res = await fetch(`http://127.0.0.1:${config.daemonPort}/tasks/${rawId}/restart`, { method: "POST" });
+    if (res.ok) {
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Task ${rawId} restarting.`);
+    } else {
+      const body = await res.text();
+      await this.getSenderProvider(cmd)?.sendMessage(cmd.channelId, `Failed to restart: ${body}`);
     }
   }
 
@@ -1690,6 +1748,7 @@ export class MessagingManager {
       "  !list                          List recent tasks (last 20)",
       "  !status [id]                   Show task details",
       "  !cancel [id]                   Cancel a running task",
+      "  !restart [id]                  Restart a task from scratch",
       "  !delete-task <id>              Delete a task and all data",
       "  !clean-done                    Delete all finished tasks",
       "  !purge <status>                Delete all tasks with a given status",

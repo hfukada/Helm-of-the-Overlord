@@ -205,7 +205,7 @@ export async function onTaskCompleted(taskId: string): Promise<void> {
     try {
       const mcpConfigPath = join(projectDir(project.id), "mcp-config.json");
       const revision = await reviseRemainingMilestones(project, taskId, completedIndex, mcpConfigPath);
-      if (revision && revision.changed) {
+      if (revision?.changed) {
         const completedMilestones = project.milestones.slice(0, completedIndex + 1);
         project.milestones = [...completedMilestones, ...revision.remainingMilestones];
         const note = `Revisor adjusted ${revision.remainingMilestones.length} remaining milestone(s). Reason: ${revision.rationale}`;

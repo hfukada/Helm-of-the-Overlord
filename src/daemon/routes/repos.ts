@@ -84,12 +84,12 @@ repos.post("/", async (c) => {
       const sshKeyPath = body.ssh_key_path ? expandEnvVars(body.ssh_key_path) : null;
       const useSshKey = isSshUrl(expandedUrl) && sshKeyPath !== null;
       if (useSshKey) {
-        const keyExists = await Bun.file(sshKeyPath!).exists();
+        const keyExists = await Bun.file(sshKeyPath as string).exists();
         if (!keyExists) {
           return c.json({ error: `SSH key not found: ${sshKeyPath}` }, 400);
         }
       }
-      logger.info("Cloning repo", { url: body.url, dest: repoPath, sshKey: useSshKey ? basename(sshKeyPath!) : false });
+      logger.info("Cloning repo", { url: body.url, dest: repoPath, sshKey: useSshKey ? basename(sshKeyPath as string) : false });
       const result = useSshKey
         ? await $`git clone ${cloneUrl} ${repoPath}`.env({
             ...process.env,

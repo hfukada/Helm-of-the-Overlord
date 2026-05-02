@@ -367,7 +367,7 @@ export function runMigrations(db: Database): void {
       ALTER TABLE task_repos_new RENAME TO task_repos;
     `);
     logger.info("Migrated task_repos PRIMARY KEY to (task_id, repo_id, role)");
-  } catch (e) {
+  } catch (_e) {
     // Already migrated or table does not exist yet
   }
 
