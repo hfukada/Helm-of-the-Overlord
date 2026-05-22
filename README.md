@@ -53,6 +53,18 @@ bun install
 bun link   # makes `hoto` available globally
 ```
 
+### Mac (Apple Silicon / Intel)
+
+On macOS, Docker runs inside a Linux VM that cannot reach the Metal GPU. Running Ollama in that VM is CPU-only and slow. So on Mac, hoto and ollama run **natively** on the host, and only the stateful infra (gitea, synapse, chromadb) runs in Docker.
+
+One-shot setup:
+
+```sh
+./scripts/mac-bootstrap.sh
+```
+
+This verifies ollama is installed and reachable, pulls the required models, and starts the Docker infra via `docker-compose.mac.yml`. After it finishes, export the env vars it prints and run `bun run src/index.ts daemon start`.
+
 ## Quick start
 
 ```sh
@@ -555,12 +567,12 @@ Set the following environment variables before starting the daemon:
 
 ```
 HOTO_PROVIDER=ollama
-OLLAMA_URL=https://api.minimax.chat/v1
+OLLAMA_HOST=https://api.minimax.chat/v1
 MINIMAX_API_KEY=<your-api-key>
 MINIMAX_GROUP_ID=<your-group-id>
 ```
 
-When `HOTO_PROVIDER=ollama` and `OLLAMA_URL` points to the MiniMax base URL, the OllamaAgent sends requests to MiniMax's OpenAI-compatible endpoint. Set the model name via the task or agent configuration to a supported MiniMax model (e.g. `MiniMax-Text-01`).
+When `HOTO_PROVIDER=ollama` and `OLLAMA_HOST` points to the MiniMax base URL, the OllamaAgent sends requests to MiniMax's OpenAI-compatible endpoint. Set the model name via the task or agent configuration to a supported MiniMax model (e.g. `MiniMax-Text-01`).
 
 ### Docker
 
@@ -571,7 +583,7 @@ services:
   hoto:
     environment:
       HOTO_PROVIDER: ollama
-      OLLAMA_URL: https://api.minimax.chat/v1
+      OLLAMA_HOST: https://api.minimax.chat/v1
       MINIMAX_API_KEY: <your-api-key>
       MINIMAX_GROUP_ID: <your-group-id>
 ```

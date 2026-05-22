@@ -91,7 +91,7 @@ Multi-repo, multi-agent one-shot task manager. Built with Bun + Hono + SQLite.
 | `MATRIX_HOMESERVER` | _(optional)_ | Matrix homeserver URL for chat bot integration |
 | `MATRIX_TOKEN` | _(optional)_ | Matrix access token |
 | `DISCORD_TOKEN` | _(optional)_ | Discord bot token |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama API base URL (used by OllamaAgent) |
+| `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama API base URL (used by OllamaAgent and embeddings) |
 | `MINIMAX_API_KEY` | _(none)_ | MiniMax API key (required when `HOTO_PROVIDER=minimax`) |
 | `MINIMAX_GROUP_ID` | _(none)_ | MiniMax Group ID (required when `HOTO_PROVIDER=minimax`) |
 | `MINIMAX_BASE_URL` | `https://api.minimax.chat/v1` | MiniMax API base URL |
@@ -213,29 +213,31 @@ Environment overrides in docker-compose use Docker service names (e.g. `gitea:37
 
 On macOS, Docker runs inside a Linux VM which adds virtualization overhead for compute-heavy workloads. To avoid this, run hoto, ollama, and hoto-ui natively on the host and use Docker only for the stateful infrastructure services.
 
-Start only the infrastructure services:
+One-shot setup -- pulls Ollama models and brings up the Docker infra:
 
 ```sh
-docker compose -f docker-compose.mac.yml up -d
+./scripts/mac-bootstrap.sh
 ```
 
-This starts gitea, synapse, and chromadb. The mac compose file uses `extends:` to inherit service definitions from `docker-compose.yml`, so image versions, port mappings, and configuration stay in sync automatically when the main file is updated.
-
-Run the remaining components natively:
+Or step through manually:
 
 ```sh
-# Hoto daemon
+# 1. Infrastructure in Docker (gitea, synapse, chromadb)
+docker compose -f docker-compose.mac.yml up -d
+
+# 2. Ollama natively (use the Ollama.app or `ollama serve`), then pull models
+ollama pull llama3.2:3b
+ollama pull nomic-embed-text
+
+# 3. Hoto daemon natively
 GITEA_URL=http://localhost:3777 \
 CHROMA_URL=http://localhost:8033 \
 MATRIX_HOMESERVER_URL=http://localhost:8098 \
-OLLAMA_URL=http://localhost:11434 \
+OLLAMA_HOST=http://localhost:11434 \
 bun run src/index.ts daemon start
-
-# Ollama -- use the native Mac app or:
-ollama serve
-
-# hoto-ui -- see that repo for its start command
 ```
+
+`docker-compose.mac.yml` uses `extends:` to inherit service definitions from `docker-compose.yml`, so image versions, port mappings, and configuration stay in sync automatically when the main file is updated.
 
 Key env vars when running locally against the containerized services:
 
@@ -244,7 +246,7 @@ Key env vars when running locally against the containerized services:
 | `GITEA_URL` | `http://localhost:3777` |
 | `CHROMA_URL` | `http://localhost:8033` |
 | `MATRIX_HOMESERVER_URL` | `http://localhost:8098` |
-| `OLLAMA_URL` | `http://localhost:11434` |
+| `OLLAMA_HOST` | `http://localhost:11434` |
 
 ## Container Secrets
 

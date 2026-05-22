@@ -1,3 +1,20 @@
+# Mac (Apple Silicon) infra-only overlay.
+#
+# On macOS, Docker runs inside a Linux VM. Two consequences:
+#   1. The VM has no access to Apple's Metal GPU, so Ollama inside Docker is
+#      CPU-only -- often 10-20x slower than native.
+#   2. Running hoto inside the VM means every sandbox/CI container spawn
+#      crosses the host<->VM boundary, adding latency to a hot path.
+#
+# So on Mac, only the stateful infrastructure runs in Docker. hoto and ollama
+# run natively on the host. See scripts/mac-bootstrap.sh for one-shot setup.
+#
+# Usage:
+#   docker compose -f docker-compose.mac.yml up -d
+#
+# Service definitions are inherited from docker-compose.yml via `extends:` so
+# image versions and port mappings stay in sync with the Linux base file.
+
 services:
   chromadb:
     extends:
