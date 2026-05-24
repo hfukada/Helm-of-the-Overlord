@@ -30,7 +30,7 @@ function seed() {
   // tasks first — agent_runs has REFERENCES tasks(id)
   db.run("INSERT INTO tasks (id, title, description, status) VALUES ('t1', 'Task 1', 'desc', 'implementing')");
   db.run("INSERT INTO tasks (id, title, description, status) VALUES ('t2', 'Task 2', 'desc', 'pending')");
-  db.run("INSERT INTO tasks (id, title, description, status) VALUES ('t3', 'Task 3', 'desc', 'committed')");
+  db.run("INSERT INTO tasks (id, title, description, status, created_at, updated_at) VALUES ('t3', 'Task 3', 'desc', 'committed', '2024-01-01T00:00:00.000Z', '2024-01-01T00:05:00.000Z')");
   // agent_runs — 2 done, 1 error
   db.run(
     "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('r1', 't1', 'implement', 'claude', 'done', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:02.000Z')"
@@ -66,6 +66,9 @@ describe("GET /metrics", () => {
     expect(body).toContain("hoto_agent_runs");
     expect(body).toContain("hoto_tasks_active");
     expect(body).toContain("hoto_agent_run_duration_ms");
+    expect(body).toContain("hoto_tasks_total");
+    expect(body).toContain("hoto_task_duration_ms");
+    expect(body).toContain("hoto_task_agent_run_count");
   });
 
   test("numeric values match seeded data", async () => {
@@ -81,6 +84,10 @@ describe("GET /metrics", () => {
     expect(body).toContain('hoto_agent_runs{status="error"} 1');
     // t1 (implementing) + t2 (pending) = 2 active; t3 (committed) is terminal
     expect(body).toContain("hoto_tasks_active 2");
+    expect(body).toContain('hoto_tasks_total{status="implementing"} 1');
+    expect(body).toContain('hoto_tasks_total{status="pending"} 1');
+    expect(body).toContain('hoto_tasks_total{status="committed"} 1');
+    expect(body).toContain("hoto_task_agent_run_count 3");
   });
 
   test("returns zeros and no agent_run lines when tables are empty", async () => {
@@ -91,6 +98,9 @@ describe("GET /metrics", () => {
     expect(body).toContain("hoto_cost_usd_total 0");
     expect(body).toContain("hoto_tasks_active 0");
     expect(body).not.toContain('hoto_agent_runs{');
+    expect(body).not.toContain('hoto_tasks_total{');
+    expect(body).not.toContain('hoto_task_duration_ms_count{');
+    expect(body).toContain("hoto_task_agent_run_count 0");
   });
 
   test("histogram emits correct labels, count, and sum for seeded runs", async () => {
@@ -125,5 +135,28 @@ describe("GET /metrics", () => {
     const body = await res.text();
     // WHERE filter must exclude the in-progress row — no labelled histogram samples
     expect(body).not.toContain("hoto_agent_run_duration_ms_count{");
+  });
+
+  test("hoto_task_duration_ms histogram emits correct sum for completed task", async () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO tasks (id, title, description, status, created_at, updated_at) VALUES ('td', 'Duration Task', 'desc', 'committed', '2024-01-01T00:00:00.000Z', '2024-01-01T00:05:00.000Z')"
+    );
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    expect(body).toContain("hoto_task_duration_ms_count 1");
+    expect(body).toContain("hoto_task_duration_ms_sum 300000");
+  });
+
+  test("hoto_task_duration_ms ignores tasks without terminal status", async () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO tasks (id, title, description, status, created_at, updated_at) VALUES ('ti', 'In Progress Task', 'desc', 'implementing', '2024-01-01T00:00:00.000Z', '2024-01-01T00:05:00.000Z')"
+    );
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    expect(body).not.toContain("hoto_task_duration_ms_count{");
+    // HELP/TYPE lines are present but no labelled or counted samples
+    expect(body).not.toContain("hoto_task_duration_ms_count 1");
   });
 });
