@@ -78,6 +78,50 @@ new Gauge({
   },
 });
 
+new Gauge({
+  name: "hoto_tasks_total",
+  help: "Task count by status",
+  labelNames: ["status"] as const,
+  registers: [registry],
+  collect() {
+    this.reset();
+    const rows = getDb().query("SELECT status, COUNT(*) AS count FROM tasks GROUP BY status").all() as Array<{ status: string; count: number }>;
+    for (const r of rows) {
+      this.set({ status: r.status }, r.count);
+    }
+  },
+});
+
+new Histogram({
+  name: "hoto_task_duration_ms",
+  help: "Task duration in milliseconds (created_at to updated_at) for terminal-status tasks",
+  buckets: [1000, 5000, 15000, 30000, 60000, 120000, 300000, 600000, 1800000],
+  registers: [registry],
+  collect() {
+    this.reset();
+    const rows = getDb().query(
+      `SELECT CAST(ROUND((julianday(updated_at) - julianday(created_at)) * 86400000) AS INTEGER) AS duration_ms
+       FROM tasks
+       WHERE created_at IS NOT NULL
+         AND updated_at IS NOT NULL
+         AND status IN ('committed', 'cancelled', 'error')`
+    ).all() as Array<{ duration_ms: number }>;
+    for (const r of rows) {
+      this.observe(r.duration_ms);
+    }
+  },
+});
+
+new Gauge({
+  name: "hoto_task_agent_run_count",
+  help: "Total number of agent runs across all tasks",
+  registers: [registry],
+  collect() {
+    const row = getDb().query("SELECT COUNT(*) AS count FROM agent_runs").get() as { count: number };
+    this.set(row.count);
+  },
+});
+
 export const metrics = new Hono();
 
 metrics.get("/", async (c) =>
