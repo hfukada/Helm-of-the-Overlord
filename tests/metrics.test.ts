@@ -1,11 +1,14 @@
 import { describe, test, expect, beforeAll, beforeEach } from "bun:test";
 import { Hono } from "hono";
+import { Registry } from "prom-client";
 
 process.env.HOTO_WORKSPACE = "/tmp/hoto-test-metrics";
 
 import { getDb } from "../src/knowledge/db";
+import { initTokenCounters } from "../src/shared/token-counters";
 
 let app: Hono;
+let freshRegistry: Registry;
 
 beforeAll(async () => {
   const { mkdirSync } = await import("node:fs");
@@ -16,13 +19,15 @@ beforeAll(async () => {
   app.route("/metrics", metrics);
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   const db = getDb();
   db.exec("PRAGMA foreign_keys = OFF");
   db.run("DELETE FROM agent_runs");
   db.run("DELETE FROM tasks");
   db.run("DELETE FROM token_usage_daily");
   db.exec("PRAGMA foreign_keys = ON");
+  freshRegistry = new Registry();
+  await initTokenCounters(db, freshRegistry);
 });
 
 function seed() {
@@ -58,11 +63,14 @@ describe("GET /metrics", () => {
   });
 
   test("body contains all expected metric names", async () => {
+    seed();
+    freshRegistry = new Registry();
+    await initTokenCounters(getDb(), freshRegistry);
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
-    expect(body).toContain("hoto_tokens_input_total");
-    expect(body).toContain("hoto_tokens_output_total");
-    expect(body).toContain("hoto_cost_usd_total");
+    expect(body).toContain('hoto_tokens_input_total{model="');
+    expect(body).toContain('hoto_tokens_output_total{model="');
+    expect(body).toContain('hoto_cost_usd_total{model="');
     expect(body).toContain("hoto_agent_runs");
     expect(body).toContain("hoto_tasks_active");
     expect(body).toContain("hoto_agent_run_duration_ms");
@@ -73,12 +81,14 @@ describe("GET /metrics", () => {
 
   test("numeric values match seeded data", async () => {
     seed();
+    freshRegistry = new Registry();
+    await initTokenCounters(getDb(), freshRegistry);
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
     // 1000+2000=3000, 500+1000=1500, 1.5+2.5=4
-    expect(body).toContain("hoto_tokens_input_total 3000");
-    expect(body).toContain("hoto_tokens_output_total 1500");
-    expect(body).toContain("hoto_cost_usd_total 4");
+    expect(body).toContain('hoto_tokens_input_total{model="claude-3"} 3000');
+    expect(body).toContain('hoto_tokens_output_total{model="claude-3"} 1500');
+    expect(body).toContain('hoto_cost_usd_total{model="claude-3"} 4');
     // r1+r3 = done×2, r2 = error×1
     expect(body).toContain('hoto_agent_runs{status="done"} 2');
     expect(body).toContain('hoto_agent_runs{status="error"} 1');
@@ -93,9 +103,9 @@ describe("GET /metrics", () => {
   test("returns zeros and no agent_run lines when tables are empty", async () => {
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
-    expect(body).toContain("hoto_tokens_input_total 0");
-    expect(body).toContain("hoto_tokens_output_total 0");
-    expect(body).toContain("hoto_cost_usd_total 0");
+    expect(body).not.toContain("hoto_tokens_input_total{");
+    expect(body).not.toContain("hoto_tokens_output_total{");
+    expect(body).not.toContain("hoto_cost_usd_total{");
     expect(body).toContain("hoto_tasks_active 0");
     expect(body).not.toContain('hoto_agent_runs{');
     expect(body).not.toContain('hoto_tasks_total{');
@@ -116,10 +126,8 @@ describe("GET /metrics", () => {
   });
 
   test("histogram has no labelled samples when agent_runs table is empty", async () => {
-    // beforeEach already wiped the table
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
-    // HELP/TYPE lines are always present even with no observations
     expect(body).toContain("hoto_agent_run_duration_ms");
     expect(body).not.toContain("hoto_agent_run_duration_ms_count{");
   });
@@ -127,13 +135,11 @@ describe("GET /metrics", () => {
   test("histogram ignores rows with NULL finished_at", async () => {
     const db = getDb();
     db.run("INSERT INTO tasks (id, title, description, status) VALUES ('tn', 'Null Task', 'desc', 'implementing')");
-    // started_at present but finished_at NULL
     db.run(
       "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('rn1', 'tn', 'implement', 'claude', 'running', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', NULL)"
     );
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
-    // WHERE filter must exclude the in-progress row — no labelled histogram samples
     expect(body).not.toContain("hoto_agent_run_duration_ms_count{");
   });
 
@@ -156,7 +162,18 @@ describe("GET /metrics", () => {
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
     expect(body).not.toContain("hoto_task_duration_ms_count{");
-    // HELP/TYPE lines are present but no labelled or counted samples
     expect(body).not.toContain("hoto_task_duration_ms_count 1");
+  });
+
+  test("two models produce two labelled lines", async () => {
+    const db = getDb();
+    db.run("INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd) VALUES ('2024-01-01', 'claude-3', 1000, 500, 0.01)");
+    db.run("INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd) VALUES ('2024-01-01', 'claude-opus-4', 2000, 1000, 0.04)");
+    freshRegistry = new Registry();
+    await initTokenCounters(db, freshRegistry);
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    expect(body).toContain('hoto_tokens_input_total{model="claude-3"} 1000');
+    expect(body).toContain('hoto_tokens_input_total{model="claude-opus-4"} 2000');
   });
 });

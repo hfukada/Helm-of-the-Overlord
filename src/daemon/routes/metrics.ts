@@ -1,38 +1,9 @@
 import { Hono } from "hono";
 import { Registry, Gauge, Histogram } from "prom-client";
 import { getDb } from "../../knowledge/db";
+import { tokenRegistry } from "../../shared/token-counters";
 
 const registry = new Registry();
-
-new Gauge({
-  name: "hoto_tokens_input_total",
-  help: "Total input tokens consumed across all runs",
-  registers: [registry],
-  collect() {
-    const row = getDb().query("SELECT COALESCE(SUM(input_tokens),0) AS v FROM token_usage_daily").get() as { v: number };
-    this.set(row.v);
-  },
-});
-
-new Gauge({
-  name: "hoto_tokens_output_total",
-  help: "Total output tokens consumed across all runs",
-  registers: [registry],
-  collect() {
-    const row = getDb().query("SELECT COALESCE(SUM(output_tokens),0) AS v FROM token_usage_daily").get() as { v: number };
-    this.set(row.v);
-  },
-});
-
-new Gauge({
-  name: "hoto_cost_usd_total",
-  help: "Total cost in USD across all runs",
-  registers: [registry],
-  collect() {
-    const row = getDb().query("SELECT COALESCE(SUM(cost_usd),0) AS v FROM token_usage_daily").get() as { v: number };
-    this.set(row.v);
-  },
-});
 
 new Gauge({
   name: "hoto_agent_runs",
@@ -124,6 +95,7 @@ new Gauge({
 
 export const metrics = new Hono();
 
-metrics.get("/", async (c) =>
-  c.text(await registry.metrics(), 200, { "Content-Type": registry.contentType })
-);
+metrics.get("/", async (c) => {
+  const [main, tokens] = await Promise.all([registry.metrics(), tokenRegistry.metrics()]);
+  return c.text(main + tokens, 200, { "Content-Type": registry.contentType });
+});

@@ -13,6 +13,7 @@
 
 import { getDb } from "../knowledge/db";
 import { logger } from "../shared/logger";
+import { incrementTokenCounters } from "../shared/token-counters";
 import { config } from "../shared/config";
 import type {
   Agent,
@@ -134,6 +135,17 @@ export async function runAgent(
        cost_usd = cost_usd + excluded.cost_usd`,
     [today, model, result.totalUsage.input_tokens, result.totalUsage.output_tokens, result.totalUsage.cost_usd],
   );
+
+  try {
+    incrementTokenCounters(
+      model,
+      result.totalUsage.input_tokens,
+      result.totalUsage.output_tokens,
+      result.totalUsage.cost_usd ?? 0
+    );
+  } catch (err) {
+    logger.warn("incrementTokenCounters failed", { err });
+  }
 
   return result;
 }
