@@ -17,6 +17,7 @@ import { config } from "../shared/config";
 import { logger } from "../shared/logger";
 import { ensureWorkspace } from "../workspace/manager";
 import { getDb } from "../knowledge/db";
+import { initTokenCounters } from "../shared/token-counters";
 import { MessagingManager, setMessagingManager } from "../messaging/manager";
 import { initGiteaClient } from "../gitea/client";
 import { restartPollersForReviewTasks } from "../gitea/review-poller";
@@ -46,7 +47,8 @@ app.route("/metrics", metrics);
 
 export async function startDaemon(): Promise<void> {
   await ensureWorkspace();
-  getDb(); // Initialize DB + run migrations
+  const db = getDb(); // Initialize DB + run migrations
+  await initTokenCounters(db);
 
   const server = Bun.serve({
     port: config.daemonPort,
