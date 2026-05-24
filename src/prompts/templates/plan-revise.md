@@ -1,5 +1,11 @@
 Revision cycle. The previous implementation was reviewed and rejected. Plan changes to address the feedback.
 
+## Instructions
+- Address every point in the review feedback.
+- The previous changes are already applied in the working directory. Read files to see current state.
+- Keep parts of the previous plan that weren't flagged.
+- Same output format (Summary + Execution Plan).
+
 ## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
 > {{taskDescription}}
 {{#if knowledgeContext}}
@@ -37,9 +43,3 @@ Per-line comments (`[file:line]`) MUST each be addressed.
 ## Context
 {{chatContext}}
 {{/if}}
-
-## Instructions
-- Address every point in the review feedback.
-- The previous changes are already applied in the working directory. Read files to see current state.
-- Keep parts of the previous plan that weren't flagged.
-- Same output format (Summary + Execution Plan).
