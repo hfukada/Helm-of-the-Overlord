@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { Registry, Gauge } from "prom-client";
+import { Registry, Gauge, Histogram } from "prom-client";
 import { getDb } from "../../knowledge/db";
 
 const registry = new Registry();
@@ -44,6 +44,26 @@ new Gauge({
     const rows = getDb().query("SELECT status, COUNT(*) AS count FROM agent_runs GROUP BY status").all() as Array<{ status: string; count: number }>;
     for (const r of rows) {
       this.set({ status: r.status }, r.count);
+    }
+  },
+});
+
+new Histogram({
+  name: "hoto_agent_run_duration_ms",
+  help: "Agent run duration in milliseconds, labelled by node_name, model, and status",
+  labelNames: ["node_name", "model", "status"] as const,
+  buckets: [1000, 5000, 15000, 30000, 60000, 120000, 300000, 600000, 1800000],
+  registers: [registry],
+  collect() {
+    this.reset();
+    const rows = getDb().query(
+      `SELECT node_name, model, status,
+              CAST(ROUND((julianday(finished_at) - julianday(started_at)) * 86400000) AS INTEGER) AS duration_ms
+       FROM agent_runs
+       WHERE started_at IS NOT NULL AND finished_at IS NOT NULL`
+    ).all() as Array<{ node_name: string; model: string; status: string; duration_ms: number }>;
+    for (const r of rows) {
+      this.observe({ node_name: r.node_name, model: r.model, status: r.status }, r.duration_ms);
     }
   },
 });

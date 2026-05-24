@@ -33,13 +33,13 @@ function seed() {
   db.run("INSERT INTO tasks (id, title, description, status) VALUES ('t3', 'Task 3', 'desc', 'committed')");
   // agent_runs — 2 done, 1 error
   db.run(
-    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model) VALUES ('r1', 't1', 'implement', 'claude', 'done', 'p', 'claude-3')"
+    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('r1', 't1', 'implement', 'claude', 'done', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:02.000Z')"
   );
   db.run(
-    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model) VALUES ('r2', 't2', 'plan', 'claude', 'error', 'p', 'claude-3')"
+    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('r2', 't2', 'plan', 'claude', 'error', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', '2024-01-01T00:01:00.000Z')"
   );
   db.run(
-    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model) VALUES ('r3', 't3', 'review', 'claude', 'done', 'p', 'claude-3')"
+    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('r3', 't3', 'review', 'claude', 'done', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:20.000Z')"
   );
   // token_usage_daily — two rows across two dates
   db.run(
@@ -65,6 +65,7 @@ describe("GET /metrics", () => {
     expect(body).toContain("hoto_cost_usd_total");
     expect(body).toContain("hoto_agent_runs");
     expect(body).toContain("hoto_tasks_active");
+    expect(body).toContain("hoto_agent_run_duration_ms");
   });
 
   test("numeric values match seeded data", async () => {
@@ -90,5 +91,39 @@ describe("GET /metrics", () => {
     expect(body).toContain("hoto_cost_usd_total 0");
     expect(body).toContain("hoto_tasks_active 0");
     expect(body).not.toContain('hoto_agent_runs{');
+  });
+
+  test("histogram emits correct labels, count, and sum for seeded runs", async () => {
+    seed();
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    expect(body).toContain("hoto_agent_run_duration_ms_bucket");
+    expect(body).toContain('node_name="implement"');
+    expect(body).toContain('node_name="plan"');
+    // r1: implement/claude-3/done, 2000ms
+    expect(body).toContain('hoto_agent_run_duration_ms_count{node_name="implement",model="claude-3",status="done"} 1');
+    expect(body).toContain('hoto_agent_run_duration_ms_sum{node_name="implement",model="claude-3",status="done"} 2000');
+  });
+
+  test("histogram has no labelled samples when agent_runs table is empty", async () => {
+    // beforeEach already wiped the table
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    // HELP/TYPE lines are always present even with no observations
+    expect(body).toContain("hoto_agent_run_duration_ms");
+    expect(body).not.toContain("hoto_agent_run_duration_ms_count{");
+  });
+
+  test("histogram ignores rows with NULL finished_at", async () => {
+    const db = getDb();
+    db.run("INSERT INTO tasks (id, title, description, status) VALUES ('tn', 'Null Task', 'desc', 'implementing')");
+    // started_at present but finished_at NULL
+    db.run(
+      "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('rn1', 'tn', 'implement', 'claude', 'running', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', NULL)"
+    );
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    // WHERE filter must exclude the in-progress row — no labelled histogram samples
+    expect(body).not.toContain("hoto_agent_run_duration_ms_count{");
   });
 });
