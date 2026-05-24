@@ -1,18 +1,5 @@
 Implement the plan below. Follow each step exactly. Do not deviate or add unplanned work.
 
-## Repositories
-{{repoList}}
-
-## Task
-{{taskDescription}}
-
-## Plan
-{{plan}}
-{{#if knowledgeContext}}
-
-{{knowledgeContext}}
-{{/if}}
-
 ## Rules
 - Follow the Execution Plan step by step, in order.
 - Match each repo's existing code style.
@@ -29,6 +16,19 @@ Implement the plan below. Follow each step exactly. Do not deviate or add unplan
 - Use Edit with `replace_all: true` when replacing a pattern that appears multiple times in a file.
 - Read a file once, plan all changes, then apply them in as few tool calls as possible.
 - Batch related changes to the same file into a single Edit or Write call.
+
+## Repositories
+{{repoList}}
+{{#if knowledgeContext}}
+
+{{knowledgeContext}}
+{{/if}}
+
+## Task
+{{taskDescription}}
+
+## Plan
+{{plan}}
 {{#if chatContext}}
 
 ## Context

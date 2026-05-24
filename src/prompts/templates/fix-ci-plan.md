@@ -1,10 +1,5 @@
 CI/tests failed. Analyze the errors below and produce a detailed fix plan.
 
-## CI Output
-```
-{{ciOutput}}
-```
-
 ## Instructions
 1. Read the error output carefully. Identify every distinct failure (there may be multiple).
 2. For each failure, read the relevant source file(s) to understand the context.
@@ -28,3 +23,8 @@ What went wrong and why. Be specific about each failure.
 
 ### Fix Plan
 Numbered steps. Each step: exact file path, what to change (with line references or code snippets), and why.
+
+## CI Output
+```
+{{ciOutput}}
+```

@@ -1,14 +1,5 @@
 The previous implementation was reviewed and changes were requested. Your job is to classify the feedback as SMALL or LARGE to determine the appropriate response.
 
-## Task
-{{taskDescription}}
-
-## Plan That Was Implemented
-{{previousPlan}}
-
-## Review Feedback
-{{feedback}}
-
 ## Classification Criteria
 
 **SMALL** -- targeted fixes that do not change the overall approach:
@@ -47,3 +38,12 @@ VERDICT: LARGE
 ```
 
 Then list the specific changes requested and why they fall into that category.
+
+## Task
+{{taskDescription}}
+
+## Plan That Was Implemented
+{{previousPlan}}
+
+## Review Feedback
+{{feedback}}

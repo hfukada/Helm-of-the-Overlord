@@ -1,14 +1,5 @@
 Final pass. Address remaining scrutiny issues and add implementation detail so the plan can be followed mechanically.
 
-## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
-> {{taskDescription}}
-
-## Current Plan
-{{previousPlan}}
-
-## Final Scrutiny
-{{scrutinyResults}}
-
 ## Instructions
 - Fix any remaining issues from scrutiny.
 - For each step, include: the file, what changes, and function signatures/types where applicable.
@@ -48,3 +39,12 @@ The implementation agent has a LIMITED number of tool turns (~30 per repo). Stru
 - For bulk find-replace tasks, say "rewrite the file with these replacements" rather than listing each replacement individually.
 - Prefer "replace all occurrences of X with Y" over listing each line number.
 - If more than ~5 changes in a file, instruct the agent to Write the full file contents rather than making individual edits.
+
+## User-Specified Original Task (DO NOT DIRECTLY IMPLEMENT)
+> {{taskDescription}}
+
+## Current Plan
+{{previousPlan}}
+
+## Final Scrutiny
+{{scrutinyResults}}
