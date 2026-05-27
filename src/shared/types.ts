@@ -194,7 +194,7 @@ export interface ContainerSecret {
   created_at: string;
 }
 
-export type ProjectStatus = "active" | "planning" | "in_progress" | "revising" | "completed" | "failed" | "cancelled";
+export type ProjectStatus = "active" | "planning" | "in_progress" | "revising" | "awaiting_advance" | "completed" | "failed" | "cancelled";
 
 export interface ProjectMilestone {
   index: number;

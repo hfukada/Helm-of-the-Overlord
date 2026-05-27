@@ -93,6 +93,27 @@ projects.patch("/:id", async (c) => {
   return c.json(fixDates(parseProjectRow(row), "created_at", "updated_at"));
 });
 
+projects.post("/:id/advance", async (c) => {
+  const db = getDb();
+  const id = c.req.param("id");
+  const row = db.query("SELECT * FROM projects WHERE id = ?").get(id) as Record<string, unknown> | null;
+  if (!row) return c.json({ error: "Not found" }, 404);
+  const project = parseProjectRow(row);
+  if (project.status !== "awaiting_advance") return c.json({ error: "Project is not awaiting advance" }, 409);
+
+  db.run("UPDATE projects SET status = 'in_progress', updated_at = datetime('now') WHERE id = ?", [id]);
+
+  const { advanceProject } = await import("../../projects/runner");
+  try {
+    await advanceProject(id);
+  } catch (err) {
+    db.run("UPDATE projects SET status = 'awaiting_advance', updated_at = datetime('now') WHERE id = ?", [id]);
+    return c.json({ error: String(err) }, 500);
+  }
+
+  return c.json({ ok: true });
+});
+
 projects.delete("/:id", (c) => {
   const db = getDb();
   const id = c.req.param("id");

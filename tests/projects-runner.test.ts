@@ -114,7 +114,7 @@ describe("onTaskCompleted", () => {
     expect((project?.milestones as Array<Record<string, unknown>>)[0].completed).toBe(false);
   });
 
-  test("advances current_milestone and calls advanceProject when intermediate milestone completes", async () => {
+  test("advances current_milestone and sets status to awaiting_advance when intermediate milestone completes", async () => {
     const milestones = makeMillestones(2, "task-1");
     insertProject("proj-2", milestones, 0, "in_progress");
 
@@ -123,10 +123,8 @@ describe("onTaskCompleted", () => {
     const project = getProjectRow("proj-2");
     expect(project?.current_milestone).toBe(1);
     expect((project?.milestones as Array<Record<string, unknown>>)[0].completed).toBe(true);
-    expect(project?.status).toBe("in_progress");
-    // advanceProject should have fired a fetch to create the next task
-    expect(lastFetchUrl).toContain("/tasks");
-    expect(lastFetchBody?.description).toContain("Milestone 2");
+    expect(project?.status).toBe("awaiting_advance");
+    expect(lastFetchUrl).toBe("");
   });
 
   test("marks project as completed when last milestone finishes", async () => {
