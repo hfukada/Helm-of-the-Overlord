@@ -88,10 +88,9 @@ export async function createProject(
     if (!project) throw new Error(`Project ${id} not found after creation`);
     project.title = plan.title;
     project.milestones = milestones;
-    project.status = "in_progress";
+    project.status = "awaiting_advance";
     saveProject(project);
 
-    await advanceProject(id);
     return { id, title: plan.title };
   } catch (err) {
     logger.warn("Project planning failed", { projectId: id, error: String(err) });
@@ -244,9 +243,8 @@ export async function onTaskCompleted(taskId: string): Promise<void> {
       return;
     }
 
-    project.status = "in_progress";
+    project.status = "awaiting_advance";
     saveProject(project);
-    await advanceProject(project.id);
     return;
   }
 }
