@@ -735,32 +735,51 @@ export async function runTask(taskId: string): Promise<void> {
       logger.info("Created child task", { childId, parentTaskId: task.id, repo: repo.name });
     }
 
-    updateTaskStatus(task.id, "waiting_for_children", state);
-
-    // Launch all children in parallel
-    const results = await Promise.allSettled(
-      childIds.map((id) => runChildTask(id))
-    );
-
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      if (result.status === "rejected") {
-        logger.error("Child task runner crashed", { childId: childIds[i], error: String(result.reason) });
-        const now = new Date().toISOString();
-        db.run("UPDATE child_tasks SET status = 'error', updated_at = ? WHERE id = ?", [now, childIds[i]]);
-      }
-    }
-
-    // Check if all children are done
-    checkParentCompletion(task.id);
-
-    // Tear down sandbox if we started one for planning
+    // Tear down planning sandbox before pausing
     if (sandbox) {
       try { await teardownTaskContainer(task.id); } catch {}
     }
 
-    return; // Parent task is done orchestrating
+    // Pause: user must click "Start" to launch children
+    updateTaskStatus(task.id, "paused", state);
+    logger.info("Task paused before spawning children", { taskId: task.id });
+
+    return; // Parent task is done orchestrating; resumeTask will launch children
   }
+}
+
+export async function resumeTask(taskId: string): Promise<void> {
+  const db = getDb();
+  const row = db.query("SELECT status FROM tasks WHERE id = ?").get(taskId) as { status: string } | null;
+  if (!row) throw new NotFoundError(`Task ${taskId} not found`);
+  if (row.status !== "paused") throw new Error(`Task ${taskId} is not paused (status: ${row.status})`);
+
+  const childRows = db.query(
+    "SELECT id FROM child_tasks WHERE parent_task_id = ? AND status = 'pending'"
+  ).all(taskId) as Array<{ id: string }>;
+
+  const now = new Date().toISOString();
+  db.run("UPDATE tasks SET status = 'waiting_for_children', updated_at = ? WHERE id = ?", [now, taskId]);
+
+  if (childRows.length === 0) {
+    logger.warn("resumeTask: no pending children found, checking completion", { taskId });
+    import("./child-task-runner").then(({ checkParentCompletion }) => {
+      checkParentCompletion(taskId);
+    }).catch(() => {});
+    return;
+  }
+
+  import("./child-task-runner").then(async ({ runChildTask, checkParentCompletion }) => {
+    const results = await Promise.allSettled(childRows.map((r) => runChildTask(r.id)));
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+      if (r.status === "rejected") {
+        logger.error("Child task runner crashed on resume", { childId: childRows[i].id, error: String(r.reason) });
+        db.run("UPDATE child_tasks SET status = 'error', updated_at = datetime('now') WHERE id = ?", [childRows[i].id]);
+      }
+    }
+    checkParentCompletion(taskId);
+  }).catch((err) => logger.error("resumeTask: execution failed", { taskId, error: String(err) }));
 }
 
 export async function restartTaskPhase(taskId: string, phase: string): Promise<void> {
