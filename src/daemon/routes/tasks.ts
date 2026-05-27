@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { ulid } from "ulid";
 import { getDb } from "../../knowledge/db";
-import { runTask, cleanupTask, restartTaskPhase, resumeTask } from "../../orchestrator/task-runner";
+import { runTask, cleanupTask, restartTaskPhase } from "../../orchestrator/task-runner";
 import { createInitialState } from "../../orchestrator/blueprint";
 import { NotFoundError } from "../../orchestrator/errors";
 import { getDiff, getDiffSummary, createTaskClone } from "../../workspace/git";
@@ -319,19 +319,6 @@ tasks.post("/:id/restart-phase", async (c) => {
   } catch (err) {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
     if (err instanceof Error && err.message.startsWith("Unknown phase"))
-      return c.json({ error: err.message }, 400);
-    throw err;
-  }
-});
-
-tasks.post("/:id/resume-phase", async (c) => {
-  const taskId = c.req.param("id");
-  try {
-    await resumeTask(taskId);
-    return c.body(null, 204);
-  } catch (err) {
-    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
-    if (err instanceof Error && err.message.includes("is not paused"))
       return c.json({ error: err.message }, 400);
     throw err;
   }

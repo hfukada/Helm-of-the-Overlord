@@ -145,7 +145,7 @@ function parseRepoRow(row: Record<string, unknown>): Repo {
  * Run a child task: implement -> CI/lint -> commit/push/PR -> review.
  * Called in parallel for each repo in a multi-repo task.
  */
-export async function runChildTask(childId: string, resumeState?: BlueprintState): Promise<void> {
+export async function runChildTask(childId: string): Promise<void> {
   const db = getDb();
 
   const childRow = db.query("SELECT * FROM child_tasks WHERE id = ?").get(childId) as Record<string, unknown> | null;
@@ -238,69 +238,44 @@ export async function runChildTask(childId: string, resumeState?: BlueprintState
     "You are responsible for ONLY the changes in this repo. Other repos in this task have their own implementations running in parallel.",
   ].join("\n");
 
-  const completedNodes = new Set(
-    (resumeState?.history ?? [])
-      .filter((h) => h.exited_at !== null)
-      .map((h) => h.node)
-  );
-  let state = resumeState ?? createChildInitialState();
+  let state = createChildInitialState();
+
+  // === IMPLEMENT ===
+  updateChildStatus(childId, "implementing", state);
 
   const taskObj = { id: parentTaskId, title: parentRow.title, description: parentRow.description, repo_id: repo.id, status: "implementing" as const, blueprint_state: null, branch_name: branchName, source: "cli" as const, use_full_copy: false, created_at: "", updated_at: "", child_task_id: childId };
 
-  // === IMPLEMENT ===
-  if (!completedNodes.has("implement")) {
-    updateChildStatus(childId, "implementing", state);
-
-    let implResult: Awaited<ReturnType<typeof executeImplement>>;
-    try {
-      implResult = await executeImplement(
-        taskObj,
-        [repo],
-        workDir,
-        implementPrompt,
-        agent,
-        {
-          onEvent,
-          hasMcp,
-          effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
-        },
-      );
-    } finally {
-      doneForwarding();
-    }
-
-    if (implResult.error) {
-      if (isChildCancelled(childId)) return;
-      logger.error("Child task implementation failed", { childId, repo: repo.name, error: implResult.error });
-      notifyParent(parentTaskId, repo.name, `Implementation failed: ${implResult.error}`);
-      state = advanceState(state, "error");
-      updateChildStatus(childId, "error", state);
-      return;
-    }
-
-    if (isChildCancelled(childId)) return;
-
-    state = advanceState(state, "done"); // implement -> lint
-
-    // Tear down implement sandbox before pausing
-    if (sandbox) {
-      try { await teardownTaskContainer(childId); } catch {}
-    }
-
-    // Pause: user must click "Start" to begin CI/lint
-    db.run(
-      "UPDATE child_tasks SET status = 'paused', blueprint_state = ?, updated_at = datetime('now') WHERE id = ?",
-      [JSON.stringify(state), childId]
+  let implResult: Awaited<ReturnType<typeof executeImplement>>;
+  try {
+    implResult = await executeImplement(
+      taskObj,
+      [repo],
+      workDir,
+      implementPrompt,
+      agent,
+      {
+        onEvent,
+        hasMcp,
+        effectiveWorkDir: sandbox ? `${sandbox.workspaceBase}/${repo.name}` : workDir,
+      },
     );
-    notifyParent(parentTaskId, repo.name, "Implementation complete. Waiting for user to start CI/lint.");
-    logger.info("Child task paused after implement", { childId });
+  } finally {
+    doneForwarding();
+  }
+
+  if (implResult.error) {
+    if (isChildCancelled(childId)) return;
+    logger.error("Child task implementation failed", { childId, repo: repo.name, error: implResult.error });
+    notifyParent(parentTaskId, repo.name, `Implementation failed: ${implResult.error}`);
+    state = advanceState(state, "error");
+    updateChildStatus(childId, "error", state);
     return;
   }
 
   if (isChildCancelled(childId)) return;
 
   // === CI/LINT ===
-  // (resuming from post-implement pause; state.current_node = "lint")
+  state = advanceState(state, "done"); // implement -> lint
 
   let containerName: string | null = sandbox?.containerName ?? null;
   let containerWorkDir = sandbox ? `${sandbox.workspaceBase}/${repo.name}` : "/workspace";
@@ -389,9 +364,6 @@ export async function runChildTask(childId: string, resumeState?: BlueprintState
       }
     }
   }
-
-  // Flush any buffered agent output from CI/lint fix agents
-  doneForwarding();
 
   // Tear down container (not sandbox -- that lives for the child's lifetime)
   if (containerName && !sandbox) {
@@ -730,23 +702,6 @@ export async function restartChildTaskPhase(
   );
   runChildTask(childId).catch((err) =>
     logger.error("restartChildTaskPhase: runChildTask failed", { childId, err })
-  );
-}
-
-export async function resumeChildTask(taskId: string, childId: string): Promise<void> {
-  const db = getDb();
-  const row = db
-    .query("SELECT * FROM child_tasks WHERE id = ? AND parent_task_id = ?")
-    .get(childId, taskId) as Record<string, unknown> | null;
-  if (!row) throw new NotFoundError(`Child task ${childId} not found`);
-  if (row.status !== "paused") throw new Error(`Child task ${childId} is not paused (status: ${row.status})`);
-  const state: BlueprintState = JSON.parse(row.blueprint_state as string);
-  db.run(
-    "UPDATE child_tasks SET status = 'resuming', updated_at = datetime('now') WHERE id = ?",
-    [childId]
-  );
-  runChildTask(childId, state).catch((err) =>
-    logger.error("resumeChildTask: runChildTask failed", { childId, err })
   );
 }
 

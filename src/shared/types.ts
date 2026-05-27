@@ -20,8 +20,7 @@ export type TaskStatus =
   | "error"
   | "failed"
   | "cancelled"
-  | "resuming"
-  | "paused";
+  | "resuming";
 
 export type ChildTaskStatus =
   | "pending"
@@ -34,8 +33,7 @@ export type ChildTaskStatus =
   | "review"
   | "committed"
   | "error"
-  | "cancelled"
-  | "paused";
+  | "cancelled";
 
 export type TaskSource = "cli" | "web" | "messaging";
 
