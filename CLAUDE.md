@@ -209,6 +209,19 @@ The hoto container needs:
 
 Environment overrides in docker-compose use Docker service names (e.g. `gitea:3777`, `chromadb:8000`, `ollama:11434`).
 
+### Observability (Prometheus + Grafana)
+
+Spin up Prometheus and Grafana alongside the existing stack:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+```
+
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (default credentials: admin / admin)
+
+Grafana is pre-provisioned with a Prometheus datasource. Dashboard data is persisted in the `grafana-data` named volume.
+
 ## Mac Deployment
 
 On macOS, Docker runs inside a Linux VM which adds virtualization overhead for compute-heavy workloads. To avoid this, run hoto, ollama, and hoto-ui natively on the host and use Docker only for the stateful infrastructure services.
@@ -236,6 +249,17 @@ MATRIX_HOMESERVER_URL=http://localhost:8098 \
 OLLAMA_HOST=http://localhost:11434 \
 bun run src/index.ts daemon start
 ```
+
+### Observability on Mac
+
+Because hoto runs natively on the host, Prometheus must target `host.docker.internal` instead of the Docker service name:
+
+```sh
+docker compose -f docker-compose.mac.yml -f docker-compose.observability.yml -f docker-compose.observability.mac.yml up -d
+```
+
+- Prometheus: http://localhost:9090
+- Grafana: http://localhost:3000 (default credentials: admin / admin)
 
 `docker-compose.mac.yml` uses `extends:` to inherit service definitions from `docker-compose.yml`, so image versions, port mappings, and configuration stay in sync automatically when the main file is updated.
 
