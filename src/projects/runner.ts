@@ -287,4 +287,22 @@ export async function resumeProjects(): Promise<void> {
     }
     // If task is live (any other non-terminal status), no-op — it will fire onTaskCompleted when done
   }
+
+  // Recover projects stranded in 'revising' — the daemon died mid-revision,
+  // so there is no live task and no scheduled work. Skip the revision attempt
+  // and surface the project to the user for manual advance.
+  const revisingRows = db
+    .query("SELECT id, current_milestone FROM projects WHERE status = 'revising'")
+    .all() as Array<{ id: string; current_milestone: number }>;
+
+  for (const { id, current_milestone } of revisingRows) {
+    logger.info("resumeProjects: recovering project stranded in 'revising'", {
+      projectId: id,
+      currentMilestone: current_milestone,
+    });
+    db.run(
+      "UPDATE projects SET status = 'awaiting_advance', updated_at = ? WHERE id = ? AND status = 'revising'",
+      [new Date().toISOString(), id]
+    );
+  }
 }

@@ -221,6 +221,25 @@ describe("resumeProjects", () => {
     // No fetch should have been made since project is not in_progress
     expect(lastFetchUrl).toBe("");
   });
+
+  test("recovers projects stranded in 'revising' to awaiting_advance", async () => {
+    // Simulates the daemon dying mid-revision: onTaskCompleted advanced
+    // current_milestone and set status to 'revising', then crashed before
+    // reaching 'awaiting_advance'. No live task exists.
+    const milestones = [
+      { index: 0, description: "M1", task_id: "task-done", completed: true },
+      { index: 1, description: "M2", task_id: null, completed: false },
+    ];
+    insertProject("proj-revising", milestones, 1, "revising");
+
+    await resumeProjects();
+
+    const project = getProjectRow("proj-revising");
+    expect(project?.status).toBe("awaiting_advance");
+    expect(project?.current_milestone).toBe(1);
+    // No task creation should happen — user must hit Advance
+    expect(lastFetchUrl).toBe("");
+  });
 });
 
 describe("advanceProject", () => {
