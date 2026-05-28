@@ -1,0 +1,4 @@
+services:
+  prometheus:
+    volumes:
+      - ./config/prometheus.mac.yml:/etc/prometheus/prometheus.yml:ro
