@@ -27,9 +27,11 @@ export interface Config {
   sandboxClaude: boolean;
   mcpHttpPort: number;
   autoResumeOnStartup: boolean;
-  provider: 'claude' | 'ollama';
+  provider: 'claude' | 'ollama' | 'cursor';
   ollamaHost: string;
   ollamaModel: string;
+  cursorApiKey: string | null;
+  cursorModel: string;
 }
 
 export function expandHome(p: string): string {
@@ -74,13 +76,15 @@ function loadConfig(): Config {
   const autoResumeOnStartup = process.env.HOTO_AUTO_RESUME !== "false" && process.env.HOTO_AUTO_RESUME !== "0";
 
   const providerRaw = process.env.HOTO_PROVIDER ?? 'claude';
-  if (providerRaw !== 'claude' && providerRaw !== 'ollama') {
-    logger.error(`Invalid HOTO_PROVIDER value: "${providerRaw}". Must be "claude" or "ollama".`);
-    throw new Error(`Invalid HOTO_PROVIDER value: "${providerRaw}". Must be "claude" or "ollama".`);
+  if (providerRaw !== 'claude' && providerRaw !== 'ollama' && providerRaw !== 'cursor') {
+    logger.error({ provider: providerRaw }, 'Unknown provider. Must be one of: claude, ollama, cursor');
+    throw new Error(`Unknown provider: ${providerRaw}. Must be one of: claude, ollama, cursor`);
   }
-  const provider = providerRaw as 'claude' | 'ollama';
+  const provider = providerRaw as 'claude' | 'ollama' | 'cursor';
   const ollamaHost = process.env.OLLAMA_HOST ?? 'http://127.0.0.1:11434';
   const ollamaModel = process.env.OLLAMA_MODEL ?? 'llama3.2';
+  const cursorApiKey = process.env.CURSOR_API_KEY ?? null;
+  const cursorModel = process.env.CURSOR_MODEL ?? 'cursor-small';
 
   return {
     workspaceDir,
@@ -109,6 +113,8 @@ function loadConfig(): Config {
     provider,
     ollamaHost,
     ollamaModel,
+    cursorApiKey,
+    cursorModel,
   };
 }
 
