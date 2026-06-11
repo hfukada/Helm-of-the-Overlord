@@ -1,7 +1,7 @@
 import { config } from "../shared/config";
-import { logger } from "../shared/logger";
 import { ClaudeCodeCliAgent } from "./claude-code-cli";
 import { OllamaAgent } from "./ollama";
+import { CursorAgent } from "./cursor";
 import type { Agent, AgentOptions } from "./types";
 
 export function createAgent(opts: AgentOptions = {}): Agent {
@@ -11,8 +11,7 @@ export function createAgent(opts: AgentOptions = {}): Agent {
     case "ollama":
       return new OllamaAgent(opts);
     case "cursor":
-      logger.error({ provider: config.provider }, 'Cursor provider is not yet implemented');
-      throw new Error('Cursor provider is not yet implemented');
+      return new CursorAgent(opts);
     default:
       throw new Error(`Unknown provider: ${config.provider}`);
   }
