@@ -24,3 +24,4 @@ export {
 } from "./tools";
 export { runAgent, type AgentRunSpec } from "./persistence";
 export { ClaudeCodeCliAgent, type ClaudeCodeCliAgentOptions } from "./claude-code-cli";
+export { CursorAgent } from "./cursor";

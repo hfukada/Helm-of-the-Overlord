@@ -15,7 +15,11 @@ mock.module("../src/shared/logger", () => ({
   logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
 }));
 
-const _realConfig = await import("../src/shared/config");
+const _configModule = await import("../src/shared/config");
+const _savedConfig = _configModule.config;
+const _savedExpandHome = _configModule.expandHome;
+const _savedDaemonUrl = _configModule.daemonUrl;
+
 mock.module("../src/shared/config", () => ({
   config: {
     cursorApiKey: "test-key",
@@ -25,7 +29,11 @@ mock.module("../src/shared/config", () => ({
 }));
 
 afterAll(() => {
-  mock.module("../src/shared/config", () => _realConfig);
+  mock.module("../src/shared/config", () => ({
+    config: _savedConfig,
+    expandHome: _savedExpandHome,
+    daemonUrl: _savedDaemonUrl,
+  }));
 });
 
 // Import AFTER mocks.
