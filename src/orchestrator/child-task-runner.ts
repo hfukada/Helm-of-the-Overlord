@@ -28,6 +28,7 @@ import { isGiteaConfigured, createPullRequest, rewriteGiteaUrl } from "../gitea/
 import { ensureRepoOnGitea, pushBranchToGitea } from "../gitea/repo-sync";
 import { startReviewPoller, seedCursors } from "../gitea/review-poller";
 import { $ } from "bun";
+import { parseDiffLineCounts } from "../workspace/git";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { createAgent } from "../agent/factory";
 import { makeAgentOutputForwarder } from "./task-runner";
@@ -401,6 +402,16 @@ export async function runChildTask(childId: string): Promise<void> {
   if (!isGiteaConfigured()) {
     logger.info("Gitea not configured, marking child committed without PR", { childId, repo: repo.name });
     notifyParent(parentTaskId, repo.name, "Committed locally (no Gitea configured).");
+    try {
+      const diff = await $`git -C ${workDir} diff HEAD~1..HEAD`.text();
+      const stats = parseDiffLineCounts(diff);
+      db.run(
+        `UPDATE tasks SET diff_lines_added = ?, diff_lines_deleted = ?, diff_lines_modified = ? WHERE id = ?`,
+        [stats.added, stats.deleted, stats.modified, childId]
+      );
+    } catch (err) {
+      logger.warn("Failed to store diff line stats", { childId, error: String(err) });
+    }
     updateChildStatus(childId, "committed", state);
     checkParentCompletion(parentTaskId);
     return;

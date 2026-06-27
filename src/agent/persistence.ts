@@ -139,6 +139,7 @@ export async function runAgent(
   try {
     incrementTokenCounters(
       model,
+      spec.nodeName,
       result.totalUsage.input_tokens,
       result.totalUsage.output_tokens,
       result.totalUsage.cost_usd ?? 0
