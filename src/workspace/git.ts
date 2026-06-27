@@ -190,6 +190,46 @@ export async function pushToRemote(
   }
 }
 
+export function parseDiffLineCounts(
+  diff: string
+): { added: number; deleted: number; modified: number } {
+  let added = 0, deleted = 0, modified = 0;
+  const lines = diff.split("\n");
+  let minusRun = 0, plusRun = 0;
+
+  function flushRun() {
+    const paired = Math.min(minusRun, plusRun);
+    modified  += paired;
+    deleted   += minusRun - paired;
+    added     += plusRun  - paired;
+    minusRun = 0;
+    plusRun  = 0;
+  }
+
+  for (const line of lines) {
+    if (
+      line.startsWith("diff --git") ||
+      line.startsWith("index ")     ||
+      line.startsWith("--- ")       ||
+      line.startsWith("+++ ")       ||
+      line.startsWith("@@ ")
+    ) {
+      flushRun();
+      continue;
+    }
+    if (line.startsWith("-")) {
+      if (plusRun > 0 && minusRun === 0) flushRun();
+      minusRun++;
+    } else if (line.startsWith("+")) {
+      plusRun++;
+    } else {
+      flushRun();
+    }
+  }
+  flushRun();
+  return { added, deleted, modified };
+}
+
 export function generateBranchName(taskId: string, title: string): string {
   const slug = title
     .toLowerCase()

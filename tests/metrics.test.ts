@@ -46,12 +46,9 @@ function seed() {
   db.run(
     "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, started_at, finished_at) VALUES ('r3', 't3', 'review', 'claude', 'done', 'p', 'claude-3', '2024-01-01T00:00:00.000Z', '2024-01-01T00:00:20.000Z')"
   );
-  // token_usage_daily — two rows across two dates
+  // token data via agent_runs — totals: input=3000, output=1500, cost=4.0
   db.run(
-    "INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd) VALUES ('2024-01-01', 'claude-3', 1000, 500, 1.5)"
-  );
-  db.run(
-    "INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd) VALUES ('2024-01-02', 'claude-3', 2000, 1000, 2.5)"
+    "INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, token_input, token_output, cost_usd) VALUES ('tok1', 't1', 'test-phase', 'claude', 'completed', 'p', 'claude-3', 3000, 1500, 4.0)"
   );
 }
 
@@ -85,10 +82,10 @@ describe("GET /metrics", () => {
     await initTokenCounters(getDb(), freshRegistry);
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
-    // 1000+2000=3000, 500+1000=1500, 1.5+2.5=4
-    expect(body).toContain('hoto_tokens_input_total{model="claude-3"} 3000');
-    expect(body).toContain('hoto_tokens_output_total{model="claude-3"} 1500');
-    expect(body).toContain('hoto_cost_usd_total{model="claude-3"} 4');
+    // token totals come from tok1 agent_run (3000/1500/4.0) under test-phase
+    expect(body).toContain('hoto_tokens_input_total{model="claude-3",node_name="test-phase"} 3000');
+    expect(body).toContain('hoto_tokens_output_total{model="claude-3",node_name="test-phase"} 1500');
+    expect(body).toContain('hoto_cost_usd_total{model="claude-3",node_name="test-phase"} 4');
     // r1+r3 = done×2, r2 = error×1
     expect(body).toContain('hoto_agent_runs{status="done"} 2');
     expect(body).toContain('hoto_agent_runs{status="error"} 1');
@@ -97,7 +94,7 @@ describe("GET /metrics", () => {
     expect(body).toContain('hoto_tasks_total{status="implementing"} 1');
     expect(body).toContain('hoto_tasks_total{status="pending"} 1');
     expect(body).toContain('hoto_tasks_total{status="committed"} 1');
-    expect(body).toContain("hoto_task_agent_run_count 3");
+    expect(body).toContain("hoto_task_agent_run_count 4");
   });
 
   test("returns zeros and no agent_run lines when tables are empty", async () => {
@@ -167,13 +164,26 @@ describe("GET /metrics", () => {
 
   test("two models produce two labelled lines", async () => {
     const db = getDb();
-    db.run("INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd) VALUES ('2024-01-01', 'claude-3', 1000, 500, 0.01)");
-    db.run("INSERT INTO token_usage_daily (date, model, input_tokens, output_tokens, cost_usd) VALUES ('2024-01-01', 'claude-opus-4', 2000, 1000, 0.04)");
+    db.run("INSERT INTO tasks (id, title, description, status) VALUES ('tm1', 'Model Task', 'desc', 'implementing')");
+    db.run("INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, token_input, token_output, cost_usd) VALUES ('rm1', 'tm1', 'test-phase', 'claude', 'completed', 'p', 'claude-3', 1000, 500, 0.01)");
+    db.run("INSERT INTO agent_runs (id, task_id, node_name, agent_type, status, prompt, model, token_input, token_output, cost_usd) VALUES ('rm2', 'tm1', 'test-phase', 'claude', 'completed', 'p', 'claude-opus-4', 2000, 1000, 0.04)");
     freshRegistry = new Registry();
     await initTokenCounters(db, freshRegistry);
     const res = await app.request("/metrics", { method: "GET" });
     const body = await res.text();
-    expect(body).toContain('hoto_tokens_input_total{model="claude-3"} 1000');
-    expect(body).toContain('hoto_tokens_input_total{model="claude-opus-4"} 2000');
+    expect(body).toContain('hoto_tokens_input_total{model="claude-3",node_name="test-phase"} 1000');
+    expect(body).toContain('hoto_tokens_input_total{model="claude-opus-4",node_name="test-phase"} 2000');
+  });
+
+  test("hoto_task_lines_changed emits correct label sets", async () => {
+    const db = getDb();
+    db.run(
+      "INSERT INTO tasks (id, title, description, status, diff_lines_added, diff_lines_deleted, diff_lines_modified) VALUES ('42', 'Test Task', 'desc', 'committed', 1, 0, 1)"
+    );
+    const res = await app.request("/metrics", { method: "GET" });
+    const body = await res.text();
+    expect(body).toContain('hoto_task_lines_changed{task_id="42",type="addition"} 1');
+    expect(body).toContain('hoto_task_lines_changed{task_id="42",type="deletion"} 0');
+    expect(body).toContain('hoto_task_lines_changed{task_id="42",type="modification"} 1');
   });
 });

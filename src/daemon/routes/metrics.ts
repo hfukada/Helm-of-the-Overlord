@@ -93,6 +93,32 @@ new Gauge({
   },
 });
 
+new Gauge({
+  name: "hoto_task_lines_changed",
+  help: "Lines of code changed per committed task by change type",
+  labelNames: ["task_id", "type"] as const,
+  registers: [registry],
+  collect() {
+    this.reset();
+    const rows = getDb().query(
+      `SELECT id, diff_lines_added, diff_lines_deleted, diff_lines_modified
+       FROM tasks
+       WHERE status = 'committed'
+         AND (diff_lines_added > 0 OR diff_lines_deleted > 0 OR diff_lines_modified > 0)`
+    ).all() as Array<{
+      id: string;
+      diff_lines_added: number;
+      diff_lines_deleted: number;
+      diff_lines_modified: number;
+    }>;
+    for (const row of rows) {
+      this.set({ task_id: String(row.id), type: "addition"     }, row.diff_lines_added);
+      this.set({ task_id: String(row.id), type: "deletion"     }, row.diff_lines_deleted);
+      this.set({ task_id: String(row.id), type: "modification" }, row.diff_lines_modified);
+    }
+  },
+});
+
 export const metrics = new Hono();
 
 metrics.get("/", async (c) => {

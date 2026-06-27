@@ -291,6 +291,9 @@ const ALTER_MIGRATIONS = [
   "ALTER TABLE repos ADD COLUMN extra_context TEXT",
   "ALTER TABLE projects ADD COLUMN repo_names TEXT NOT NULL DEFAULT '[]'",
   "ALTER TABLE container_secrets ADD COLUMN known_hosts_path TEXT",
+  "ALTER TABLE tasks ADD COLUMN diff_lines_added INTEGER DEFAULT 0",
+  "ALTER TABLE tasks ADD COLUMN diff_lines_deleted INTEGER DEFAULT 0",
+  "ALTER TABLE tasks ADD COLUMN diff_lines_modified INTEGER DEFAULT 0",
 ];
 
 export function runMigrations(db: Database): void {
