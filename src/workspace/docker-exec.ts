@@ -1,6 +1,6 @@
 import { $ } from "bun";
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { logger } from "../shared/logger";
 import { config } from "../shared/config";
@@ -155,6 +155,35 @@ export interface SandboxContainerResult {
   workspacePath: string;
 }
 
+function injectClaudeTrust(name: string, workspacePath: string): void {
+  const tmpPath = `/tmp/hoto-trust-${name}.json`;
+  const content = JSON.stringify({
+    projects: { [workspacePath]: { hasTrustDialogAccepted: true } },
+  });
+  writeFileSync(tmpPath, content, "utf8");
+
+  const mkdir = Bun.spawnSync(
+    ["docker", "exec", name, "mkdir", "-p", "/root/.claude"],
+    { stderr: "pipe" }
+  );
+  if (mkdir.exitCode !== 0) {
+    logger.warn("Failed to create /root/.claude in container", { name });
+  }
+
+  const cp = Bun.spawnSync(
+    ["docker", "cp", tmpPath, `${name}:/root/.claude.json`],
+    { stderr: "pipe" }
+  );
+  if (cp.exitCode !== 0) {
+    logger.warn("Failed to inject Claude trust into container", {
+      name,
+      stderr: cp.stderr?.toString(),
+    });
+  }
+
+  try { unlinkSync(tmpPath); } catch { /* ignore */ }
+}
+
 export async function startSandboxContainer(
   taskId: string,
   taskDirectory: string,
@@ -224,6 +253,8 @@ export async function startSandboxContainer(
     }
   }
 
+  injectClaudeTrust(name, "/workspace");
+
   sandboxContainerNames.add(name);
   logger.info("Sandbox container started", { taskId, name, taskDirectory, sandboxWorkspace });
   return { containerName: name, workspacePath: sandboxWorkspace };
@@ -291,6 +322,15 @@ export async function setupTaskContainer(
             const first = JSON.parse(lines[0]) as { Name?: string };
             if (first.Name) {
               logger.info("Docker compose container identified", { taskId, container: first.Name });
+              const inspectResult = Bun.spawnSync(
+                ["docker", "inspect", "--format={{.Config.WorkingDir}}", first.Name],
+                { stderr: "pipe" }
+              );
+              const containerWorkDir =
+                inspectResult.exitCode === 0
+                  ? (new TextDecoder().decode(inspectResult.stdout).trim() || "/workspace")
+                  : "/workspace";
+              injectClaudeTrust(first.Name, containerWorkDir);
               return first.Name;
             }
           }
@@ -344,6 +384,7 @@ export async function setupTaskContainer(
       } else {
         logger.info("Docker container started", { taskId, name });
         fixSshKeyPermissions(name, secrets);
+        injectClaudeTrust(name, "/workspace");
         return name;
       }
     }
@@ -379,6 +420,7 @@ export async function setupTaskContainer(
     } else {
       logger.info("Language-based Docker container started", { taskId, name, image: repo.docker_image });
       fixSshKeyPermissions(name, secrets);
+      injectClaudeTrust(name, "/workspace");
       return name;
     }
   }

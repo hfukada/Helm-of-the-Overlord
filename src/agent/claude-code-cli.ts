@@ -12,6 +12,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { claudeStream, type ClaudeOptions, type ClaudeEvent } from "../shared/claude-cli";
 import { detectLoop } from "./loop-detection";
 import { logger } from "../shared/logger";
@@ -68,6 +69,26 @@ export class ClaudeCodeCliAgent implements Agent {
     try { db = getDb(); } catch {}
 
     const allowedTools = this.toAllowedTools(opts.tools);
+
+    if (!this.sandbox) {
+      const claudeJsonPath = "/root/.claude.json";
+      let parsed: Record<string, unknown> = {};
+      if (existsSync(claudeJsonPath)) {
+        try {
+          parsed = JSON.parse(readFileSync(claudeJsonPath, "utf8"));
+        } catch {
+          parsed = {};
+        }
+      }
+      if (typeof parsed.projects !== "object" || parsed.projects === null) {
+        parsed.projects = {};
+      }
+      (parsed.projects as Record<string, unknown>)[opts.workDir] = {
+        ...(((parsed.projects as Record<string, unknown>)[opts.workDir] as object) ?? {}),
+        hasTrustDialogAccepted: true,
+      };
+      writeFileSync(claudeJsonPath, JSON.stringify(parsed, null, 2), "utf8");
+    }
 
     for (let turnNum = 1; turnNum <= opts.maxTurns; turnNum++) {
       const isFirstTurn = turnNum === 1;
