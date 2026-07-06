@@ -3,6 +3,7 @@ services:
     image: prom/prometheus:v2.52.0
     volumes:
       - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
     ports:
       - "9090:9090"
     restart: unless-stopped
@@ -20,3 +21,4 @@ services:
 
 volumes:
   grafana-data:
+  prometheus-data:

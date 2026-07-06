@@ -155,7 +155,7 @@ export interface SandboxContainerResult {
   workspacePath: string;
 }
 
-function injectClaudeTrust(name: string, workspacePath: string): void {
+export function injectClaudeTrust(name: string, workspacePath: string): void {
   const tmpPath = `/tmp/hoto-trust-${name}.json`;
   const content = JSON.stringify({
     projects: { [workspacePath]: { hasTrustDialogAccepted: true } },
@@ -252,8 +252,6 @@ export async function startSandboxContainer(
       logger.warn("Failed to copy credentials into sandbox", { taskId, error: new TextDecoder().decode(copyResult.stderr) });
     }
   }
-
-  injectClaudeTrust(name, "/workspace");
 
   sandboxContainerNames.add(name);
   logger.info("Sandbox container started", { taskId, name, taskDirectory, sandboxWorkspace });

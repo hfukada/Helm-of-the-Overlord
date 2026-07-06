@@ -20,7 +20,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { worktreeDir, taskDir } from "../workspace/manager";
 import { generateMcpConfig } from "./subprocess";
-import { setupTaskContainer, teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
+import { setupTaskContainer, teardownTaskContainer, startSandboxContainer, injectClaudeTrust } from "../workspace/docker-exec";
 import { isSandboxContainer } from "../workspace/docker-exec";
 import { discoverSecrets } from "../workspace/secret-discovery";
 import { getMessagingManager } from "../messaging/manager";
@@ -193,6 +193,7 @@ export async function runChildTask(childId: string): Promise<void> {
           containerWorkDir: `${sandboxResult.workspacePath}/${repo.name}`,
           workspaceBase: sandboxResult.workspacePath,
         };
+        injectClaudeTrust(sandboxResult.containerName, `${sandboxResult.workspacePath}/${repo.name}`);
         logger.info("Sandbox started for child task", { childId, containerName: sandboxResult.containerName });
       }
     } catch (err) {
@@ -574,6 +575,7 @@ export async function reviseChildTask(childId: string, feedback: string): Promis
           containerWorkDir: `${sandboxResult.workspacePath}/${repo.name}`,
           workspaceBase: sandboxResult.workspacePath,
         };
+        injectClaudeTrust(sandboxResult.containerName, `${sandboxResult.workspacePath}/${repo.name}`);
       }
     } catch {}
   }
