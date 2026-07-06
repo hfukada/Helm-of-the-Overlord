@@ -12,7 +12,7 @@ import { ensureTaskDir, taskDir, worktreeDir } from "../workspace/manager";
 import { killTaskSubprocesses } from "./subprocess-registry";
 import { indexRepo } from "../knowledge/indexer";
 import { generateMcpConfig } from "./subprocess";
-import { teardownTaskContainer, startSandboxContainer } from "../workspace/docker-exec";
+import { teardownTaskContainer, startSandboxContainer, injectClaudeTrust } from "../workspace/docker-exec";
 import type { SandboxOptions } from "./nodes/agentic/types";
 import { getMessagingManager } from "../messaging/manager";
 import type { AgentEvent } from "../agent";
@@ -508,6 +508,7 @@ export async function runTask(taskId: string): Promise<void> {
           ? workspaceBase
           : `${workspaceBase}/${primaryRepo.name}`;
         sandbox = { containerName: sandboxResult.containerName, containerWorkDir, workspaceBase };
+        injectClaudeTrust(sandboxResult.containerName, containerWorkDir);
         logger.info("Sandbox container started for task", { taskId: task.id, containerName: sandboxResult.containerName, workspacePath: workspaceBase });
       } else {
         logger.warn("Sandbox container failed to start, falling back to host execution", { taskId: task.id });
