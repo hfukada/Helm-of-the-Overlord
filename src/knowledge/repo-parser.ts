@@ -25,6 +25,59 @@ const LANGUAGE_DOCKER_IMAGES: Record<string, string> = {
   "java": "eclipse-temurin:21-jdk-slim",
 };
 
+async function inferCommandsFromDocs(
+  repoPath: string,
+): Promise<{ test_cmd: string | null; lint_cmd: string | null } | null> {
+  const docFiles = ["README.md", "CLAUDE.md", "AGENTS.md"];
+  const sections: string[] = [];
+
+  for (const name of docFiles) {
+    const filePath = join(repoPath, name);
+    if (existsSync(filePath)) {
+      try {
+        const content = await readFile(filePath, "utf-8");
+        sections.push(`# ${name}\n\n${content}`);
+      } catch {}
+    }
+  }
+
+  if (sections.length === 0) return null;
+
+  const docs = sections.join("\n\n---\n\n");
+  const prompt = `You are analyzing a software project's documentation to determine how to run its tests and linter.
+
+Return ONLY a single line of valid JSON with this exact shape and no other text:
+{"test_cmd": "<command or null>", "lint_cmd": "<command or null>"}
+
+Use null for any command not clearly stated in the documentation.
+
+Documentation:
+${docs}`;
+
+  const proc = Bun.spawn(["claude", "--print", "--max-turns", "1"], {
+    cwd: repoPath,
+    stdin: new TextEncoder().encode(prompt),
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env },
+  });
+
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    logger.warn("inferCommandsFromDocs: claude --print failed", { exitCode });
+    return null;
+  }
+
+  const text = await new Response(proc.stdout as ReadableStream).text();
+  try {
+    const parsed = JSON.parse(text.trim());
+    return { test_cmd: parsed.test_cmd ?? null, lint_cmd: parsed.lint_cmd ?? null };
+  } catch {
+    logger.warn("inferCommandsFromDocs: failed to parse JSON", { text });
+    return null;
+  }
+}
+
 export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
   const meta: RepoMetadata = {
     language: null,
@@ -37,6 +90,9 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
     docker_compose_path: null,
     docker_image: null,
   };
+
+  let pkgTestCmd: string | null = null;
+  let pkgLintCmd: string | null = null;
 
   // Check for package.json (Node/Bun/Deno)
   const pkgPath = join(repoPath, "package.json");
@@ -59,9 +115,11 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
 
       // Store as runner commands (e.g. "bun run build") not raw script bodies
       meta.build_cmd = scripts.build ? `${runner} build` : null;
-      meta.test_cmd = scripts.test ? `${runner} test` : null;
+      pkgTestCmd = scripts.test ? `${runner} test` : null;
+      pkgLintCmd = scripts.lint ? `${runner} lint` : null;
+      meta.test_cmd = pkgTestCmd;
       meta.run_cmd = (scripts.start || scripts.dev) ? `${runner} ${scripts.start ? "start" : "dev"}` : null;
-      meta.lint_cmd = scripts.lint ? `${runner} lint` : null;
+      meta.lint_cmd = pkgLintCmd;
 
       // Detect framework
       const deps = { ...pkg.dependencies, ...pkg.devDependencies };
@@ -90,34 +148,31 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
   // Check for pyproject.toml / setup.py (Python)
   if (existsSync(join(repoPath, "pyproject.toml"))) {
     meta.language = "python";
+    meta.test_cmd = meta.test_cmd ?? "pytest";
     try {
       const content = await readFile(join(repoPath, "pyproject.toml"), "utf-8");
-      if (content.includes("[tool.pytest")) meta.test_cmd = "pytest";
-      if (content.includes("ruff")) meta.lint_cmd = "ruff check .";
-      else if (content.includes("flake8")) meta.lint_cmd = "flake8 .";
       if (content.includes("django")) meta.framework = "django";
       else if (content.includes("fastapi")) meta.framework = "fastapi";
       else if (content.includes("flask")) meta.framework = "flask";
     } catch {}
   } else if (existsSync(join(repoPath, "setup.py"))) {
     meta.language = "python";
-    meta.test_cmd = "pytest";
   }
 
   // Check for go.mod (Go)
   if (existsSync(join(repoPath, "go.mod"))) {
     meta.language = "go";
     meta.build_cmd = "go build ./...";
-    meta.test_cmd = "go test ./...";
-    meta.lint_cmd = "golangci-lint run";
+    meta.test_cmd = meta.test_cmd ?? "go test ./...";
+    meta.lint_cmd = meta.lint_cmd ?? "golangci-lint run";
   }
 
   // Check for Cargo.toml (Rust)
   if (existsSync(join(repoPath, "Cargo.toml"))) {
     meta.language = "rust";
     meta.build_cmd = "cargo build";
-    meta.test_cmd = "cargo test";
-    meta.lint_cmd = "cargo clippy";
+    meta.test_cmd = meta.test_cmd ?? "cargo test";
+    meta.lint_cmd = meta.lint_cmd ?? "cargo clippy";
   }
 
   // Check for Makefile
@@ -125,8 +180,6 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
     try {
       const makefile = await readFile(join(repoPath, "Makefile"), "utf-8");
       if (makefile.includes("build:")) meta.build_cmd = "make build";
-      if (makefile.includes("test:")) meta.test_cmd = meta.test_cmd ?? "make test";
-      if (makefile.includes("lint:")) meta.lint_cmd = meta.lint_cmd ?? "make lint";
     } catch {}
   }
 
@@ -147,13 +200,17 @@ export async function parseRepo(repoPath: string): Promise<RepoMetadata> {
   if (existsSync(join(repoPath, "pom.xml"))) {
     meta.language = meta.language ?? "java";
     meta.build_cmd = meta.build_cmd ?? "mvn compile";
-    meta.test_cmd = meta.test_cmd ?? "mvn test";
-    meta.lint_cmd = meta.lint_cmd ?? "mvn checkstyle:check";
   }
 
   // Resolve Docker image from language (only when no compose/Dockerfile)
   if (!meta.docker_compose_path && !existsSync(join(repoPath, "Dockerfile"))) {
     meta.docker_image = (meta.language && LANGUAGE_DOCKER_IMAGES[meta.language]) ?? null;
+  }
+
+  const inferred = await inferCommandsFromDocs(repoPath);
+  if (inferred) {
+    meta.test_cmd = pkgTestCmd ?? inferred.test_cmd ?? meta.test_cmd;
+    meta.lint_cmd = pkgLintCmd ?? inferred.lint_cmd ?? meta.lint_cmd;
   }
 
   return meta;
